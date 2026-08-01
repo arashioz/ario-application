@@ -2,10 +2,21 @@
 FROM node:22-alpine AS frontend-build
 WORKDIR /app
 
-# جلوگیری از خطای ERESOLVE (React 19 / peer deps)
-COPY mobile/.npmrc mobile/package.json mobile/package-lock.json* ./
-# React 19 باعث ERESOLVE می‌شود؛ legacy-peer-deps لازم است
-RUN npm ci --legacy-peer-deps || npm install --legacy-peer-deps
+# Cypress باینری چندصد مگابایت دانلود می‌کند و روی سرور «گیر» به نظر می‌رسد
+ENV CYPRESS_INSTALL_BINARY=0 \
+    npm_config_audit=false \
+    npm_config_fund=false \
+    npm_config_progress=true \
+    npm_config_fetch_retries=5 \
+    npm_config_fetch_retry_mintimeout=20000 \
+    npm_config_fetch_retry_maxtimeout=120000 \
+    npm_config_fetch_timeout=300000
+
+COPY mobile/.npmrc mobile/package.json mobile/package-lock.json ./
+
+# فقط برای build؛ cypress/e2e لازم نیست
+RUN npm ci --legacy-peer-deps --omit=optional --no-audit --no-fund \
+  && npm cache clean --force
 
 COPY mobile/ ./
 ENV NODE_ENV=production
