@@ -14,8 +14,9 @@ ENV CYPRESS_INSTALL_BINARY=0 \
 
 COPY mobile/.npmrc mobile/package.json mobile/package-lock.json ./
 
-# فقط برای build؛ cypress/e2e لازم نیست
-RUN npm ci --legacy-peer-deps --omit=optional --no-audit --no-fund \
+# optional deps لازم است (باینری native رول‌آپ روی Alpine/musl)
+RUN npm ci --legacy-peer-deps --no-audit --no-fund \
+  && npm install --no-save @rollup/rollup-linux-x64-musl \
   && npm cache clean --force
 
 COPY mobile/ ./
