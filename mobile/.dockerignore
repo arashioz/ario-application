@@ -1,0 +1,14 @@
+node_modules
+dist
+.env
+.env.*
+!.env.example
+.ionic
+android
+ios
+cypress
+coverage
+*.log
+.git
+.DS_Store
+public/mockServiceWorker.js

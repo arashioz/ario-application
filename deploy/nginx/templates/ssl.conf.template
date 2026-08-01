@@ -1,0 +1,100 @@
+upstream ario_backend {
+  server backend:3001;
+  keepalive 32;
+}
+
+# HTTP — ACME + ریدایرکت به HTTPS
+server {
+  listen 80 default_server;
+  listen [::]:80 default_server;
+  server_name ${DOMAIN} _;
+
+  location /.well-known/acme-challenge/ {
+    root /var/www/certbot;
+  }
+
+  location /healthz {
+    access_log off;
+    return 200 'ok';
+    add_header Content-Type text/plain;
+  }
+
+  location / {
+    return 301 https://$host$request_uri;
+  }
+}
+
+# HTTPS — اپ + پروکسی API / WS
+server {
+  listen 443 ssl default_server;
+  listen [::]:443 ssl default_server;
+  http2 on;
+  server_name ${DOMAIN} _;
+
+  ssl_certificate     ${SSL_CERT};
+  ssl_certificate_key ${SSL_KEY};
+  ssl_session_timeout 1d;
+  ssl_session_cache shared:SSL:10m;
+  ssl_protocols TLSv1.2 TLSv1.3;
+  ssl_prefer_server_ciphers off;
+
+  root /usr/share/nginx/html;
+  index index.html;
+
+  location /healthz {
+    access_log off;
+    return 200 'ok';
+    add_header Content-Type text/plain;
+  }
+
+  location /health {
+    proxy_pass http://ario_backend/health;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+
+  location /api/ {
+    proxy_pass http://ario_backend/api/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_read_timeout 120s;
+  }
+
+  location /uploads/ {
+    proxy_pass http://ario_backend/uploads/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+
+  location /ws {
+    proxy_pass http://ario_backend/ws;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+  }
+
+  location / {
+    try_files $uri $uri/ /index.html;
+  }
+
+  location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff2?|ttf|map)$ {
+    expires 7d;
+    add_header Cache-Control "public, immutable";
+    try_files $uri =404;
+  }
+}

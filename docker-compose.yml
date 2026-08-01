@@ -1,0 +1,46 @@
+version: '3.8'
+
+# دیتابیس فروشگاه: MongoDB
+# نام دیتابیس: ario-shop
+# اتصال اپ: mongodb://localhost:27017/ario-shop
+#
+# اجرا:
+#   docker compose up -d
+# پنل وب دیتابیس:
+#   http://localhost:8081
+#
+# اگر پورت 27017 قبلاً اشغال است، یا mongo لوکال داری، فقط mongo-express را بالا بیاور:
+#   docker compose up -d mongo-express
+
+services:
+  mongodb:
+    image: mongo:7
+    container_name: ario-mongodb
+    ports:
+      - '27017:27017'
+    volumes:
+      - ario_mongo_data:/data/db
+    environment:
+      MONGO_INITDB_DATABASE: ario-shop
+    healthcheck:
+      test: ['CMD', 'mongosh', '--eval', "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  mongo-express:
+    image: mongo-express:1.0.2-20
+    container_name: ario-mongo-express
+    ports:
+      - '8081:8081'
+    environment:
+      # اگر سرویس mongodb همین فایل بالا باشد:
+      ME_CONFIG_MONGODB_URL: mongodb://host.docker.internal:27017/
+      ME_CONFIG_BASICAUTH: 'false'
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    restart: unless-stopped
+
+volumes:
+  ario_mongo_data:

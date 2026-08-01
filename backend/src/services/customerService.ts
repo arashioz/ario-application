@@ -1,0 +1,720 @@
+import { Customer, SaleInvoice } from '../models';
+import { calculateSalePrice } from './productService';
+import { startOfDay, endOfDay } from '../utils/persian';
+
+/** نرمال‌سازی شماره برای جستجو (۰۹۱۲… / +98 / فاصله) */
+export function normalizePhoneDigits(raw?: string): string {
+  if (!raw) return '';
+  const fa = '۰۱۲۳۴۵۶۷۸۹';
+  const ar = '٠١٢٣٤٥٦٧٨٩';
+  let s = String(raw).trim();
+  s = s.replace(/[۰-۹]/g, (d) => String(fa.indexOf(d)));
+  s = s.replace(/[٠-٩]/g, (d) => String(ar.indexOf(d)));
+  s = s.replace(/[^\d+]/g, '');
+  if (s.startsWith('+98')) s = '0' + s.slice(3);
+  if (s.startsWith('98') && s.length >= 12) s = '0' + s.slice(2);
+  return s;
+}
+
+function phoneSearchVariants(q: string): string[] {
+  const digits = normalizePhoneDigits(q);
+  if (!digits) return [];
+  const variants = new Set<string>([digits]);
+  if (digits.length >= 10) variants.add(digits.slice(-10));
+  if (digits.length >= 11) variants.add(digits.slice(-11));
+  return Array.from(variants);
+}
+
+export async function createCustomer(data: {
+  name: string;
+  phone?: string;
+  address?: string;
+  lat?: number;
+  lng?: number;
+  notes?: string;
+}) {
+  if (data.phone) {
+    const phone = normalizePhoneDigits(data.phone) || data.phone.trim();
+    const existing = await Customer.findOne({
+      $or: [{ phone }, { phone: data.phone.trim() }, { phone: { $regex: phone.slice(-10) + '$' } }],
+    });
+    if (existing) {
+      existing.name = data.name || existing.name;
+      existing.phone = phone || existing.phone;
+      if (data.notes) existing.notes = data.notes;
+      if (data.address) existing.address = data.address;
+      if (data.lat != null) existing.lat = data.lat;
+      if (data.lng != null) existing.lng = data.lng;
+      await existing.save();
+      return existing;
+    }
+  }
+  return Customer.create({
+    name: data.name.trim(),
+    phone: data.phone ? normalizePhoneDigits(data.phone) || data.phone.trim() : undefined,
+    address: data.address?.trim(),
+    lat: data.lat,
+    lng: data.lng,
+    notes: data.notes,
+  });
+}
+
+export async function updateCustomer(
+  id: string,
+  data: {
+    name?: string;
+    phone?: string;
+    address?: string;
+    lat?: number;
+    lng?: number;
+    notes?: string;
+  }
+) {
+  const c = await Customer.findById(id);
+  if (!c) throw new Error('مشتری یافت نشد');
+  if (data.name !== undefined) c.name = data.name;
+  if (data.phone !== undefined) c.phone = data.phone;
+  if (data.address !== undefined) c.address = data.address;
+  if (data.lat !== undefined) c.lat = data.lat;
+  if (data.lng !== undefined) c.lng = data.lng;
+  if (data.notes !== undefined) c.notes = data.notes;
+  await c.save();
+  return c;
+}
+
+export async function listCustomers(
+  search?: string,
+  opts?: { limit?: number; all?: boolean }
+) {
+  const q = search?.trim();
+  if (q) {
+    const phoneVars = phoneSearchVariants(q);
+    const or: Record<string, unknown>[] = [
+      { name: { $regex: q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' } },
+      { phone: { $regex: q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' } },
+      { address: { $regex: q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' } },
+    ];
+    for (const ph of phoneVars) {
+      or.push({ phone: { $regex: ph.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') } });
+    }
+    return Customer.find({ $or: or })
+      .sort({ name: 1 })
+      .limit(Math.min(opts?.limit || 20, 50));
+  }
+
+  // لیست کامل فقط وقتی صریحاً خواسته شود (صفحه مشتریان)
+  if (opts?.all || (opts?.limit != null && opts.limit > 0)) {
+    return Customer.find()
+      .sort({ name: 1 })
+      .limit(Math.min(opts?.limit || 300, 500));
+  }
+
+  // فاکتور فروش: بدون جستجو کسی را نشان نده
+  return [];
+}
+
+/** جستجوی سریع مشتری با نام/موبایل یا شماره فاکتور */
+export async function quickFindCustomer(query: string) {
+  const q = query.trim();
+  if (!q) return { customers: [], fromInvoice: null, exactPhone: null };
+
+  const customers = await listCustomers(q, { limit: 12 });
+  const phoneVars = phoneSearchVariants(q);
+
+  // تطبیق دقیق‌تر موبایل
+  let exactPhone: (typeof customers)[0] | null = null;
+  if (phoneVars.length) {
+    const last10 = phoneVars.find((p) => p.length >= 10)?.slice(-10);
+    if (last10) {
+      exactPhone =
+        customers.find((c) => normalizePhoneDigits(c.phone || '').endsWith(last10)) || null;
+      if (!exactPhone) {
+        exactPhone = await Customer.findOne({
+          phone: { $regex: last10 + '$' },
+        });
+      }
+    }
+  }
+
+  // شماره فاکتور
+  const invoice = await SaleInvoice.findOne({
+    invoiceNumber: { $regex: q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' },
+    status: { $ne: 'cancelled' },
+  }).sort({ date: -1 });
+
+  let fromInvoice = null;
+  if (invoice) {
+    let customer = invoice.customerId ? await Customer.findById(invoice.customerId) : null;
+    if (!customer && (invoice.customerName || invoice.customerPhone)) {
+      customer = {
+        _id: invoice.customerId,
+        name: invoice.customerName,
+        phone: invoice.customerPhone,
+        address: invoice.customerAddress,
+      } as never;
+    }
+    fromInvoice = { invoice, customer };
+  }
+
+  // اگر موبایل دقیق پیدا شد، اول لیست بگذار
+  const list = exactPhone
+    ? [exactPhone, ...customers.filter((c) => String(c._id) !== String(exactPhone!._id))]
+    : customers;
+
+  return {
+    customers: list,
+    fromInvoice,
+    exactPhone: exactPhone
+      ? {
+          _id: exactPhone._id,
+          name: exactPhone.name,
+          phone: exactPhone.phone,
+          address: exactPhone.address,
+          lat: exactPhone.lat,
+          lng: exactPhone.lng,
+        }
+      : null,
+  };
+}
+
+export async function getCustomer(id: string) {
+  const customer = await Customer.findById(id);
+  if (!customer) throw new Error('مشتری یافت نشد');
+  return customer;
+}
+
+export async function getCustomerInvoices(customerId: string) {
+  return SaleInvoice.find({ customerId, status: { $ne: 'cancelled' } })
+    .sort({ date: -1 })
+    .limit(50);
+}
+
+function suggestDiscountAmount(
+  invoices: Array<{
+    discount?: number;
+    totalAmount: number;
+    totalKg?: number;
+    totalCost?: number;
+    totalProfit?: number;
+    date: Date;
+  }>
+) {
+  if (!invoices.length) {
+    return {
+      suggestedDiscount: 0,
+      reason: 'مشتری جدید — بدون آفر ویژه',
+      avgOrder: 0,
+      count30: 0,
+      daysSince: null as number | null,
+      power: 'new' as const,
+      timing: 'new' as const,
+      offers: [] as Array<{ key: string; label: string; amount: number; reason: string }>,
+      maxSafeByHistory: 0,
+    };
+  }
+  const last = invoices[0];
+  const avg = invoices.reduce((s, i) => s + i.totalAmount, 0) / invoices.length;
+  const avgKg = invoices.reduce((s, i) => s + (i.totalKg || 0), 0) / invoices.length;
+  const avgProfit =
+    invoices.reduce((s, i) => s + (i.totalProfit || 0), 0) / Math.max(invoices.length, 1);
+  const lastDisc = last.discount || 0;
+  const daysSince =
+    (Date.now() - new Date(last.date).getTime()) / (1000 * 60 * 60 * 24);
+  const count30 = invoices.filter(
+    (i) => Date.now() - new Date(i.date).getTime() < 30 * 24 * 60 * 60 * 1000
+  ).length;
+  const monthAmount = invoices
+    .filter((i) => Date.now() - new Date(i.date).getTime() < 30 * 24 * 60 * 60 * 1000)
+    .reduce((s, i) => s + i.totalAmount, 0);
+
+  // قدرت خرید
+  let power: 'low' | 'mid' | 'high' | 'vip' = 'low';
+  if (monthAmount >= 80_000_000 || avgKg >= 2000) power = 'vip';
+  else if (monthAmount >= 30_000_000 || avg >= 15_000_000 || count30 >= 4) power = 'high';
+  else if (monthAmount >= 8_000_000 || avg >= 4_000_000 || count30 >= 2) power = 'mid';
+
+  // تایمینگ خرید
+  let timing: 'hot' | 'followup' | 'dormant' | 'active' = 'active';
+  if (daysSince <= 7) timing = 'hot';
+  else if (daysSince > 25 && daysSince <= 40) timing = 'followup';
+  else if (daysSince > 40) timing = 'dormant';
+
+  // سقف امن تاریخی: حداکثر نیمی از میانگین سود فاکتورهای قبلی
+  const maxSafeByHistory = Math.max(0, Math.floor(avgProfit * 0.5));
+
+  const pct = (p: number) => Math.round(avg * p);
+  const offers: Array<{ key: string; label: string; amount: number; reason: string }> = [];
+
+  const mild = Math.min(Math.max(lastDisc, pct(0.005)), maxSafeByHistory || pct(0.01));
+  const goodBase =
+    power === 'vip'
+      ? 0.025
+      : power === 'high'
+        ? 0.02
+        : power === 'mid'
+          ? 0.012
+          : 0.008;
+  const timingBoost =
+    timing === 'followup' ? 0.005 : timing === 'dormant' ? 0.008 : timing === 'hot' ? -0.003 : 0;
+  const good = Math.min(Math.max(lastDisc, pct(goodBase + timingBoost)), maxSafeByHistory || pct(0.02));
+  const maxSafe = Math.min(
+    Math.max(good, pct(goodBase + timingBoost + 0.005)),
+    maxSafeByHistory || pct(0.025)
+  );
+
+  offers.push({
+    key: 'mild',
+    label: 'آفر ملایم',
+    amount: mild,
+    reason: 'بدون فشار روی سود',
+  });
+  offers.push({
+    key: 'special',
+    label: 'آفر ویژه',
+    amount: good,
+    reason:
+      timing === 'followup'
+        ? 'فالوآپ ماهانه + قدرت خرید'
+        : timing === 'dormant'
+          ? 'بازگردانی مشتری خوابیده'
+          : power === 'vip' || power === 'high'
+            ? 'قدرت خرید بالا — وفاداری'
+            : 'پیشنهاد متعادل',
+  });
+  offers.push({
+    key: 'max_safe',
+    label: 'حداکثر امن',
+    amount: maxSafe,
+    reason: 'سقف قبل از ضرر (≈۵۰٪ میانگین سود قبلی)',
+  });
+
+  let suggested = good;
+  let reason = offers[1].reason;
+  if (timing === 'followup') {
+    suggested = good;
+    reason = 'فالوآپ همین موقع ماه قبل — آفر ویژه برگشت';
+  } else if (power === 'vip') {
+    suggested = maxSafe;
+    reason = 'مشتری VIP — حداکثر آفر امن';
+  } else if (count30 >= 4) {
+    suggested = good;
+    reason = 'مشتری پرخرید ماهانه';
+  }
+
+  return {
+    suggestedDiscount: suggested,
+    reason,
+    avgOrder: Math.round(avg),
+    count30,
+    daysSince: Math.round(daysSince),
+    power,
+    timing,
+    offers,
+    maxSafeByHistory,
+    monthAmount: Math.round(monthAmount),
+    avgKg: Math.round(avgKg),
+  };
+}
+
+/** پیشنهاد قیمت بر اساس آخرین فاکتور مشتری یا قیمت دسته */
+export async function getCustomerSuggestedPricing(customerId: string, productId?: string) {
+  const invoices = await SaleInvoice.find({
+    customerId,
+    status: { $in: ['approved', 'shipped'] },
+  })
+    .sort({ date: -1 })
+    .limit(20);
+
+  let lastDiscount = 0;
+  let lastTier: 'retail' | 'supermarket' | 'wholesale' = 'retail';
+  if (invoices[0]) {
+    lastDiscount = invoices[0].discount || 0;
+    lastTier = (invoices[0].priceTier as typeof lastTier) || 'retail';
+  }
+
+  // پرتکرارترین tier
+  const tierCount: Record<string, number> = {};
+  for (const inv of invoices) {
+    const t = inv.priceTier || 'retail';
+    tierCount[t] = (tierCount[t] || 0) + 1;
+  }
+  const preferredTier = (Object.entries(tierCount).sort((a, b) => b[1] - a[1])[0]?.[0] ||
+    lastTier) as typeof lastTier;
+
+  let productPrice = null;
+  if (productId) {
+    productPrice = await calculateSalePrice(productId, undefined, preferredTier);
+    for (const inv of invoices) {
+      const hit = inv.items.find((i) => i.productId.toString() === productId);
+      if (hit) {
+        productPrice = {
+          ...productPrice,
+          salePricePerKg: hit.unitPricePerKg,
+          suggestedFromHistory: true,
+        };
+        break;
+      }
+    }
+  }
+
+  const disc = suggestDiscountAmount(invoices);
+  const lastInvoice = invoices[0]
+    ? {
+        id: invoices[0]._id,
+        invoiceNumber: invoices[0].invoiceNumber,
+        items: invoices[0].items.map((i) => ({
+          productId: i.productId,
+          productName: i.productName,
+          unit: i.unit,
+          qtyInput: i.qtyInput,
+          qtyKg: i.qtyKg,
+          unitPricePerKg: i.unitPricePerKg,
+          kgPerPackage: i.kgPerPackage,
+        })),
+        totalAmount: invoices[0].totalAmount,
+        discount: invoices[0].discount,
+        priceTier: invoices[0].priceTier,
+        date: invoices[0].date,
+      }
+    : null;
+
+  return {
+    lastDiscount,
+    lastTier,
+    preferredTier,
+    suggestedDiscount: disc.suggestedDiscount,
+    suggestReason: disc.reason,
+    avgOrder: disc.avgOrder || 0,
+    invoiceCount: invoices.length,
+    productPrice,
+    lastInvoice,
+    power: disc.power,
+    timing: disc.timing,
+    daysSince: disc.daysSince,
+    monthAmount: disc.monthAmount,
+    avgKg: disc.avgKg,
+    maxSafeByHistory: disc.maxSafeByHistory,
+    offers: disc.offers,
+    recentInvoices: invoices.slice(0, 8).map((i) => ({
+      id: i._id,
+      invoiceNumber: i.invoiceNumber,
+      totalAmount: i.totalAmount,
+      totalKg: i.totalKg,
+      discount: i.discount,
+      priceTier: i.priceTier,
+      date: i.date,
+      status: i.status,
+      itemCount: i.items.length,
+    })),
+  };
+}
+
+export async function getCustomerCrmInsights(refDate?: Date) {
+  const now = refDate ? new Date(refDate) : new Date();
+  const day = now.getDate();
+  const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const monthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+  // همان روز ماه قبل
+  const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, day);
+  const lastMonthStart = startOfDay(lastMonth);
+  const lastMonthEnd = endOfDay(lastMonth);
+
+  const [weekSales, monthSales, sameDaySales] = await Promise.all([
+    SaleInvoice.find({
+      date: { $gte: weekAgo, $lte: now },
+      status: { $in: ['approved', 'shipped'] },
+      customerId: { $ne: null },
+    }),
+    SaleInvoice.find({
+      date: { $gte: monthAgo, $lte: now },
+      status: { $in: ['approved', 'shipped'] },
+      customerId: { $ne: null },
+    }),
+    SaleInvoice.find({
+      date: { $gte: lastMonthStart, $lte: lastMonthEnd },
+      status: { $in: ['approved', 'shipped'] },
+      customerId: { $ne: null },
+    }),
+  ]);
+
+  const countByCustomer = (invoices: typeof weekSales) => {
+    const map = new Map<string, { count: number; total: number; last: Date; name?: string; phone?: string }>();
+    for (const inv of invoices) {
+      const id = inv.customerId!.toString();
+      const cur = map.get(id) || {
+        count: 0,
+        total: 0,
+        last: inv.date,
+        name: inv.customerName,
+        phone: inv.customerPhone,
+      };
+      cur.count += 1;
+      cur.total += inv.totalAmount;
+      if (inv.date > cur.last) cur.last = inv.date;
+      cur.name = inv.customerName || cur.name;
+      cur.phone = inv.customerPhone || cur.phone;
+      map.set(id, cur);
+    }
+    return map;
+  };
+
+  const weekMap = countByCustomer(weekSales);
+  const monthMap = countByCustomer(monthSales);
+
+  const weekly = Array.from(weekMap.entries())
+    .filter(([, v]) => v.count >= 1)
+    .sort((a, b) => b[1].count - a[1].count)
+    .slice(0, 12)
+    .map(([id, v]) => ({
+      customerId: id,
+      name: v.name || '—',
+      phone: v.phone,
+      invoiceCount: v.count,
+      totalAmount: v.total,
+      segment: v.count >= 2 ? 'weekly' : 'active_week',
+    }));
+
+  const monthly = Array.from(monthMap.entries())
+    .sort((a, b) => b[1].total - a[1].total)
+    .slice(0, 15)
+    .map(([id, v]) => ({
+      customerId: id,
+      name: v.name || '—',
+      phone: v.phone,
+      invoiceCount: v.count,
+      totalAmount: v.total,
+      segment: weekMap.has(id) && (weekMap.get(id)?.count || 0) >= 2 ? 'weekly' : 'monthly',
+    }));
+
+  // فالوآپ: کسانی که همان روز ماه قبل خرید کردند
+  const followUp = [];
+  const seen = new Set<string>();
+  for (const inv of sameDaySales) {
+    const id = inv.customerId!.toString();
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const suggest = await getCustomerSuggestedPricing(id);
+    followUp.push({
+      customerId: id,
+      name: inv.customerName || '—',
+      phone: inv.customerPhone,
+      lastYearInvoice: inv.invoiceNumber,
+      lastAmount: inv.totalAmount,
+      lastKg: inv.totalKg,
+      lastDate: inv.date,
+      preferredTier: suggest.preferredTier,
+      suggestedDiscount: suggest.suggestedDiscount,
+      suggestReason: suggest.suggestReason,
+      avgOrder: suggest.avgOrder,
+      lastInvoice: suggest.lastInvoice,
+    });
+  }
+
+  return {
+    weekly,
+    monthly,
+    followUpSameDayLastMonth: followUp.slice(0, 20),
+  };
+}
+
+export type CustomerLoyaltyTier = 'gold' | 'silver' | 'bronze' | 'new';
+
+/** لیست مشتریان با دسته‌بندی خودکار بر اساس خرید ماهانه (کیلو) */
+export async function listCustomerDirectory(search?: string) {
+  const now = new Date();
+  const monthStart = startOfDay(new Date(now.getFullYear(), now.getMonth(), 1));
+  const customers = await listCustomers(search, { all: true, limit: 400 });
+  const sales = await SaleInvoice.find({
+    date: { $gte: monthStart, $lte: now },
+    status: { $in: ['approved', 'shipped'] },
+    customerId: { $ne: null },
+  });
+
+  const stats = new Map<string, { kg: number; amount: number; count: number }>();
+  for (const inv of sales) {
+    const id = inv.customerId!.toString();
+    const cur = stats.get(id) || { kg: 0, amount: 0, count: 0 };
+    cur.kg += inv.totalKg || 0;
+    cur.amount += inv.totalAmount || 0;
+    cur.count += 1;
+    stats.set(id, cur);
+  }
+
+  const rows = customers.map((c) => {
+    const id = c._id.toString();
+    const s = stats.get(id) || { kg: 0, amount: 0, count: 0 };
+    let tier: CustomerLoyaltyTier = 'new';
+    if (s.kg >= 5000) tier = 'gold';
+    else if (s.kg >= 2000) tier = 'silver'; // بالای ۲ تن در ماه
+    else if (s.count > 0) tier = 'bronze';
+    return {
+      ...c.toObject(),
+      monthKg: Math.round(s.kg * 100) / 100,
+      monthAmount: s.amount,
+      monthInvoices: s.count,
+      loyaltyTier: tier,
+      tierLabel:
+        tier === 'gold'
+          ? 'طلایی'
+          : tier === 'silver'
+            ? 'نقره‌ای'
+            : tier === 'bronze'
+              ? 'برنزی'
+              : 'جدید',
+    };
+  });
+
+  rows.sort((a, b) => {
+    const order = { gold: 0, silver: 1, bronze: 2, new: 3 };
+    const d = order[a.loyaltyTier] - order[b.loyaltyTier];
+    if (d !== 0) return d;
+    return b.monthKg - a.monthKg;
+  });
+
+  return {
+    customers: rows,
+    summary: {
+      gold: rows.filter((r) => r.loyaltyTier === 'gold').length,
+      silver: rows.filter((r) => r.loyaltyTier === 'silver').length,
+      bronze: rows.filter((r) => r.loyaltyTier === 'bronze').length,
+      new: rows.filter((r) => r.loyaltyTier === 'new').length,
+    },
+  };
+}
+
+/** مشتریان دارای مختصات + آخرین ویزیت/فروش برای نقشه */
+export async function getCustomersMap() {
+  const customers = await Customer.find({
+    lat: { $ne: null, $exists: true },
+    lng: { $ne: null, $exists: true },
+  })
+    .sort({ name: 1 })
+    .limit(500);
+
+  const ids = customers.map((c) => c._id);
+  const sales = await SaleInvoice.find({
+    customerId: { $in: ids },
+    status: { $in: ['approved', 'shipped', 'pending'] },
+  })
+    .sort({ date: -1 })
+    .select(
+      'customerId invoiceNumber date totalAmount totalKg totalProfit discount status paymentMethod priceTier items customerAddress customerLat customerLng'
+    );
+
+  const byCustomer = new Map<
+    string,
+    {
+      lastVisitAt: Date | null;
+      lastInvoiceNumber?: string;
+      totalKg: number;
+      totalAmount: number;
+      invoiceCount: number;
+      invoices: Array<{
+        id: string;
+        invoiceNumber: string;
+        date: Date;
+        totalAmount: number;
+        totalKg: number;
+        totalProfit?: number;
+        discount?: number;
+        status: string;
+        paymentMethod?: string;
+        priceTier?: string;
+        itemCount: number;
+        items: Array<{
+          productName: string;
+          qtyKg: number;
+          qtyInput: number;
+          unit: string;
+          unitPricePerKg: number;
+          totalPrice: number;
+        }>;
+      }>;
+    }
+  >();
+
+  for (const inv of sales) {
+    const id = inv.customerId!.toString();
+    const cur = byCustomer.get(id) || {
+      lastVisitAt: null,
+      totalKg: 0,
+      totalAmount: 0,
+      invoiceCount: 0,
+      invoices: [],
+    };
+    if (!cur.lastVisitAt || new Date(inv.date) > cur.lastVisitAt) {
+      cur.lastVisitAt = new Date(inv.date);
+      cur.lastInvoiceNumber = inv.invoiceNumber;
+    }
+    if (inv.status !== 'pending' && inv.status !== 'cancelled') {
+      cur.totalKg += inv.totalKg || 0;
+      cur.totalAmount += inv.totalAmount || 0;
+      cur.invoiceCount += 1;
+    }
+    if (cur.invoices.length < 12) {
+      cur.invoices.push({
+        id: inv._id.toString(),
+        invoiceNumber: inv.invoiceNumber,
+        date: inv.date,
+        totalAmount: inv.totalAmount,
+        totalKg: inv.totalKg || 0,
+        totalProfit: inv.totalProfit,
+        discount: inv.discount,
+        status: inv.status,
+        paymentMethod: inv.paymentMethod,
+        priceTier: inv.priceTier,
+        itemCount: inv.items?.length || 0,
+        items: (inv.items || []).map((it) => ({
+          productName: it.productName,
+          qtyKg: it.qtyKg,
+          qtyInput: it.qtyInput,
+          unit: it.unit,
+          unitPricePerKg: it.unitPricePerKg,
+          totalPrice: it.totalPrice,
+        })),
+      });
+    }
+    byCustomer.set(id, cur);
+  }
+
+  const markers = customers
+    .filter((c) => typeof c.lat === 'number' && typeof c.lng === 'number')
+    .map((c) => {
+      const id = c._id.toString();
+      const s = byCustomer.get(id);
+      const daysSince = s?.lastVisitAt
+        ? Math.round((Date.now() - s.lastVisitAt.getTime()) / (1000 * 60 * 60 * 24))
+        : null;
+      let visitStatus: 'hot' | 'ok' | 'due' | 'cold' | 'never' = 'never';
+      if (daysSince == null) visitStatus = 'never';
+      else if (daysSince <= 7) visitStatus = 'hot';
+      else if (daysSince <= 25) visitStatus = 'ok';
+      else if (daysSince <= 40) visitStatus = 'due';
+      else visitStatus = 'cold';
+
+      return {
+        id,
+        name: c.name,
+        phone: c.phone,
+        address: c.address,
+        lat: c.lat!,
+        lng: c.lng!,
+        totalCredit: c.totalCredit || 0,
+        lastVisitAt: s?.lastVisitAt || null,
+        lastInvoiceNumber: s?.lastInvoiceNumber,
+        daysSinceVisit: daysSince,
+        visitStatus,
+        totalKg: Math.round((s?.totalKg || 0) * 100) / 100,
+        totalAmount: s?.totalAmount || 0,
+        invoiceCount: s?.invoiceCount || 0,
+        invoices: s?.invoices || [],
+      };
+    });
+
+  return {
+    markers,
+    count: markers.length,
+    withSales: markers.filter((m) => m.invoiceCount > 0).length,
+  };
+}

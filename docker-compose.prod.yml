@@ -1,0 +1,95 @@
+services:
+  mongodb:
+    image: mongo:7
+    container_name: ario-mongodb
+    restart: unless-stopped
+    volumes:
+      - ario_mongo_data:/data/db
+    environment:
+      MONGO_INITDB_DATABASE: ario-shop
+    healthcheck:
+      test: ['CMD', 'mongosh', '--eval', "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 20s
+    networks:
+      - ario
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ario-backend
+    restart: unless-stopped
+    env_file:
+      - .env.prod
+    environment:
+      PORT: 3001
+      MONGODB_URI: mongodb://mongodb:27017/ario-shop
+      WS_PATH: /ws
+      NODE_ENV: production
+    volumes:
+      - ario_uploads:/app/uploads
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:3001/health']
+      interval: 20s
+      timeout: 5s
+      retries: 8
+      start_period: 25s
+    networks:
+      - ario
+    # پورت داخلی — فقط از طریق nginx در دسترس است
+    expose:
+      - '3001'
+
+  nginx:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.nginx
+    container_name: ario-nginx
+    restart: unless-stopped
+    env_file:
+      - .env.prod
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+      SSL_MODE: ${SSL_MODE:-selfsigned}
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ario_certbot_www:/var/www/certbot
+      - ario_letsencrypt:/etc/letsencrypt
+      - ario_nginx_ssl:/etc/nginx/ssl
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - ario
+
+  certbot:
+    image: certbot/certbot:latest
+    container_name: ario-certbot
+    volumes:
+      - ario_certbot_www:/var/www/certbot
+      - ario_letsencrypt:/etc/letsencrypt
+    profiles:
+      - ssl
+    networks:
+      - ario
+    # فقط برای گرفتن / تمدید گواهی اجرا می‌شود — نه به‌صورت دائمی
+    entrypoint: certbot
+
+volumes:
+  ario_mongo_data:
+  ario_uploads:
+  ario_certbot_www:
+  ario_letsencrypt:
+  ario_nginx_ssl:
+
+networks:
+  ario:
+    driver: bridge
