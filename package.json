@@ -9,14 +9,14 @@
     "backend:seed": "cd backend && npm run seed",
     "mobile": "cd mobile && npm start",
     "mobile:android": "cd mobile && npm run android",
-    "ionic": "cd mobile_ionic && npm run dev",
-    "ionic:build": "cd mobile_ionic && npm run build",
+    "ionic": "cd mobile && npm run dev",
+    "ionic:build": "cd mobile && npm run build",
     "docker:up": "docker compose up -d",
     "docker:down": "docker compose down",
     "deploy:up": "bash deploy/up.sh",
     "deploy:ssl": "bash deploy/init-ssl.sh",
     "deploy:down": "docker compose -f docker-compose.prod.yml --env-file .env.prod down",
     "deploy:logs": "docker compose -f docker-compose.prod.yml --env-file .env.prod logs -f",
-    "setup": "npm run docker:up && cd backend && npm install && npm run seed && cd ../mobile_ionic && npm install"
+    "setup": "npm run docker:up && cd backend && npm install && npm run seed && cd ../mobile && npm install"
   }
 }

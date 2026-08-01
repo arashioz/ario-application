@@ -53,7 +53,7 @@ npm run dev     # http://localhost:3001
 ### ۳. اپ Ionic (پیشنهادی)
 
 ```bash
-cd mobile_ionic
+cd mobile
 npm install
 npm run dev     # http://localhost:5173 — با --host برای گوشی
 ```
@@ -64,7 +64,7 @@ npm run dev     # http://localhost:5173 — با --host برای گوشی
 npm run ionic
 ```
 
-> **نکته:** IP سرور را در `mobile_ionic/src/api/client.ts` تنظیم کنید (یا `VITE_API_HOST`):
+> **نکته:** IP سرور را در `mobile/src/api/client.ts` تنظیم کنید (یا `VITE_API_HOST`):
 > ```ts
 > const HOST = '192.168.x.x';
 > ```
@@ -140,7 +140,7 @@ chmod +x deploy/*.sh
 
 ```
 ├── backend/                 # Node.js + Express + WS + MongoDB
-├── mobile_ionic/            # Ionic React (Vite)
+├── mobile/            # Ionic React (Vite)
 ├── deploy/                  # Nginx templates + SSL scripts
 ├── docker-compose.yml       # Mongo لوکال
 ├── docker-compose.prod.yml  # دیپلوی کامل

@@ -2,10 +2,10 @@
 FROM node:22-alpine AS frontend-build
 WORKDIR /app
 
-COPY mobile_ionic/package.json mobile_ionic/package-lock.json* ./
+COPY mobile/package.json mobile/package-lock.json* ./
 RUN npm ci
 
-COPY mobile_ionic/ ./
+COPY mobile/ ./
 # در CI ممکن است tsc سخت‌گیر باشد؛ بیلد Vite برای دیپلوی کافی است
 RUN npx vite build
 
