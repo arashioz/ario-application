@@ -1,46 +1,122 @@
-version: '3.8'
-
-# دیتابیس فروشگاه: MongoDB
-# نام دیتابیس: ario-shop
-# اتصال اپ: mongodb://localhost:27017/ario-shop
+# آریو — استک کامل سرور
+# MongoDB 4.4 (بدون AVX) + Backend + Nginx (HTTPS روی IP)
 #
-# اجرا:
-#   docker compose up -d
-# پنل وب دیتابیس:
-#   http://localhost:8081
+# روی سرور:
+#   cp .env.prod.example .env.prod
+#   # DOMAIN را با IP سرور پر کن
+#   docker compose --env-file .env.prod up -d --build
+#   docker compose --env-file .env.prod exec backend node dist/seed.js
 #
-# اگر پورت 27017 قبلاً اشغال است، یا mongo لوکال داری، فقط mongo-express را بالا بیاور:
-#   docker compose up -d mongo-express
+# یا: ./deploy/up.sh
 
 services:
   mongodb:
-    image: mongo:7
+    image: mongo:4.4
     container_name: ario-mongodb
-    ports:
-      - '27017:27017'
+    restart: unless-stopped
+    # روی سرور پورت را به بیرون باز نکن — فقط شبکه داخلی
+    # برای دیباگ لوکال می‌توانی uncomment کنی: "27017:27017"
     volumes:
       - ario_mongo_data:/data/db
     environment:
       MONGO_INITDB_DATABASE: ario-shop
     healthcheck:
-      test: ['CMD', 'mongosh', '--eval', "db.adminCommand('ping')"]
+      test: ['CMD', 'mongo', '--quiet', '--eval', "db.adminCommand('ping').ok"]
       interval: 10s
       timeout: 5s
-      retries: 5
-    restart: unless-stopped
+      retries: 8
+      start_period: 20s
+    networks:
+      - ario
 
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ario-backend
+    restart: unless-stopped
+    env_file:
+      - .env.prod
+    environment:
+      PORT: 3001
+      MONGODB_URI: mongodb://mongodb:27017/ario-shop
+      WS_PATH: /ws
+      NODE_ENV: production
+    volumes:
+      - ario_uploads:/app/uploads
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:3001/health']
+      interval: 20s
+      timeout: 5s
+      retries: 8
+      start_period: 25s
+    expose:
+      - '3001'
+    networks:
+      - ario
+
+  nginx:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.nginx
+    container_name: ario-nginx
+    restart: unless-stopped
+    env_file:
+      - .env.prod
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+      SSL_MODE: ${SSL_MODE:-selfsigned}
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ario_certbot_www:/var/www/certbot
+      - ario_letsencrypt:/etc/letsencrypt
+      - ario_nginx_ssl:/etc/nginx/ssl
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - ario
+
+  # پنل دیتابیس — اختیاری: docker compose --profile tools up -d
   mongo-express:
     image: mongo-express:1.0.2-20
     container_name: ario-mongo-express
+    profiles: ['tools']
     ports:
       - '8081:8081'
     environment:
-      # اگر سرویس mongodb همین فایل بالا باشد:
-      ME_CONFIG_MONGODB_URL: mongodb://host.docker.internal:27017/
+      ME_CONFIG_MONGODB_URL: mongodb://mongodb:27017/
       ME_CONFIG_BASICAUTH: 'false'
-    extra_hosts:
-      - 'host.docker.internal:host-gateway'
+    depends_on:
+      mongodb:
+        condition: service_healthy
     restart: unless-stopped
+    networks:
+      - ario
+
+  certbot:
+    image: certbot/certbot:latest
+    container_name: ario-certbot
+    profiles: ['ssl']
+    volumes:
+      - ario_certbot_www:/var/www/certbot
+      - ario_letsencrypt:/etc/letsencrypt
+    networks:
+      - ario
+    entrypoint: certbot
 
 volumes:
   ario_mongo_data:
+  ario_uploads:
+  ario_certbot_www:
+  ario_letsencrypt:
+  ario_nginx_ssl:
+
+networks:
+  ario:
+    driver: bridge

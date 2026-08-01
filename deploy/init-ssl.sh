@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# گرفتن گواهی Let's Encrypt و سوییچ nginx به SSL واقعی
+# گرفتن گواهی Let's Encrypt (فقط با دامنه واقعی — نه IP)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+COMPOSE="docker compose --env-file .env.prod"
 
 if [[ ! -f .env.prod ]]; then
-  echo "فایل .env.prod پیدا نشد. اول بساز:"
-  echo "  cp .env.prod.example .env.prod"
+  echo "اول: cp .env.prod.example .env.prod"
   exit 1
 fi
 
@@ -17,16 +17,16 @@ source .env.prod
 DOMAIN="${DOMAIN:?DOMAIN را در .env.prod تنظیم کن}"
 CERTBOT_EMAIL="${CERTBOT_EMAIL:?CERTBOT_EMAIL را تنظیم کن}"
 
-if [[ "$DOMAIN" == "localhost" || "$DOMAIN" == "127.0.0.1" ]]; then
-  echo "برای Let's Encrypt دامنه واقعی لازم است (نه localhost)."
+if [[ "$DOMAIN" == "localhost" || "$DOMAIN" == "127.0.0.1" ]] || [[ "$DOMAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "Let's Encrypt دامنه واقعی می‌خواهد (نه IP)."
   exit 1
 fi
 
-echo "==> بالا آوردن استک با SSL موقت (self-signed)…"
-SSL_MODE=selfsigned DOMAIN="$DOMAIN" docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+echo "==> استک با SSL موقت…"
+SSL_MODE=selfsigned DOMAIN="$DOMAIN" $COMPOSE up -d --build
 
-echo "==> درخواست گواهی برای ${DOMAIN}…"
-docker compose -f docker-compose.prod.yml --env-file .env.prod --profile ssl run --rm certbot certonly \
+echo "==> درخواست گواهی ${DOMAIN}…"
+$COMPOSE --profile ssl run --rm certbot certonly \
   --webroot \
   --webroot-path=/var/www/certbot \
   --email "$CERTBOT_EMAIL" \
@@ -34,17 +34,7 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod --profile ssl run
   --no-eff-email \
   -d "$DOMAIN"
 
-echo "==> سوییچ به Let's Encrypt و ری‌استارت nginx…"
-# SSL_MODE را در .env.prod به letsencrypt تغییر بده
-if grep -q '^SSL_MODE=' .env.prod; then
-  sed -i.bak 's/^SSL_MODE=.*/SSL_MODE=letsencrypt/' .env.prod
-else
-  echo 'SSL_MODE=letsencrypt' >> .env.prod
-fi
+sed -i.bak 's/^SSL_MODE=.*/SSL_MODE=letsencrypt/' .env.prod
+$COMPOSE up -d nginx
 
-docker compose -f docker-compose.prod.yml --env-file .env.prod up -d nginx
-
-echo "==> تمدید خودکار: cron پیشنهاد می‌شود:"
-echo "  0 3 * * * cd $ROOT && docker compose -f docker-compose.prod.yml --env-file .env.prod --profile ssl run --rm certbot renew && docker compose -f docker-compose.prod.yml --env-file .env.prod exec nginx nginx -s reload"
-
-echo "✅ SSL آماده: https://${DOMAIN}"
+echo "✅ https://${DOMAIN}"

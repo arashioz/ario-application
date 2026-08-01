@@ -34,6 +34,13 @@ chmod +x deploy/*.sh
 
 اگر HTTPS نمی‌خواهی: `SSL_MODE=off` و آدرس `http://IP/`
 
+> **CPU بدون AVX:** تصویر Mongo روی `mongo:4.4` است. اگر قبلاً `mongo:7` را اجرا کرده‌ای و دیتابیس خالی/خراب است:
+> ```bash
+> docker compose -f docker-compose.prod.yml --env-file .env.prod down
+> docker volume rm ario-application_ario_mongo_data   # نام volume را با docker volume ls چک کن
+> ./deploy/up.sh
+> ```
+
 ## راه‌اندازی سریع (گواهی خودامضا)
 
 ```bash

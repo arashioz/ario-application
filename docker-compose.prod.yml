@@ -1,6 +1,9 @@
+# سازگاری با اسکریپت‌های قدیمی — همان استک docker-compose.yml
+# ترجیح: docker compose --env-file .env.prod up -d --build
+
 services:
   mongodb:
-    image: mongo:7
+    image: mongo:4.4
     container_name: ario-mongodb
     restart: unless-stopped
     volumes:
@@ -8,7 +11,7 @@ services:
     environment:
       MONGO_INITDB_DATABASE: ario-shop
     healthcheck:
-      test: ['CMD', 'mongosh', '--eval', "db.adminCommand('ping')"]
+      test: ['CMD', 'mongo', '--quiet', '--eval', "db.adminCommand('ping').ok"]
       interval: 10s
       timeout: 5s
       retries: 8
@@ -40,11 +43,10 @@ services:
       timeout: 5s
       retries: 8
       start_period: 25s
-    networks:
-      - ario
-    # پورت داخلی — فقط از طریق nginx در دسترس است
     expose:
       - '3001'
+    networks:
+      - ario
 
   nginx:
     build:
@@ -70,17 +72,31 @@ services:
     networks:
       - ario
 
+  mongo-express:
+    image: mongo-express:1.0.2-20
+    container_name: ario-mongo-express
+    profiles: ['tools']
+    ports:
+      - '8081:8081'
+    environment:
+      ME_CONFIG_MONGODB_URL: mongodb://mongodb:27017/
+      ME_CONFIG_BASICAUTH: 'false'
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - ario
+
   certbot:
     image: certbot/certbot:latest
     container_name: ario-certbot
+    profiles: ['ssl']
     volumes:
       - ario_certbot_www:/var/www/certbot
       - ario_letsencrypt:/etc/letsencrypt
-    profiles:
-      - ssl
     networks:
       - ario
-    # فقط برای گرفتن / تمدید گواهی اجرا می‌شود — نه به‌صورت دائمی
     entrypoint: certbot
 
 volumes:
