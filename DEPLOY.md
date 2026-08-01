@@ -1,5 +1,30 @@
 # دیپلوی آریو (Docker + Nginx + SSL)
 
+## ساده‌ترین روش: کپی فایل (پیشنهادی — بدون Git)
+
+روی لپ‌تاپ:
+
+```bash
+chmod +x deploy/*.sh
+./deploy/pack.sh
+scp ario-deploy.tgz root@IP_SERVER:/root/
+```
+
+روی سرور:
+
+```bash
+cd /root && mkdir -p application && tar -xzf ario-deploy.tgz -C application
+cd /root/application
+# اگر docker-compose.yml اینجا نبود، برو داخل پوشه‌ای که آن فایل را دارد
+
+chmod +x deploy/*.sh
+./deploy/install-server.sh
+```
+
+باز کن: `https://IP/` → Proceed → ورود `admin` / `admin123`
+
+---
+
 ## معماری
 
 ```

@@ -11,7 +11,7 @@
 
 services:
   mongodb:
-    image: mongo:4.4
+    image: mongo:7
     container_name: ario-mongodb
     restart: unless-stopped
     # روی سرور پورت را به بیرون باز نکن — فقط شبکه داخلی
