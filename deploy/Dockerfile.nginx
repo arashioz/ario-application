@@ -2,11 +2,13 @@
 FROM node:22-alpine AS frontend-build
 WORKDIR /app
 
-COPY mobile/package.json mobile/package-lock.json* ./
-RUN npm ci
+# جلوگیری از خطای ERESOLVE (React 19 / peer deps)
+COPY mobile/.npmrc mobile/package.json mobile/package-lock.json* ./
+# React 19 باعث ERESOLVE می‌شود؛ legacy-peer-deps لازم است
+RUN npm ci --legacy-peer-deps || npm install --legacy-peer-deps
 
 COPY mobile/ ./
-# در CI ممکن است tsc سخت‌گیر باشد؛ بیلد Vite برای دیپلوی کافی است
+ENV NODE_ENV=production
 RUN npx vite build
 
 # ---- Nginx (SPA + reverse proxy + SSL) ----
@@ -19,7 +21,6 @@ COPY deploy/nginx/templates/ /etc/nginx/ario-templates/
 COPY deploy/nginx/docker-entrypoint.d/ /docker-entrypoint.d/
 COPY --from=frontend-build /app/dist /usr/share/nginx/html
 
-# قالب‌های پیش‌فرض image را خالی بگذار تا auto-envsubst تداخل نکند
 RUN rm -rf /etc/nginx/templates/* \
   && mkdir -p /var/www/certbot /etc/letsencrypt /etc/nginx/ssl /etc/nginx/conf.d \
   && chmod +x /docker-entrypoint.d/*.sh
