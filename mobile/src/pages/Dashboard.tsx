@@ -302,7 +302,9 @@ const Dashboard: React.FC = () => {
                 </div>
                 <div className="ios-kpi green">
                   <div className="k-label">سود خالص</div>
-                  <div className="k-value">{formatToman(data.netProfit)}</div>
+                  <div className={`k-value${(data.netProfit || 0) < 0 ? ' warning' : ''}`}>
+                    {formatToman(data.netProfit || 0)}
+                  </div>
                 </div>
                 <div className="ios-kpi gray">
                   <div className="k-label">فاکتور</div>

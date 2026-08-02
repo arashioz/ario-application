@@ -4,7 +4,6 @@ import {
   peopleOutline,
   walletOutline,
   calendarOutline,
-  pricetagsOutline,
   flagOutline,
   chevronBackOutline,
   fileTrayFullOutline,
@@ -29,7 +28,7 @@ const More: React.FC = () => {
       href: '/catalog-admin',
       icon: pricetagOutline,
       label: 'مدیریت محصولات',
-      desc: 'عکس، قیمت تکی/سوپر/عمده، بسته و کیلو',
+      desc: 'دسته، درصد سود، عکس، قیمت تکی/سوپر/عمده',
     },
     ...(isAdmin
       ? [
@@ -95,7 +94,6 @@ const More: React.FC = () => {
     ...(isAdmin
       ? [
           { href: '/expense', icon: walletOutline, label: 'هزینه و شرکت', desc: 'لیست هزینه، واریز، پرداخت' },
-          { href: '/categories', icon: pricetagsOutline, label: 'دسته‌ها و سود', desc: 'افزودن و حذف دسته' },
           {
             href: '/campaigns',
             icon: giftOutline,

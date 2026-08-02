@@ -6,6 +6,13 @@ import { getTargetProgress } from './targetService';
 import { getDueChecksSummary } from './checkService';
 import { getCustomerCrmInsights } from './customerService';
 
+/** این‌ها روی صندوق اثر دارند ولی هزینهٔ عملیاتی نیستند — نباید از سود کم شوند */
+const NON_OPERATING_EXPENSE_TYPES = new Set(['loan_received', 'loan_given', 'withdrawal']);
+
+function operatingExpenseAmount(type: string | undefined, amount: number): number {
+  if (type && NON_OPERATING_EXPENSE_TYPES.has(type)) return 0;
+  return amount || 0;
+}
 async function getInventorySnapshot() {
   const products = await Product.find().sort({ stockKg: -1 }).select('name stockKg stock kgPerPackage avgCostPerKg');
   const normalized = products.map((p) => {
@@ -101,8 +108,11 @@ export async function getDashboard(date?: Date, marketerId?: string) {
 
   const totalSales = sales.reduce((s, inv) => s + inv.totalAmount, 0);
   const soldKg = sales.reduce((s, inv) => s + (inv.totalKg || 0), 0);
-  const totalProfit = sales.reduce((s, inv) => s + inv.totalProfit, 0);
-  const totalExpenses = expenses.reduce((s, e) => s + e.amount, 0);
+  const totalProfit = sales.reduce((s, inv) => s + (inv.totalProfit || 0), 0);
+  const totalExpenses = expenses.reduce(
+    (s, e) => s + operatingExpenseAmount(e.type, e.amount),
+    0
+  );
   const netProfit = totalProfit - totalExpenses;
 
   const monthSalesAmount = monthSales.reduce((s, inv) => s + inv.totalAmount, 0);
@@ -264,7 +274,7 @@ export async function getPeriodSummary(from: Date, to: Date, marketerId?: string
   for (const expense of expenses) {
     const key = startOfDay(expense.date).toISOString().split('T')[0];
     const entry = dailyMap.get(key) || { sales: 0, profit: 0, expenses: 0, soldKg: 0 };
-    entry.expenses += expense.amount;
+    entry.expenses += operatingExpenseAmount(expense.type, expense.amount);
     dailyMap.set(key, entry);
   }
 
@@ -279,8 +289,11 @@ export async function getPeriodSummary(from: Date, to: Date, marketerId?: string
 
   const totalSales = sales.reduce((s, i) => s + i.totalAmount, 0);
   const soldKg = sales.reduce((s, i) => s + (i.totalKg || 0), 0);
-  const totalProfit = sales.reduce((s, i) => s + i.totalProfit, 0);
-  const totalExpenses = expenses.reduce((s, e) => s + e.amount, 0);
+  const totalProfit = sales.reduce((s, i) => s + (i.totalProfit || 0), 0);
+  const totalExpenses = expenses.reduce(
+    (s, e) => s + operatingExpenseAmount(e.type, e.amount),
+    0
+  );
 
   const products = await Product.find().sort({ stockKg: -1 }).limit(30);
   const inventory = {

@@ -18,6 +18,8 @@ import {
   IonModal,
   IonRefresher,
   IonRefresherContent,
+  IonSegment,
+  IonSegmentButton,
   useIonViewWillEnter,
   RefresherEventDetail,
 } from '@ionic/react';
@@ -48,6 +50,7 @@ import { MoneyInput } from '../components/MoneyInput';
 import { LocationPicker } from '../components/LocationPicker';
 import { InvoiceListPanel } from '../components/InvoiceListPanel';
 import { useAuth } from '../auth/AuthContext';
+import { resolveMediaUrl } from '../api/client';
 import { geoErrorMessage, getCurrentPositionAsync, isGeoSecureContext } from '../utils/geo';
 import { reverseGeocode } from '../utils/geocode';
 import { useHistory } from 'react-router-dom';
@@ -64,6 +67,7 @@ interface Product {
   lastPurchasePricePerKg?: number;
   purchasePrice?: number;
   kgPerPackage: number;
+  imageUrl?: string;
   categoryId: {
     profitPercent: number;
     profitRetail?: number;
@@ -71,6 +75,9 @@ interface Product {
     profitWholesale?: number;
   };
   profitPercent?: number;
+  profitRetail?: number;
+  profitSupermarket?: number;
+  profitWholesale?: number;
 }
 
 interface Customer {
@@ -106,6 +113,7 @@ interface LineItem {
   key: string;
   productId: string;
   productName: string;
+  imageUrl?: string;
   unit: 'kg' | 'package';
   qtyInput: string;
   unitPrice: string;
@@ -125,9 +133,9 @@ const TIER_LABELS: Record<PriceTier, string> = {
 
 function tierPercent(p: Product, tier: PriceTier): number {
   const c = p.categoryId;
-  if (tier === 'supermarket') return c?.profitSupermarket ?? 10;
-  if (tier === 'wholesale') return c?.profitWholesale ?? 6;
-  return p.profitPercent ?? c?.profitRetail ?? c?.profitPercent ?? 12;
+  if (tier === 'supermarket') return p.profitSupermarket ?? c?.profitSupermarket ?? 10;
+  if (tier === 'wholesale') return p.profitWholesale ?? c?.profitWholesale ?? 6;
+  return p.profitRetail ?? p.profitPercent ?? c?.profitRetail ?? c?.profitPercent ?? 12;
 }
 
 function productCost(p: Product, basis: CostBasis): number {
@@ -232,6 +240,8 @@ const Sale: React.FC = () => {
   const [toast, setToast] = useState({ open: false, msg: '', color: 'success' });
   const [mapOpen, setMapOpen] = useState(false);
   const [histOpen, setHistOpen] = useState(false);
+  const [saleTab, setSaleTab] = useState<'single' | 'bulk'>('single');
+  const [bulkCount, setBulkCount] = useState(0);
   const needsCustomer = priceTier !== 'retail';
 
   const loadProducts = useCallback(async () => {
@@ -793,6 +803,7 @@ const Sale: React.FC = () => {
         key: newLineKey(),
         productId: p._id,
         productName: p.name,
+        imageUrl: p.imageUrl,
         unit: 'package',
         qtyInput: '1',
         unitPrice: formatMoneyInput(String(suggested * (p.kgPerPackage || 5))),
@@ -907,7 +918,9 @@ const Sale: React.FC = () => {
             ? `فاکتور ${invoice.invoiceNumber} ثبت شد — منتظر تأیید ادمین`
             : `فاکتور ${invoice.invoiceNumber} ثبت شد`;
         setToast({ open: true, msg, color: 'success' });
-        await openPdf(invoice._id);
+        if (saleTab !== 'bulk') {
+          await openPdf(invoice._id);
+        }
         setListRefreshKey((k) => k + 1);
       }
 
@@ -921,7 +934,9 @@ const Sale: React.FC = () => {
       setPayCard('');
       setPayCardToCard('');
       setPayCredit('');
-      setPaymentMethod('card');
+      if (saleTab !== 'bulk') {
+        setPaymentMethod('card');
+      }
       setCustomerId('');
       setCustomerName('');
       setCustomerPhone('');
@@ -932,6 +947,11 @@ const Sale: React.FC = () => {
       setCustomers([]);
       setPrevInvoices([]);
       setSuggestHint('');
+      if (saleTab === 'bulk') {
+        setBulkCount((c) => c + 1);
+      } else {
+        setBulkCount(0);
+      }
       setSuggestedDiscount(0);
       setOffers([]);
       setCampaignOffers([]);
@@ -964,6 +984,19 @@ const Sale: React.FC = () => {
               {user?.role === 'marketer' ? 'نیاز به تأیید' : 'ثبت مستقیم'}
             </IonChip>
           </IonButtons>
+        </IonToolbar>
+        <IonToolbar>
+          <IonSegment
+            value={saleTab}
+            onIonChange={(e) => setSaleTab((e.detail.value as 'single' | 'bulk') || 'single')}
+          >
+            <IonSegmentButton value="single">
+              <IonLabel>فاکتور تکی</IonLabel>
+            </IonSegmentButton>
+            <IonSegmentButton value="bulk">
+              <IonLabel>دسته‌جمعی روزانه</IonLabel>
+            </IonSegmentButton>
+          </IonSegment>
         </IonToolbar>
       </IonHeader>
       <IonContent fullscreen className="page-content ios-content sale-navy-content">
@@ -1008,18 +1041,23 @@ const Sale: React.FC = () => {
           )}
 
           <div className={`ios-glass-card sale-navy-card sale-toolbar ${isGolden ? 'golden-card' : ''}`}>
-            <div className="ios-row">
-              <div className="chip-row" style={{ margin: 0, flex: 1 }}>
-                {(Object.keys(TIER_LABELS) as PriceTier[]).map((t) => (
-                  <IonChip
-                    key={t}
-                    className={priceTier === t ? 'ios-chip-active' : 'ios-chip'}
-                    onClick={() => setPriceTier(t)}
-                  >
-                    {TIER_LABELS[t]}
-                  </IonChip>
-                ))}
-              </div>
+            {saleTab === 'bulk' && (
+              <p className="hint convert-hint" style={{ marginTop: 0 }}>
+                حالت سریع روزانه — بعد از ثبت فقط مشتری و اقلام پاک می‌شود
+                {bulkCount > 0 ? ` · امروز ${bulkCount.toLocaleString('fa-IR')} فاکتور ثبت شد` : ''}
+              </p>
+            )}
+            <div className="sale-tier-row">
+              {(Object.keys(TIER_LABELS) as PriceTier[]).map((t) => (
+                <button
+                  type="button"
+                  key={t}
+                  className={`sale-tier-btn ${priceTier === t ? 'active' : ''}`}
+                  onClick={() => setPriceTier(t)}
+                >
+                  {TIER_LABELS[t]}
+                </button>
+              ))}
               <IonToggle
                 checked={isGolden}
                 onIonChange={(e) => setIsGolden(e.detail.checked)}
@@ -1213,16 +1251,23 @@ const Sale: React.FC = () => {
                 <button
                   type="button"
                   key={p._id}
-                  className={`product-card product-card-dense ${inLines ? 'in-cart' : ''} ${stock <= 0 ? 'out' : ''}`}
+                  className={`product-card product-card-dense product-card-side ${inLines ? 'in-cart' : ''} ${stock <= 0 ? 'out' : ''}`}
                   onClick={() => addProduct(p)}
                 >
-                  <div className="pc-top">
-                    <span className="pc-badge">{p.kgPerPackage || 5}kg</span>
-                    {inLines > 0 && <span className="pc-qty">×{inLines}</span>}
+                  {p.imageUrl ? (
+                    <img src={resolveMediaUrl(p.imageUrl)} alt="" className="pc-thumb-sm" />
+                  ) : (
+                    <div className="pc-thumb-sm pc-thumb-ph">{p.name.slice(0, 1)}</div>
+                  )}
+                  <div className="pc-side-body">
+                    <div className="pc-top">
+                      <span className="pc-badge">{p.kgPerPackage || 5}kg</span>
+                      {inLines > 0 && <span className="pc-qty">×{inLines}</span>}
+                    </div>
+                    <div className="pc-name">{p.name}</div>
+                    <div className="pc-meta">{formatKg(stock)}</div>
+                    <div className="pc-price">{formatToman(suggested)}</div>
                   </div>
-                  <div className="pc-name">{p.name}</div>
-                  <div className="pc-meta">{formatKg(stock)}</div>
-                  <div className="pc-price">{formatToman(suggested)}</div>
                 </button>
               );
             })}
@@ -1244,9 +1289,16 @@ const Sale: React.FC = () => {
               return (
                 <div key={l.key} className="cart-item-card">
                   <div className="ios-row">
-                    <strong>
-                      {idx + 1}. {l.productName}
-                    </strong>
+                    <div className="cart-item-title">
+                      {l.imageUrl ? (
+                        <img src={resolveMediaUrl(l.imageUrl)} alt="" className="cart-thumb" />
+                      ) : (
+                        <div className="cart-thumb cart-thumb-ph">{l.productName.slice(0, 1)}</div>
+                      )}
+                      <strong>
+                        {idx + 1}. {l.productName}
+                      </strong>
+                    </div>
                     <IonButton
                       fill="clear"
                       color="danger"
@@ -1315,6 +1367,9 @@ const Sale: React.FC = () => {
                     <IonButton fill="outline" size="small" onClick={() => bumpQty(idx, 1)}>
                       <IonIcon icon={addOutline} />
                     </IonButton>
+                    <IonButton fill="solid" size="small" className="qty-plus5" onClick={() => bumpQty(idx, 5)}>
+                      +۵
+                    </IonButton>
                   </div>
                   <IonItem lines="none">
                     <IonLabel position="stacked">فی تومان (قابل تغییر)</IonLabel>
@@ -1350,7 +1405,7 @@ const Sale: React.FC = () => {
             })}
           </div>
 
-          <details className="sale-details ios-glass-card sale-navy-card" open>
+          <details className="sale-details ios-glass-card sale-navy-card">
             <summary>تخفیف و پرداخت · {formatToman(totals.net)}</summary>
             <PersianDateField value={date} onChange={setDate} />
             <div className="chip-row">

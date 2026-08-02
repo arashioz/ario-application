@@ -16,8 +16,14 @@ export interface IProduct extends Document {
   stock: number;
   /** وزن هر بسته به کیلو (۳، ۵، ۱۰، …) */
   kgPerPackage: number;
-  /** درصد سود اختصاصی؛ اگر خالی باشد از دسته استفاده می‌شود */
+  /** درصد سود اختصاصی تکی؛ اگر خالی باشد از دسته استفاده می‌شود */
   profitPercent?: number;
+  /** درصد سود تکی محصول (اولویت بر دسته) */
+  profitRetail?: number;
+  /** درصد سود سوپرمارکت محصول */
+  profitSupermarket?: number;
+  /** درصد سود عمده محصول */
+  profitWholesale?: number;
   sku?: string;
   notes?: string;
   /** مسیر تصویر برای کاتالوگ */
@@ -46,6 +52,9 @@ const ProductSchema = new Schema<IProduct>(
     stock: { type: Number, required: true, default: 0 },
     kgPerPackage: { type: Number, required: true, default: 5, min: 0.001 },
     profitPercent: { type: Number },
+    profitRetail: { type: Number },
+    profitSupermarket: { type: Number },
+    profitWholesale: { type: Number },
     sku: { type: String },
     notes: { type: String },
     imageUrl: { type: String },

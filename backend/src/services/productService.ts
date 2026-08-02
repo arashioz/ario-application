@@ -221,13 +221,30 @@ function tierPercent(
     profitSupermarket?: number;
     profitWholesale?: number;
   } | null,
-  productPercent: number | undefined,
+  product:
+    | {
+        profitPercent?: number;
+        profitRetail?: number;
+        profitSupermarket?: number;
+        profitWholesale?: number;
+      }
+    | null
+    | undefined,
   tier: PriceTier
 ): number {
-  if (productPercent != null && tier === 'retail') return productPercent;
+  if (tier === 'supermarket') {
+    if (product?.profitSupermarket != null) return product.profitSupermarket;
+    if (!category) return 10;
+    return category.profitSupermarket ?? Math.max((category.profitRetail ?? category.profitPercent ?? 15) - 4, 0);
+  }
+  if (tier === 'wholesale') {
+    if (product?.profitWholesale != null) return product.profitWholesale;
+    if (!category) return 6;
+    return category.profitWholesale ?? Math.max((category.profitRetail ?? category.profitPercent ?? 15) - 8, 0);
+  }
+  if (product?.profitRetail != null) return product.profitRetail;
+  if (product?.profitPercent != null) return product.profitPercent;
   if (!category) return 15;
-  if (tier === 'supermarket') return category.profitSupermarket ?? category.profitPercent ?? 10;
-  if (tier === 'wholesale') return category.profitWholesale ?? category.profitPercent ?? 6;
   return category.profitRetail ?? category.profitPercent ?? 15;
 }
 
@@ -266,7 +283,7 @@ export async function calculateSalePrice(
 
   const percent =
     customPercent ??
-    tierPercent(category, product.profitPercent, priceTier);
+    tierPercent(category, product, priceTier);
 
   const cost = resolveProductCost(product, costBasis);
   const salePricePerKg = Math.round(cost * (1 + percent / 100));
@@ -338,6 +355,11 @@ export async function updateProduct(
     imageUrl?: string;
     notes?: string;
     name?: string;
+    profitPercent?: number | null;
+    profitRetail?: number | null;
+    profitSupermarket?: number | null;
+    profitWholesale?: number | null;
+    categoryId?: string;
   }
 ) {
   const p = await Product.findById(id);
@@ -349,6 +371,24 @@ export async function updateProduct(
   if (data.catalogNote !== undefined) p.catalogNote = data.catalogNote;
   if (data.imageUrl !== undefined) p.imageUrl = data.imageUrl;
   if (data.notes !== undefined) p.notes = data.notes;
+  if (data.categoryId) p.categoryId = new Types.ObjectId(data.categoryId);
+  if (data.profitRetail === null) {
+    p.profitRetail = undefined;
+    p.profitPercent = undefined;
+  } else if (data.profitRetail !== undefined) {
+    p.profitRetail = data.profitRetail;
+    p.profitPercent = data.profitRetail;
+  } else if (data.profitPercent === null) {
+    p.profitPercent = undefined;
+    p.profitRetail = undefined;
+  } else if (data.profitPercent !== undefined) {
+    p.profitPercent = data.profitPercent;
+    p.profitRetail = data.profitPercent;
+  }
+  if (data.profitSupermarket === null) p.profitSupermarket = undefined;
+  else if (data.profitSupermarket !== undefined) p.profitSupermarket = data.profitSupermarket;
+  if (data.profitWholesale === null) p.profitWholesale = undefined;
+  else if (data.profitWholesale !== undefined) p.profitWholesale = data.profitWholesale;
   if (data.name?.trim()) {
     p.name = data.name.trim();
     p.normalizedName = normalizeProductName(data.name);

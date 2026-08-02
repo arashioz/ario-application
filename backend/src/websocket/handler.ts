@@ -296,6 +296,14 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
         imageUrl: p.imageUrl as string | undefined,
         notes: p.notes as string | undefined,
         name: p.name as string | undefined,
+        categoryId: p.categoryId as string | undefined,
+        profitPercent:
+          p.profitPercent === null ? null : (p.profitPercent as number | undefined),
+        profitRetail: p.profitRetail === null ? null : (p.profitRetail as number | undefined),
+        profitSupermarket:
+          p.profitSupermarket === null ? null : (p.profitSupermarket as number | undefined),
+        profitWholesale:
+          p.profitWholesale === null ? null : (p.profitWholesale as number | undefined),
       });
       notifyDataChange('product', 'update', result);
       return { type: 'product.update', payload: result };
