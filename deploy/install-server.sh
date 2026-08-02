@@ -33,9 +33,9 @@ if [[ -z "${DOMAIN:-}" || "$DOMAIN" == "YOUR.SERVER.IP" || "$DOMAIN" == "localho
   fi
 fi
 
-# اگر قبلاً mongo:4.4 بوده، volume با mongo:7 ناسازگار است
+# دیتای نسخهٔ دیگر Mongo با این ایمیج ممکن است ناسازگار باشد
 if docker volume ls -q | grep -q mongo; then
-  echo "==> اگر mongodb unhealthy شد (ارتقا از ۴.۴)، یک‌بار:"
+  echo "==> اگر mongodb unhealthy شد، یک‌بار volume را پاک کن:"
   echo "    docker compose --env-file .env.prod down"
   echo "    docker volume rm \$(docker volume ls -q | grep mongo | head -1)"
 fi

@@ -59,8 +59,8 @@ chmod +x deploy/*.sh
 
 اگر HTTPS نمی‌خواهی: `SSL_MODE=off` و آدرس `http://IP/`
 
-> **MongoDB 7** نیاز به CPU با AVX دارد. اگر در لاگ `Illegal instruction` دیدی، VPS باید CPU جدیدتر داشته باشد.
-> اگر از نسخهٔ قدیمی‌تر ارتقا می‌دهی، یک‌بار volume را پاک کن:
+> **CPU بدون AVX:** به‌جای `mongo:7` رسمی از `ghcr.io/fenio/mongodb-no-avx:7.0.28` استفاده می‌شود (MongoDB 7 بدون نیاز به AVX).
+> اگر از نسخهٔ دیگر ارتقا می‌دهی، یک‌بار volume را پاک کن:
 > ```bash
 > docker compose --env-file .env.prod down
 > docker volume rm $(docker volume ls -q | grep mongo)

@@ -1,5 +1,5 @@
 # آریو — استک کامل سرور
-# MongoDB 7 + Backend + Nginx (HTTPS روی IP)
+# MongoDB 7 (بدون AVX) + Backend + Nginx (HTTPS روی IP)
 #
 # روی سرور:
 #   cp .env.prod.example .env.prod
@@ -11,18 +11,18 @@
 
 services:
   mongodb:
-    image: mongo:7
+    # رسمی mongo:5+ روی CPU بدون AVX کرش می‌کند — بیلد community بدون AVX
+    image: ghcr.io/fenio/mongodb-no-avx:7.0.28
     container_name: ario-mongodb
     restart: unless-stopped
     # روی سرور پورت را به بیرون باز نکن — فقط شبکه داخلی
     # برای دیباگ لوکال می‌توانی uncomment کنی: "27017:27017"
+    command: ['--bind_ip_all', '--port', '27017']
     volumes:
       - ario_mongo_data:/data/db
-    environment:
-      MONGO_INITDB_DATABASE: ario-shop
     healthcheck:
-      # mongo:5+ فقط mongosh دارد (دستور mongo حذف شده)
-      test: ['CMD', 'mongosh', '--quiet', '--eval', "db.adminCommand('ping').ok"]
+      # این ایمیج mongosh ندارد؛ پروسس mongod = آماده بودن سرویس
+      test: ['CMD-SHELL', 'grep -aq mongod /proc/1/cmdline']
       interval: 10s
       timeout: 5s
       retries: 10

@@ -3,15 +3,15 @@
 
 services:
   mongodb:
-    image: mongo:7
+    # رسمی mongo:5+ روی CPU بدون AVX کرش می‌کند
+    image: ghcr.io/fenio/mongodb-no-avx:7.0.28
     container_name: ario-mongodb
     restart: unless-stopped
+    command: ['--bind_ip_all', '--port', '27017']
     volumes:
       - ario_mongo_data:/data/db
-    environment:
-      MONGO_INITDB_DATABASE: ario-shop
     healthcheck:
-      test: ['CMD', 'mongosh', '--quiet', '--eval', "db.adminCommand('ping').ok"]
+      test: ['CMD-SHELL', 'grep -aq mongod /proc/1/cmdline']
       interval: 10s
       timeout: 5s
       retries: 10

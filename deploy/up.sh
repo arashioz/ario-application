@@ -32,7 +32,7 @@ if [[ "$DOMAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && [[ "${SSL_MODE:-}" == 
   SSL_MODE=selfsigned
 fi
 
-echo "==> docker compose up (Mongo 7 + backend + nginx)…"
+echo "==> docker compose up (Mongo 7 no-AVX + backend + nginx)…"
 $COMPOSE down --remove-orphans 2>/dev/null || true
 $COMPOSE up -d --build
 
