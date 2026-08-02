@@ -5,7 +5,7 @@ export const DELETE_PASSWORD = 'delete-ario';
 
 export function assertDeletePassword(password?: string) {
   if (password !== DELETE_PASSWORD) {
-    throw new Error('رمز حذف اشتباه است');
+    throw new Error('رمز اشتباه است');
   }
 }
 

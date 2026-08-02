@@ -9,14 +9,17 @@ import {
   IonItem,
   IonLabel,
   IonModal,
+  IonSelect,
+  IonSelectOption,
   IonSpinner,
   IonTitle,
+  IonToggle,
   IonToolbar,
   IonButtons,
 } from '@ionic/react';
-import { eyeOutline, trashOutline, documentOutline } from 'ionicons/icons';
+import { createOutline, eyeOutline, trashOutline, documentOutline } from 'ionicons/icons';
 import { wsClient } from '../api/ws';
-import { formatToman, formatKg, formatDate } from '../utils/format';
+import { formatToman, formatKg, formatDate, formatMoneyInput, parseAmount } from '../utils/format';
 import { useAuth } from '../auth/AuthContext';
 
 export interface SaleInvRow {
@@ -27,11 +30,23 @@ export interface SaleInvRow {
   totalAmount: number;
   totalKg?: number;
   totalProfit?: number;
+  discount?: number;
   status?: string;
   isGolden?: boolean;
   paymentMethod?: string;
   date: string;
-  items?: Array<{ productName: string; qtyKg: number; totalPrice: number }>;
+  items?: Array<{
+    productId?: string;
+    productName: string;
+    qtyKg: number;
+    totalPrice: number;
+    unit?: 'kg' | 'package';
+    qtyInput?: number;
+    unitPrice?: number;
+    unitPricePerKg?: number;
+    discount?: number;
+    kgPerPackage?: number;
+  }>;
   notes?: string;
 }
 
@@ -44,7 +59,17 @@ export interface PurchaseInvRow {
   paidNow?: boolean;
   date: string;
   notes?: string;
-  items?: Array<{ productName: string; qtyKg: number; totalPrice: number }>;
+  items?: Array<{
+    productId?: string;
+    productName: string;
+    qtyKg: number;
+    totalPrice: number;
+    unit?: 'kg' | 'package';
+    qtyInput?: number;
+    unitPrice?: number;
+    unitPricePerKg?: number;
+    kgPerPackage?: number;
+  }>;
 }
 
 const STATUS: Record<string, string> = {
@@ -63,6 +88,25 @@ const PAY: Record<string, string> = {
   mixed: 'ترکیبی',
 };
 
+type EditSaleItem = {
+  productId?: string;
+  productName: string;
+  unit: 'kg' | 'package';
+  qtyInput: string;
+  unitPrice: string;
+  discount: string;
+  kgPerPackage: number;
+};
+
+type EditPurchaseItem = {
+  productId?: string;
+  productName: string;
+  unit: 'kg' | 'package';
+  qtyInput: string;
+  unitPrice: string;
+  kgPerPackage: number;
+};
+
 type Props = {
   kind: 'sale' | 'purchase';
   /** افزایش بده تا لیست رفرش شود (مثلاً بعد از ثبت) */
@@ -79,6 +123,19 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deletePw, setDeletePw] = useState('');
   const [deleting, setDeleting] = useState(false);
+
+  const [editOpen, setEditOpen] = useState(false);
+  const [editPw, setEditPw] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [editSupplier, setEditSupplier] = useState('');
+  const [editPaidNow, setEditPaidNow] = useState(false);
+  const [editCustomerName, setEditCustomerName] = useState('');
+  const [editCustomerPhone, setEditCustomerPhone] = useState('');
+  const [editNotes, setEditNotes] = useState('');
+  const [editPaymentMethod, setEditPaymentMethod] = useState('cash');
+  const [editDiscount, setEditDiscount] = useState('');
+  const [editSaleItems, setEditSaleItems] = useState<EditSaleItem[]>([]);
+  const [editPurchaseItems, setEditPurchaseItems] = useState<EditPurchaseItem[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -127,6 +184,59 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
     }
   };
 
+  const openEdit = (inv: SaleInvRow | PurchaseInvRow) => {
+    setDetail(inv);
+    setEditPw('');
+    setEditNotes(inv.notes || '');
+    if (kind === 'sale') {
+      const s = inv as SaleInvRow;
+      setEditCustomerName(s.customerName || '');
+      setEditCustomerPhone(s.customerPhone || '');
+      setEditPaymentMethod(s.paymentMethod || 'cash');
+      setEditDiscount(s.discount ? formatMoneyInput(String(s.discount)) : '');
+      setEditSaleItems(
+        (s.items || []).map((it) => {
+          const unit = it.unit || 'kg';
+          const unitPrice =
+            it.unitPrice ??
+            (unit === 'kg' ? it.unitPricePerKg : undefined) ??
+            (it.qtyKg > 0 ? Math.round(it.totalPrice / it.qtyKg) : 0);
+          return {
+            productId: it.productId,
+            productName: it.productName,
+            unit,
+            qtyInput: String(it.qtyInput ?? it.qtyKg ?? 0),
+            unitPrice: formatMoneyInput(String(unitPrice || 0)),
+            discount: it.discount ? formatMoneyInput(String(it.discount)) : '',
+            kgPerPackage: it.kgPerPackage || 5,
+          };
+        })
+      );
+    } else {
+      const p = inv as PurchaseInvRow;
+      setEditSupplier(p.supplier || 'شرکت');
+      setEditPaidNow(!!p.paidNow);
+      setEditPurchaseItems(
+        (p.items || []).map((it) => {
+          const unit = it.unit || 'kg';
+          const unitPrice =
+            it.unitPrice ??
+            (unit === 'kg' ? it.unitPricePerKg : undefined) ??
+            (it.qtyKg > 0 ? Math.round(it.totalPrice / it.qtyKg) : 0);
+          return {
+            productId: it.productId,
+            productName: it.productName,
+            unit,
+            qtyInput: String(it.qtyInput ?? it.qtyKg ?? 0),
+            unitPrice: formatMoneyInput(String(unitPrice || 0)),
+            kgPerPackage: it.kgPerPackage || 5,
+          };
+        })
+      );
+    }
+    setEditOpen(true);
+  };
+
   const confirmDelete = async () => {
     if (!detail) return;
     setDeleting(true);
@@ -145,6 +255,62 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
       onToast?.(e instanceof Error ? e.message : 'حذف نشد', 'danger');
     } finally {
       setDeleting(false);
+    }
+  };
+
+  const confirmEdit = async () => {
+    if (!detail) return;
+    setSaving(true);
+    try {
+      if (kind === 'sale') {
+        const items = editSaleItems.map((it) => ({
+          productId: it.productId,
+          productName: it.productName,
+          unit: it.unit,
+          qtyInput: parseFloat(it.qtyInput) || 0,
+          unitPrice: parseAmount(it.unitPrice) || 0,
+          discount: parseAmount(it.discount) || 0,
+          kgPerPackage: it.kgPerPackage,
+        }));
+        if (items.some((it) => it.qtyInput <= 0)) throw new Error('مقدار اقلام باید بیشتر از صفر باشد');
+        await wsClient.request('sale.update', {
+          id: detail._id,
+          password: editPw,
+          customerName: editCustomerName.trim() || undefined,
+          customerPhone: editCustomerPhone.trim() || undefined,
+          notes: editNotes.trim() || undefined,
+          paymentMethod: editPaymentMethod,
+          discount: parseAmount(editDiscount) || 0,
+          items,
+        });
+      } else {
+        const items = editPurchaseItems.map((it) => ({
+          productId: it.productId,
+          name: it.productName,
+          unit: it.unit,
+          qtyInput: parseFloat(it.qtyInput) || 0,
+          unitPrice: parseAmount(it.unitPrice) || 0,
+          kgPerPackage: it.kgPerPackage,
+        }));
+        if (items.some((it) => it.qtyInput <= 0)) throw new Error('مقدار اقلام باید بیشتر از صفر باشد');
+        await wsClient.request('purchase.update', {
+          id: detail._id,
+          password: editPw,
+          supplier: editSupplier.trim() || undefined,
+          notes: editNotes.trim() || undefined,
+          paidNow: editPaidNow,
+          items,
+        });
+      }
+      onToast?.('فاکتور ویرایش شد', 'success');
+      setEditOpen(false);
+      setDetail(null);
+      setEditPw('');
+      await load();
+    } catch (e) {
+      onToast?.(e instanceof Error ? e.message : 'ویرایش نشد', 'danger');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -202,18 +368,29 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
                   PDF
                 </IonButton>
                 {isAdmin && (
-                  <IonButton
-                    size="small"
-                    fill="clear"
-                    color="danger"
-                    onClick={() => {
-                      setDetail(inv);
-                      setDeleteOpen(true);
-                    }}
-                  >
-                    <IonIcon slot="start" icon={trashOutline} />
-                    حذف
-                  </IonButton>
+                  <>
+                    <IonButton
+                      size="small"
+                      fill="clear"
+                      color="warning"
+                      onClick={() => openEdit(inv)}
+                    >
+                      <IonIcon slot="start" icon={createOutline} />
+                      ویرایش
+                    </IonButton>
+                    <IonButton
+                      size="small"
+                      fill="clear"
+                      color="danger"
+                      onClick={() => {
+                        setDetail(inv);
+                        setDeleteOpen(true);
+                      }}
+                    >
+                      <IonIcon slot="start" icon={trashOutline} />
+                      حذف
+                    </IonButton>
+                  </>
                 )}
               </div>
             </div>
@@ -241,18 +418,29 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
                   جزئیات
                 </IonButton>
                 {isAdmin && (
-                  <IonButton
-                    size="small"
-                    fill="clear"
-                    color="danger"
-                    onClick={() => {
-                      setDetail(inv);
-                      setDeleteOpen(true);
-                    }}
-                  >
-                    <IonIcon slot="start" icon={trashOutline} />
-                    حذف
-                  </IonButton>
+                  <>
+                    <IonButton
+                      size="small"
+                      fill="clear"
+                      color="warning"
+                      onClick={() => openEdit(inv)}
+                    >
+                      <IonIcon slot="start" icon={createOutline} />
+                      ویرایش
+                    </IonButton>
+                    <IonButton
+                      size="small"
+                      fill="clear"
+                      color="danger"
+                      onClick={() => {
+                        setDetail(inv);
+                        setDeleteOpen(true);
+                      }}
+                    >
+                      <IonIcon slot="start" icon={trashOutline} />
+                      حذف
+                    </IonButton>
+                  </>
                 )}
               </div>
             </div>
@@ -264,9 +452,9 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
       </div>
 
       <IonModal
-        isOpen={!!detail && !deleteOpen}
+        isOpen={!!detail && !deleteOpen && !editOpen}
         onDidDismiss={() => {
-          if (!deleteOpen) setDetail(null);
+          if (!deleteOpen && !editOpen) setDetail(null);
         }}
       >
         <IonHeader>
@@ -318,15 +506,26 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
                 چاپ / PDF
               </IonButton>
               {isAdmin && (
-                <IonButton
-                  expand="block"
-                  color="danger"
-                  fill="outline"
-                  className="ion-margin-top"
-                  onClick={() => setDeleteOpen(true)}
-                >
-                  حذف با رمز
-                </IonButton>
+                <>
+                  <IonButton
+                    expand="block"
+                    color="warning"
+                    fill="outline"
+                    className="ion-margin-top"
+                    onClick={() => openEdit(detail)}
+                  >
+                    ویرایش با رمز
+                  </IonButton>
+                  <IonButton
+                    expand="block"
+                    color="danger"
+                    fill="outline"
+                    className="ion-margin-top"
+                    onClick={() => setDeleteOpen(true)}
+                  >
+                    حذف با رمز
+                  </IonButton>
+                </>
               )}
             </>
           )}
@@ -363,18 +562,207 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
                 </div>
               ) : null}
               {isAdmin && (
-                <IonButton
-                  expand="block"
-                  color="danger"
-                  fill="outline"
-                  className="ion-margin-top"
-                  onClick={() => setDeleteOpen(true)}
-                >
-                  حذف با رمز
-                </IonButton>
+                <>
+                  <IonButton
+                    expand="block"
+                    color="warning"
+                    fill="outline"
+                    className="ion-margin-top"
+                    onClick={() => openEdit(detail)}
+                  >
+                    ویرایش با رمز
+                  </IonButton>
+                  <IonButton
+                    expand="block"
+                    color="danger"
+                    fill="outline"
+                    className="ion-margin-top"
+                    onClick={() => setDeleteOpen(true)}
+                  >
+                    حذف با رمز
+                  </IonButton>
+                </>
               )}
             </>
           )}
+        </IonContent>
+      </IonModal>
+
+      <IonModal isOpen={editOpen} onDidDismiss={() => setEditOpen(false)}>
+        <IonHeader>
+          <IonToolbar>
+            <IonTitle>ویرایش فاکتور</IonTitle>
+            <IonButtons slot="end">
+              <IonButton onClick={() => setEditOpen(false)}>انصراف</IonButton>
+            </IonButtons>
+          </IonToolbar>
+        </IonHeader>
+        <IonContent className="ion-padding">
+          <p className="hint">مقدار و قیمت را اصلاح کنید؛ برای ذخیره رمز لازم است.</p>
+
+          {kind === 'sale' ? (
+            <>
+              <IonItem>
+                <IonLabel position="stacked">مشتری</IonLabel>
+                <IonInput
+                  value={editCustomerName}
+                  onIonInput={(e) => setEditCustomerName(e.detail.value || '')}
+                />
+              </IonItem>
+              <IonItem>
+                <IonLabel position="stacked">تلفن</IonLabel>
+                <IonInput
+                  value={editCustomerPhone}
+                  onIonInput={(e) => setEditCustomerPhone(e.detail.value || '')}
+                />
+              </IonItem>
+              <IonItem>
+                <IonLabel position="stacked">روش پرداخت</IonLabel>
+                <IonSelect
+                  value={editPaymentMethod}
+                  onIonChange={(e) => setEditPaymentMethod(String(e.detail.value))}
+                  interface="popover"
+                >
+                  <IonSelectOption value="cash">نقد</IonSelectOption>
+                  <IonSelectOption value="card">پوز</IonSelectOption>
+                  <IonSelectOption value="card_to_card">کارت به کارت</IonSelectOption>
+                  <IonSelectOption value="credit">نسیه</IonSelectOption>
+                  <IonSelectOption value="mixed">ترکیبی</IonSelectOption>
+                </IonSelect>
+              </IonItem>
+              <IonItem>
+                <IonLabel position="stacked">تخفیف فاکتور (تومان)</IonLabel>
+                <IonInput
+                  inputMode="numeric"
+                  value={editDiscount}
+                  onIonInput={(e) => setEditDiscount(formatMoneyInput(e.detail.value || ''))}
+                />
+              </IonItem>
+              {editSaleItems.map((it, idx) => (
+                <div key={idx} className="ios-glass-card" style={{ marginTop: 10 }}>
+                  <div className="ios-section-title" style={{ marginTop: 0 }}>
+                    {it.productName}
+                  </div>
+                  <IonItem>
+                    <IonLabel position="stacked">
+                      مقدار ({it.unit === 'package' ? 'بسته' : 'کیلو'})
+                    </IonLabel>
+                    <IonInput
+                      type="number"
+                      value={it.qtyInput}
+                      onIonInput={(e) => {
+                        const v = e.detail.value || '';
+                        setEditSaleItems((prev) =>
+                          prev.map((row, i) => (i === idx ? { ...row, qtyInput: v } : row))
+                        );
+                      }}
+                    />
+                  </IonItem>
+                  <IonItem>
+                    <IonLabel position="stacked">قیمت واحد (تومان)</IonLabel>
+                    <IonInput
+                      inputMode="numeric"
+                      value={it.unitPrice}
+                      onIonInput={(e) => {
+                        const v = formatMoneyInput(e.detail.value || '');
+                        setEditSaleItems((prev) =>
+                          prev.map((row, i) => (i === idx ? { ...row, unitPrice: v } : row))
+                        );
+                      }}
+                    />
+                  </IonItem>
+                  <IonItem>
+                    <IonLabel position="stacked">تخفیف قلم</IonLabel>
+                    <IonInput
+                      inputMode="numeric"
+                      value={it.discount}
+                      onIonInput={(e) => {
+                        const v = formatMoneyInput(e.detail.value || '');
+                        setEditSaleItems((prev) =>
+                          prev.map((row, i) => (i === idx ? { ...row, discount: v } : row))
+                        );
+                      }}
+                    />
+                  </IonItem>
+                </div>
+              ))}
+            </>
+          ) : (
+            <>
+              <IonItem>
+                <IonLabel position="stacked">تأمین‌کننده</IonLabel>
+                <IonInput
+                  value={editSupplier}
+                  onIonInput={(e) => setEditSupplier(e.detail.value || '')}
+                />
+              </IonItem>
+              <IonItem>
+                <IonLabel>پرداخت نقد الان</IonLabel>
+                <IonToggle
+                  checked={editPaidNow}
+                  onIonChange={(e) => setEditPaidNow(e.detail.checked)}
+                />
+              </IonItem>
+              {editPurchaseItems.map((it, idx) => (
+                <div key={idx} className="ios-glass-card" style={{ marginTop: 10 }}>
+                  <div className="ios-section-title" style={{ marginTop: 0 }}>
+                    {it.productName}
+                  </div>
+                  <IonItem>
+                    <IonLabel position="stacked">
+                      مقدار ({it.unit === 'package' ? 'بسته' : 'کیلو'})
+                    </IonLabel>
+                    <IonInput
+                      type="number"
+                      value={it.qtyInput}
+                      onIonInput={(e) => {
+                        const v = e.detail.value || '';
+                        setEditPurchaseItems((prev) =>
+                          prev.map((row, i) => (i === idx ? { ...row, qtyInput: v } : row))
+                        );
+                      }}
+                    />
+                  </IonItem>
+                  <IonItem>
+                    <IonLabel position="stacked">قیمت واحد (تومان)</IonLabel>
+                    <IonInput
+                      inputMode="numeric"
+                      value={it.unitPrice}
+                      onIonInput={(e) => {
+                        const v = formatMoneyInput(e.detail.value || '');
+                        setEditPurchaseItems((prev) =>
+                          prev.map((row, i) => (i === idx ? { ...row, unitPrice: v } : row))
+                        );
+                      }}
+                    />
+                  </IonItem>
+                </div>
+              ))}
+            </>
+          )}
+
+          <IonItem>
+            <IonLabel position="stacked">یادداشت</IonLabel>
+            <IonInput value={editNotes} onIonInput={(e) => setEditNotes(e.detail.value || '')} />
+          </IonItem>
+          <IonItem>
+            <IonLabel position="stacked">رمز ویرایش</IonLabel>
+            <IonInput
+              type="password"
+              value={editPw}
+              onIonInput={(e) => setEditPw(e.detail.value || '')}
+              placeholder="رمز"
+            />
+          </IonItem>
+          <IonButton
+            expand="block"
+            color="warning"
+            className="ion-margin-top"
+            disabled={saving || !editPw}
+            onClick={() => void confirmEdit()}
+          >
+            {saving ? '…' : 'ذخیره تغییرات'}
+          </IonButton>
         </IonContent>
       </IonModal>
 

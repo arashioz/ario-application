@@ -341,6 +341,7 @@ export async function updateShopSettings(data: {
   commissionPercentSelf?: number;
   platformMinOrderKg?: number;
   platformCities?: string;
+  costBasis?: 'weighted' | 'last';
 }) {
   const settings = await getOrCreateSettings();
   if (data.shopName) settings.shopName = data.shopName;
@@ -366,6 +367,7 @@ export async function updateShopSettings(data: {
     settings.commissionPercentSelf = data.commissionPercentSelf;
   if (data.platformMinOrderKg !== undefined) settings.platformMinOrderKg = data.platformMinOrderKg;
   if (data.platformCities !== undefined) settings.platformCities = data.platformCities;
+  if (data.costBasis === 'weighted' || data.costBasis === 'last') settings.costBasis = data.costBasis;
   await settings.save();
   return settings;
 }

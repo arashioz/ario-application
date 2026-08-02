@@ -6,7 +6,9 @@ export interface IProduct extends Document {
   categoryId: Types.ObjectId;
   /** میانگین موزون هزینه به ازای هر کیلو */
   avgCostPerKg: number;
-  /** سازگاری قدیمی — همان avgCostPerKg */
+  /** آخرین قیمت خرید به ازای هر کیلو (بدون میانگین) */
+  lastPurchasePricePerKg: number;
+  /** سازگاری قدیمی — معمولاً همان avgCostPerKg */
   purchasePrice: number;
   /** موجودی به کیلوگرم */
   stockKg: number;
@@ -38,6 +40,7 @@ const ProductSchema = new Schema<IProduct>(
     normalizedName: { type: String, required: true },
     categoryId: { type: Schema.Types.ObjectId, ref: 'Category', required: true },
     avgCostPerKg: { type: Number, required: true, default: 0 },
+    lastPurchasePricePerKg: { type: Number, required: true, default: 0 },
     purchasePrice: { type: Number, required: true, default: 0 },
     stockKg: { type: Number, required: true, default: 0 },
     stock: { type: Number, required: true, default: 0 },

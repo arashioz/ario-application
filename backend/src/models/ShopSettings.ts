@@ -25,6 +25,8 @@ export interface IShopSettings extends Document {
   commissionPercentSelf: number;
   platformMinOrderKg: number;
   platformCities?: string;
+  /** مبنای محاسبه قیمت فروش: میانگین موزون یا آخرین خرید */
+  costBasis: 'weighted' | 'last';
   createdAt: Date;
   updatedAt: Date;
 }
@@ -51,6 +53,7 @@ const ShopSettingsSchema = new Schema<IShopSettings>(
     commissionPercentSelf: { type: Number, default: 5 },
     platformMinOrderKg: { type: Number, default: 500 },
     platformCities: { type: String, default: 'مشهد,نیشابور,سبزوار,تربت حیدریه,قوچان,کاشمر,گناباد' },
+    costBasis: { type: String, enum: ['weighted', 'last'], default: 'last' },
   },
   { timestamps: true }
 );

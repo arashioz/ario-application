@@ -66,6 +66,11 @@ export class WsClient {
   connect() {
     if (this.ws?.readyState === WebSocket.OPEN || this.ws?.readyState === WebSocket.CONNECTING) return;
 
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
     this.ws = new WebSocket(WS_URL);
 
     this.ws.onopen = () => {
@@ -89,16 +94,22 @@ export class WsClient {
     this.ws.onclose = () => {
       this.connected = false;
       this.onStatusChange?.(false);
-      this.reconnectTimer = setTimeout(() => this.connect(), 3000);
+      if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = setTimeout(() => this.connect(), 800);
     };
 
     this.ws.onerror = () => {
-      this.ws?.close();
+      try {
+        this.ws?.close();
+      } catch {
+        /* ignore */
+      }
     };
   }
 
   disconnect() {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
     this.ws?.close();
     this.ws = null;
   }

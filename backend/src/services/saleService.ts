@@ -476,14 +476,8 @@ export async function cancelSale(invoiceId: string) {
   return invoice;
 }
 
-/** حذف کامل فاکتور فروش با رمز — برگشت موجودی، صندوق و بدهی */
-export async function deleteSaleInvoice(invoiceId: string, password?: string) {
-  const { assertDeletePassword } = await import('./expenseService');
-  assertDeletePassword(password);
-
-  const invoice = await SaleInvoice.findById(invoiceId);
-  if (!invoice) throw new Error('فاکتور یافت نشد');
-
+/** برگشت اثر فروش روی موجودی/صندوق/بدهی (بدون حذف سند و بدون دست زدن به هزینه ارسال) */
+async function reverseSaleEffects(invoice: InstanceType<typeof SaleInvoice>) {
   if (invoice.driverPaid) {
     throw new Error('به راننده پرداخت شده — ابتدا آن را برگردانید');
   }
@@ -491,7 +485,7 @@ export async function deleteSaleInvoice(invoiceId: string, password?: string) {
   const debtors = await Debtor.find({ saleInvoiceId: invoice._id });
   for (const d of debtors) {
     if ((d.paidAmount || 0) > 0) {
-      throw new Error('بدهی این فاکتور پرداخت جزئی دارد و قابل حذف نیست');
+      throw new Error('بدهی این فاکتور پرداخت جزئی دارد و قابل ویرایش/حذف نیست');
     }
   }
 
@@ -512,7 +506,6 @@ export async function deleteSaleInvoice(invoiceId: string, password?: string) {
     let cashDelta = 0;
     let cardDelta = 0;
     for (const tx of txs) {
-      // فروش ورود بوده → برگشت یعنی کم کردن
       if (tx.type === 'sale_cash') cashDelta -= tx.amount;
       else if (tx.type === 'sale_card') cardDelta -= tx.amount;
       else if (tx.direction === 'in') cashDelta -= tx.amount;
@@ -529,9 +522,29 @@ export async function deleteSaleInvoice(invoiceId: string, password?: string) {
       }
       await d.deleteOne();
     }
+
+    invoice.stockApplied = false;
   } else {
     await Debtor.deleteMany({ saleInvoiceId: invoice._id });
   }
+
+  try {
+    const { reverseSaleCommission } = await import('./platformService');
+    await reverseSaleCommission(invoice._id.toString());
+  } catch (e) {
+    console.warn('reverse commission failed', e);
+  }
+}
+
+/** حذف کامل فاکتور فروش با رمز — برگشت موجودی، صندوق و بدهی */
+export async function deleteSaleInvoice(invoiceId: string, password?: string) {
+  const { assertDeletePassword } = await import('./expenseService');
+  assertDeletePassword(password);
+
+  const invoice = await SaleInvoice.findById(invoiceId);
+  if (!invoice) throw new Error('فاکتور یافت نشد');
+
+  await reverseSaleEffects(invoice);
 
   if (invoice.shippingExpenseId) {
     const { deleteExpense } = await import('./expenseService');
@@ -542,16 +555,136 @@ export async function deleteSaleInvoice(invoiceId: string, password?: string) {
     }
   }
 
-  try {
-    const { reverseSaleCommission } = await import('./platformService');
-    await reverseSaleCommission(invoice._id.toString());
-  } catch (e) {
-    console.warn('reverse commission failed', e);
-  }
-
   const id = invoice._id.toString();
   await invoice.deleteOne();
   return { ok: true, id };
+}
+
+/** ویرایش فاکتور فروش با رمز — برگشت اثر قبلی و اعمال مقادیر جدید */
+export async function updateSaleInvoice(
+  invoiceId: string,
+  password: string | undefined,
+  data: {
+    customerName?: string;
+    customerPhone?: string;
+    customerAddress?: string;
+    items: SaleItemInput[];
+    paymentMethod: PaymentMethod;
+    payment?: { cash?: number; card?: number; credit?: number };
+    discount?: number;
+    discountMode?: 'invoice' | 'per_kg' | 'product';
+    discountPerKg?: number;
+    notes?: string;
+    date?: Date;
+    dueDate?: Date;
+    priceTier?: PriceTier;
+  }
+) {
+  const { assertDeletePassword } = await import('./expenseService');
+  assertDeletePassword(password);
+
+  const invoice = await SaleInvoice.findById(invoiceId);
+  if (!invoice) throw new Error('فاکتور یافت نشد');
+  if (invoice.status === 'cancelled') throw new Error('فاکتور لغوشده قابل ویرایش نیست');
+  if (!data.items?.length) throw new Error('حداقل یک قلم لازم است');
+
+  const wasApplied = invoice.stockApplied;
+  const marketerId = invoice.marketerId?.toString();
+  const deliveryMode = (invoice as { deliveryMode?: 'company' | 'self' }).deliveryMode || 'company';
+
+  await reverseSaleEffects(invoice);
+
+  const date = data.date ? new Date(data.date) : invoice.date;
+  validateTransactionDate(date);
+  if (data.dueDate) invoice.dueDate = new Date(data.dueDate);
+  const priceTier: PriceTier = data.priceTier || invoice.priceTier || 'retail';
+
+  const checkStock = wasApplied || invoice.status !== 'pending';
+  const { saleItems, totalAmount: rawTotal, totalCost, totalKg } = await buildSaleItems(
+    data.items,
+    priceTier,
+    checkStock
+  );
+
+  const discountMode = data.discountMode || invoice.discountMode || 'invoice';
+  let discountPerKg = Math.max(0, data.discountPerKg ?? invoice.discountPerKg ?? 0);
+  let discount = Math.max(0, data.discount ?? invoice.discount ?? 0);
+
+  if (discountMode === 'per_kg') {
+    if (discountPerKg <= 0 && discount > 0 && totalKg > 0) {
+      discountPerKg = Math.round(discount / totalKg);
+    }
+    discount = Math.round(discountPerKg * totalKg);
+  } else if (discountMode === 'product') {
+    discount = Math.max(0, data.discount ?? 0);
+  }
+
+  let totalAmount = Math.max(0, rawTotal - discount);
+  const totalProfit = totalAmount - totalCost;
+
+  const payment = {
+    cash: data.payment?.cash || 0,
+    card: data.payment?.card || 0,
+    credit: data.payment?.credit || 0,
+  };
+
+  if (data.paymentMethod === 'cash') payment.cash = totalAmount;
+  else if (data.paymentMethod === 'card' || data.paymentMethod === 'card_to_card') payment.card = totalAmount;
+  else if (data.paymentMethod === 'credit') payment.credit = totalAmount;
+  else if (data.paymentMethod === 'mixed') {
+    const sum = payment.cash + payment.card + payment.credit;
+    if (sum === 0) payment.card = totalAmount;
+    else if (Math.abs(sum - totalAmount) > 1) {
+      const diff = totalAmount - sum;
+      payment.credit = Math.max(0, payment.credit + diff);
+      const sum2 = payment.cash + payment.card + payment.credit;
+      if (Math.abs(sum2 - totalAmount) > 2) {
+        throw new Error(
+          `مجموع پرداخت (${sum.toLocaleString('fa-IR')}) با مبلغ فاکتور (${totalAmount.toLocaleString('fa-IR')}) برابر نیست`
+        );
+      }
+    }
+  }
+
+  if (data.customerName !== undefined) invoice.customerName = data.customerName;
+  if (data.customerPhone !== undefined) invoice.customerPhone = data.customerPhone;
+  if (data.customerAddress !== undefined) invoice.customerAddress = data.customerAddress;
+  if (data.notes !== undefined) invoice.notes = data.notes;
+
+  invoice.items = saleItems as never;
+  invoice.totalAmount = totalAmount;
+  invoice.totalCost = totalCost;
+  invoice.totalProfit = totalProfit;
+  invoice.totalKg = totalKg;
+  invoice.paymentMethod = data.paymentMethod;
+  invoice.payment = payment as never;
+  invoice.discount = discount;
+  invoice.discountMode = discountMode;
+  invoice.discountPerKg = discountMode === 'per_kg' ? discountPerKg : 0;
+  invoice.date = date;
+  invoice.priceTier = priceTier;
+  invoice.isPaid = payment.credit === 0;
+  await invoice.save();
+
+  if (wasApplied || invoice.status !== 'pending') {
+    await applyStockAndMoney(invoice);
+    if (marketerId) {
+      try {
+        const { creditSaleCommission } = await import('./platformService');
+        await creditSaleCommission({
+          marketerId,
+          saleId: invoice._id.toString(),
+          invoiceNumber: invoice.invoiceNumber,
+          totalAmount: invoice.totalAmount,
+          deliveryMode,
+        });
+      } catch (e) {
+        console.warn('commission re-credit failed', e);
+      }
+    }
+  }
+
+  return invoice;
 }
 
 export function buildInvoiceHtml(invoice: InstanceType<typeof SaleInvoice>) {

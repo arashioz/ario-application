@@ -14,8 +14,8 @@ import {
   saveProductImage,
   getPublicCatalog,
 } from '../services/productService';
-import { createPurchaseInvoice, listPurchaseInvoices, deletePurchaseInvoice } from '../services/purchaseService';
-import { createSaleInvoice, listSaleInvoices, recordDebtPayment, approveSale, shipSale, cancelSale, getSalePdfHtml, deleteSaleInvoice } from '../services/saleService';
+import { createPurchaseInvoice, listPurchaseInvoices, deletePurchaseInvoice, updatePurchaseInvoice } from '../services/purchaseService';
+import { createSaleInvoice, listSaleInvoices, recordDebtPayment, approveSale, shipSale, cancelSale, getSalePdfHtml, deleteSaleInvoice, updateSaleInvoice } from '../services/saleService';
 import { createExpense, recordCardDeposit, listExpenses, listCardDeposits, deleteExpense, deleteCardDeposit, deleteCompanyPayment, listCashTransactions } from '../services/expenseService';
 import { createCustomer, listCustomers, getCustomer, getCustomerInvoices, updateCustomer, getCustomerSuggestedPricing, quickFindCustomer, getCustomerCrmInsights, listCustomerDirectory, getCustomersMap } from '../services/customerService';
 import {
@@ -262,6 +262,7 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
         commissionPercentSelf: p.commissionPercentSelf as number | undefined,
         platformMinOrderKg: p.platformMinOrderKg as number | undefined,
         platformCities: p.platformCities as string | undefined,
+        costBasis: p.costBasis as 'weighted' | 'last' | undefined,
       });
       notifyDataChange('settings', 'update', result);
       return { type: 'settings.update', payload: result };
@@ -357,7 +358,8 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
         payload: await calculateSalePrice(
           String(p.productId),
           p.percent as number | undefined,
-          (p.priceTier as 'retail' | 'supermarket' | 'wholesale') || 'retail'
+          (p.priceTier as 'retail' | 'supermarket' | 'wholesale') || 'retail',
+          (p.costBasis as 'weighted' | 'last') || 'last'
         ),
       };
     }
@@ -485,6 +487,21 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
       return { type: 'purchase.delete', payload: result };
     }
 
+    case 'purchase.update': {
+      const user = await requireAuth(ws, msg);
+      requireAdmin(user);
+      const result = await updatePurchaseInvoice(String(p.id), p.password as string | undefined, {
+        supplier: p.supplier as string | undefined,
+        items: p.items as never,
+        notes: p.notes as string | undefined,
+        date: p.date ? new Date(String(p.date)) : undefined,
+        paidNow: p.paidNow as boolean | undefined,
+      });
+      notifyDataChange('purchase', 'update', result);
+      notifyDataChange('product', 'update', result);
+      return { type: 'purchase.update', payload: result };
+    }
+
     case 'sale.create': {
       const user = await requireAuth(ws, msg);
       const result = await withIdempotency(msg.clientMutationId, msg.type, user.userId, () =>
@@ -586,6 +603,29 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
       notifyDataChange('sale', 'delete', result);
       notifyDataChange('product', 'update', result);
       return { type: 'sale.delete', payload: result };
+    }
+
+    case 'sale.update': {
+      const user = await requireAuth(ws, msg);
+      requireAdmin(user);
+      const result = await updateSaleInvoice(String(p.id), p.password as string | undefined, {
+        customerName: p.customerName as string | undefined,
+        customerPhone: p.customerPhone as string | undefined,
+        customerAddress: p.customerAddress as string | undefined,
+        items: p.items as never,
+        paymentMethod: p.paymentMethod as never,
+        payment: p.payment as never,
+        discount: p.discount as number | undefined,
+        discountMode: p.discountMode as 'invoice' | 'per_kg' | 'product' | undefined,
+        discountPerKg: p.discountPerKg as number | undefined,
+        notes: p.notes as string | undefined,
+        date: p.date ? new Date(String(p.date)) : undefined,
+        dueDate: p.dueDate ? new Date(String(p.dueDate)) : undefined,
+        priceTier: p.priceTier as 'retail' | 'supermarket' | 'wholesale' | undefined,
+      });
+      notifyDataChange('sale', 'update', result);
+      notifyDataChange('product', 'update', result);
+      return { type: 'sale.update', payload: result };
     }
 
     case 'sale.pdf': {

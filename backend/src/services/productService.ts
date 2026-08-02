@@ -71,6 +71,7 @@ export async function upsertProduct(data: {
       );
       product.avgCostPerKg = newAvg;
       product.purchasePrice = newAvg;
+      product.lastPurchasePricePerKg = Math.round(data.purchasePricePerKg);
     }
     product.stockKg = oldKg + addKg;
     product.stock = product.stockKg;
@@ -86,6 +87,7 @@ export async function upsertProduct(data: {
     normalizedName,
     categoryId: new Types.ObjectId(data.categoryId),
     avgCostPerKg: data.purchasePricePerKg,
+    lastPurchasePricePerKg: data.purchasePricePerKg,
     purchasePrice: data.purchasePricePerKg,
     stockKg: addKg,
     stock: addKg,
@@ -229,10 +231,28 @@ function tierPercent(
   return category.profitRetail ?? category.profitPercent ?? 15;
 }
 
+export type CostBasis = 'weighted' | 'last';
+
+export function resolveProductCost(
+  product: {
+    avgCostPerKg?: number;
+    purchasePrice?: number;
+    lastPurchasePricePerKg?: number;
+  },
+  costBasis: CostBasis = 'last'
+): number {
+  if (costBasis === 'last') {
+    const last = product.lastPurchasePricePerKg || 0;
+    if (last > 0) return last;
+  }
+  return product.avgCostPerKg ?? product.purchasePrice ?? 0;
+}
+
 export async function calculateSalePrice(
   productId: string,
   customPercent?: number,
-  priceTier: PriceTier = 'retail'
+  priceTier: PriceTier = 'retail',
+  costBasis: CostBasis = 'last'
 ) {
   const product = await Product.findById(productId).populate('categoryId');
   if (!product) throw new Error('محصول یافت نشد');
@@ -248,7 +268,7 @@ export async function calculateSalePrice(
     customPercent ??
     tierPercent(category, product.profitPercent, priceTier);
 
-  const cost = product.avgCostPerKg ?? product.purchasePrice ?? 0;
+  const cost = resolveProductCost(product, costBasis);
   const salePricePerKg = Math.round(cost * (1 + percent / 100));
   return {
     salePrice: salePricePerKg,
@@ -256,8 +276,10 @@ export async function calculateSalePrice(
     salePricePerPackage: Math.round(salePricePerKg * (product.kgPerPackage || 5)),
     percent,
     priceTier,
+    costBasis,
     purchasePrice: cost,
-    avgCostPerKg: cost,
+    avgCostPerKg: product.avgCostPerKg ?? product.purchasePrice ?? 0,
+    lastPurchasePricePerKg: product.lastPurchasePricePerKg || 0,
     kgPerPackage: product.kgPerPackage || 5,
   };
 }

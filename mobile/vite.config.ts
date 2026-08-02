@@ -13,14 +13,16 @@ export default defineConfig({
     legacy(),
     basicSsl(),
     VitePWA({
+      // روی HTTPS با گواهی نامعتبر (IP سرور) ثبت SW خطا می‌دهد و گاهی اپ را می‌شکند
+      injectRegister: null,
       registerType: 'autoUpdate',
       includeAssets: ['favicon.png', 'assets/icon/*.png'],
       manifest: {
         name: 'آریو | مدیریت مغازه',
         short_name: 'آریو',
         description: 'سیستم مدیریت فروشگاه عمده قند و شکر',
-        theme_color: '#0d9488',
-        background_color: '#f0fdfa',
+        theme_color: '#1e3a5f',
+        background_color: '#0f2744',
         display: 'standalone',
         lang: 'fa',
         dir: 'rtl',

@@ -44,8 +44,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     };
     wsClient.connect();
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && !wsClient.isOnline()) {
+        wsClient.connect();
+      }
+    };
+    const onOnline = () => wsClient.connect();
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('online', onOnline);
+
     const t = setInterval(() => setQueueLen(wsClient.queueLength()), 2000);
-    return () => clearInterval(t);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('online', onOnline);
+    };
   }, []);
 
   const login = useCallback(async (username: string, password: string) => {
