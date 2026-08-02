@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   IonPage,
   IonHeader,
@@ -15,11 +15,7 @@ import {
   IonIcon,
   IonToggle,
   IonButtons,
-  IonBadge,
   IonModal,
-  IonFooter,
-  IonFab,
-  IonFabButton,
   IonRefresher,
   IonRefresherContent,
   useIonViewWillEnter,
@@ -30,10 +26,10 @@ import {
   trashOutline,
   checkmarkCircleOutline,
   diamondOutline,
-  cartOutline,
   removeOutline,
   timeOutline,
   sparklesOutline,
+  mapOutline,
 } from 'ionicons/icons';
 import { wsClient, newMutationId } from '../api/ws';
 import {
@@ -107,6 +103,7 @@ interface PrevInv {
 }
 
 interface LineItem {
+  key: string;
   productId: string;
   productName: string;
   unit: 'kg' | 'package';
@@ -142,6 +139,10 @@ function productCost(p: Product, basis: CostBasis): number {
 }
 
 const COST_BASIS_KEY = 'ario_cost_basis';
+
+function newLineKey() {
+  return `l-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
 
 const Sale: React.FC = () => {
   const { isAdmin, user } = useAuth();
@@ -229,11 +230,8 @@ const Sale: React.FC = () => {
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState({ open: false, msg: '', color: 'success' });
-  const [cartOpen, setCartOpen] = useState(false);
+  const [mapOpen, setMapOpen] = useState(false);
   const [histOpen, setHistOpen] = useState(false);
-  const [flyKey, setFlyKey] = useState(0);
-  const [flying, setFlying] = useState<{ name: string; x: number; y: number } | null>(null);
-  const cartFabRef = useRef<HTMLIonFabElement | null>(null);
   const needsCustomer = priceTier !== 'retail';
 
   const loadProducts = useCallback(async () => {
@@ -423,33 +421,10 @@ const Sale: React.FC = () => {
 
   const filtered = products.filter((p) => !search || p.name.includes(search));
 
-  const cartQty = (productId: string) => {
-    const line = lines.find((l) => l.productId === productId);
-    return line ? parseFloat(line.qtyInput) || 0 : 0;
-  };
-
-  const flyToCart = (el: HTMLElement | null, name: string) => {
-    if (!el) return;
-    const from = el.getBoundingClientRect();
-    const fab = document.querySelector('.sale-cart-fab') as HTMLElement | null;
-    const to = fab?.getBoundingClientRect();
-    const targetX = to ? to.left + to.width / 2 : 48;
-    const targetY = to ? to.top + to.height / 2 : window.innerHeight - 80;
-    setFlying({
-      name,
-      x: from.left + from.width / 2,
-      y: from.top + from.height / 2,
-    });
-    setFlyKey((k) => k + 1);
-    requestAnimationFrame(() => {
-      const ghost = document.querySelector('.fly-ghost.active') as HTMLElement | null;
-      if (!ghost) return;
-      ghost.style.setProperty('--fly-x', `${targetX - (from.left + from.width / 2)}px`);
-      ghost.style.setProperty('--fly-y', `${targetY - (from.top + from.height / 2)}px`);
-      ghost.classList.add('fly');
-    });
-    window.setTimeout(() => setFlying(null), 520);
-  };
+  const lineQty = (productId: string) =>
+    lines
+      .filter((l) => l.productId === productId)
+      .reduce((sum, l) => sum + (parseFloat(l.qtyInput) || 0), 0);
 
   const totals = useMemo(() => {
     let kg = 0;
@@ -653,6 +628,7 @@ const Sale: React.FC = () => {
       const unit = sl.unit || 'package';
       const price = unit === 'package' ? suggested * (p.kgPerPackage || 5) : suggested;
       next.push({
+        key: newLineKey(),
         productId: p._id,
         productName: p.name,
         unit,
@@ -672,13 +648,12 @@ const Sale: React.FC = () => {
       return;
     }
     setLines(next);
-    setCartOpen(true);
     setToast({
       open: true,
       msg:
         missing.length > 0
           ? `${sug.title} · بعضی اقلام نبود: ${missing.join('، ')}`
-          : `${sug.title} به سبد اضافه شد`,
+          : `${sug.title} به اقلام اضافه شد`,
       color: missing.length ? 'warning' : 'success',
     });
   };
@@ -776,6 +751,7 @@ const Sale: React.FC = () => {
     if (inv.items?.length) {
       setLines(
         inv.items.map((i) => ({
+          key: newLineKey(),
           productId: String(i.productId),
           productName: i.productName,
           unit: i.unit || 'kg',
@@ -786,7 +762,6 @@ const Sale: React.FC = () => {
           discount: '',
         }))
       );
-      setCartOpen(true);
       setToast({ open: true, msg: `اقلام فاکتور ${inv.invoiceNumber} بارگذاری شد`, color: 'success' });
     } else {
       // fetch full invoice via suggest lastInvoice or sale list
@@ -808,35 +783,24 @@ const Sale: React.FC = () => {
     setHistOpen(false);
   };
 
-  const addProduct = (p: Product, fromEl?: HTMLElement | null) => {
+  const addProduct = (p: Product) => {
     const percent = tierPercent(p, priceTier);
     const cost = productCost(p, costBasis);
     const suggested = Math.round(cost * (1 + percent / 100));
-    if (fromEl) flyToCart(fromEl, p.name);
-    setLines((prev) => {
-      const exists = prev.find((l) => l.productId === p._id);
-      if (exists) {
-        return prev.map((l) =>
-          l.productId === p._id
-            ? { ...l, qtyInput: String((parseFloat(l.qtyInput) || 0) + 1) }
-            : l
-        );
-      }
-      return [
-        ...prev,
-        {
-          productId: p._id,
-          productName: p.name,
-          unit: 'package',
-          qtyInput: '1',
-          unitPrice: formatMoneyInput(String(suggested * (p.kgPerPackage || 5))),
-          kgPerPackage: p.kgPerPackage || 5,
-          suggestedPerKg: suggested,
-          discount: '',
-        },
-      ];
-    });
-    window.setTimeout(() => setCartOpen(true), fromEl ? 380 : 0);
+    setLines((prev) => [
+      ...prev,
+      {
+        key: newLineKey(),
+        productId: p._id,
+        productName: p.name,
+        unit: 'package',
+        qtyInput: '1',
+        unitPrice: formatMoneyInput(String(suggested * (p.kgPerPackage || 5))),
+        kgPerPackage: p.kgPerPackage || 5,
+        suggestedPerKg: suggested,
+        discount: '',
+      },
+    ]);
   };
 
   useEffect(() => {
@@ -876,8 +840,7 @@ const Sale: React.FC = () => {
 
   const submit = async () => {
     if (!lines.length) {
-      setToast({ open: true, msg: 'سبد خالی است — اول محصول اضافه کنید', color: 'danger' });
-      setCartOpen(true);
+      setToast({ open: true, msg: 'اقلامی نیست — اول محصول اضافه کنید', color: 'danger' });
       return;
     }
     setLoading(true);
@@ -958,8 +921,28 @@ const Sale: React.FC = () => {
       setPayCard('');
       setPayCardToCard('');
       setPayCredit('');
-      setCartOpen(false);
       setPaymentMethod('card');
+      setCustomerId('');
+      setCustomerName('');
+      setCustomerPhone('');
+      setCustomerAddress('');
+      setCustomerLat(null);
+      setCustomerLng(null);
+      setCustSearch('');
+      setCustomers([]);
+      setPrevInvoices([]);
+      setSuggestHint('');
+      setSuggestedDiscount(0);
+      setOffers([]);
+      setCampaignOffers([]);
+      setSuggestedInvoices([]);
+      setPowerLabel('');
+      setDueDate('');
+      setDate(todayIso());
+      setDeliveryMode('company');
+      setPriceTier('retail');
+      setMapOpen(false);
+      setHistOpen(false);
     } catch (e) {
       setToast({
         open: true,
@@ -1163,24 +1146,29 @@ const Sale: React.FC = () => {
                     }}
                   />
                 </IonItem>
-                <IonItem lines="none">
-                  <IonLabel position="stacked">آدرس</IonLabel>
-                  <IonInput
-                    value={customerAddress}
-                    onIonInput={(e) => setCustomerAddress(e.detail.value || '')}
-                    placeholder="آدرس ارسال"
-                  />
-                </IonItem>
-                <LocationPicker
-                  lat={customerLat}
-                  lng={customerLng}
-                  address={customerAddress}
-                  onChange={({ lat, lng, address }) => {
-                    setCustomerLat(lat);
-                    setCustomerLng(lng);
-                    if (address) setCustomerAddress(address);
-                  }}
-                />
+                <div className="sale-address-row">
+                  <IonItem lines="none" className="sale-address-input">
+                    <IonLabel position="stacked">آدرس</IonLabel>
+                    <IonInput
+                      value={customerAddress}
+                      onIonInput={(e) => setCustomerAddress(e.detail.value || '')}
+                      placeholder="آدرس ارسال"
+                    />
+                  </IonItem>
+                  <IonButton
+                    className="sale-map-btn"
+                    fill="outline"
+                    onClick={() => setMapOpen(true)}
+                  >
+                    <IonIcon slot="start" icon={mapOutline} />
+                    نقشه
+                  </IonButton>
+                </div>
+                {(customerLat != null && customerLng != null) && (
+                  <p className="hint" style={{ marginTop: 4 }}>
+                    موقعیت انتخاب شده · {customerLat.toFixed(5)}, {customerLng.toFixed(5)}
+                  </p>
+                )}
               </details>
             )}
           </div>
@@ -1217,7 +1205,7 @@ const Sale: React.FC = () => {
             )}
             {filtered.map((p) => {
               const stock = p.stockKg ?? p.stock ?? 0;
-              const inCart = cartQty(p._id);
+              const inLines = lineQty(p._id);
               const percent = tierPercent(p, priceTier);
               const cost = productCost(p, costBasis);
               const suggested = Math.round(cost * (1 + percent / 100));
@@ -1225,12 +1213,12 @@ const Sale: React.FC = () => {
                 <button
                   type="button"
                   key={p._id}
-                  className={`product-card product-card-dense ${inCart ? 'in-cart' : ''} ${stock <= 0 ? 'out' : ''}`}
-                  onClick={(e) => addProduct(p, e.currentTarget)}
+                  className={`product-card product-card-dense ${inLines ? 'in-cart' : ''} ${stock <= 0 ? 'out' : ''}`}
+                  onClick={() => addProduct(p)}
                 >
                   <div className="pc-top">
                     <span className="pc-badge">{p.kgPerPackage || 5}kg</span>
-                    {inCart > 0 && <span className="pc-qty">×{inCart}</span>}
+                    {inLines > 0 && <span className="pc-qty">×{inLines}</span>}
                   </div>
                   <div className="pc-name">{p.name}</div>
                   <div className="pc-meta">{formatKg(stock)}</div>
@@ -1240,18 +1228,127 @@ const Sale: React.FC = () => {
             })}
           </div>
 
-          {lines.length > 0 && (
-            <div className="ios-glass-card cart-mini sale-navy-card">
-              <div className="ios-row">
-                <strong>
-                  سبد · {lines.length} · {formatToman(totals.net)}
-                </strong>
-                <IonButton size="small" fill="outline" onClick={() => setCartOpen(true)}>
-                  ویرایش
-                </IonButton>
-              </div>
+          <div className="ios-glass-card sale-navy-card">
+            <div className="ios-row" style={{ marginBottom: 8 }}>
+              <strong>اقلام فاکتور ({lines.length})</strong>
+              <span className="ios-caption">{formatToman(totals.net)}</span>
             </div>
-          )}
+            {lines.length === 0 && (
+              <p className="hint">روی محصول بزنید تا قلم اضافه شود — هر قلم قیمت جدا دارد</p>
+            )}
+            {lines.map((l, idx) => {
+              const qty = parseFloat(l.qtyInput) || 0;
+              const price = parseAmount(l.unitPrice) || 0;
+              const { qtyKg, qtyPackages } = resolveQty(l.unit, qty, l.kgPerPackage);
+              const { perKg } = resolvePrices(l.unit, price, l.kgPerPackage);
+              return (
+                <div key={l.key} className="cart-item-card">
+                  <div className="ios-row">
+                    <strong>
+                      {idx + 1}. {l.productName}
+                    </strong>
+                    <IonButton
+                      fill="clear"
+                      color="danger"
+                      size="small"
+                      onClick={() => setLines(lines.filter((_, i) => i !== idx))}
+                    >
+                      <IonIcon icon={trashOutline} />
+                    </IonButton>
+                  </div>
+                  <div className="chip-row">
+                    <IonChip
+                      className={l.unit === 'kg' ? 'ios-chip-active' : 'ios-chip'}
+                      onClick={() =>
+                        setLines(
+                          lines.map((x, i) =>
+                            i === idx
+                              ? {
+                                  ...x,
+                                  unit: 'kg',
+                                  unitPrice: formatMoneyInput(String(x.suggestedPerKg)),
+                                }
+                              : x
+                          )
+                        )
+                      }
+                    >
+                      کیلو
+                    </IonChip>
+                    <IonChip
+                      className={l.unit === 'package' ? 'ios-chip-active' : 'ios-chip'}
+                      onClick={() =>
+                        setLines(
+                          lines.map((x, i) =>
+                            i === idx
+                              ? {
+                                  ...x,
+                                  unit: 'package',
+                                  unitPrice: formatMoneyInput(
+                                    String(Math.round(x.suggestedPerKg * (x.kgPerPackage || 5)))
+                                  ),
+                                }
+                              : x
+                          )
+                        )
+                      }
+                    >
+                      بسته
+                    </IonChip>
+                  </div>
+                  <div className="qty-stepper">
+                    <IonButton fill="outline" size="small" onClick={() => bumpQty(idx, -1)}>
+                      <IonIcon icon={removeOutline} />
+                    </IonButton>
+                    <IonInput
+                      type="number"
+                      className="qty-input"
+                      value={l.qtyInput}
+                      onIonInput={(e) =>
+                        setLines(
+                          lines.map((x, i) =>
+                            i === idx ? { ...x, qtyInput: e.detail.value || '' } : x
+                          )
+                        )
+                      }
+                    />
+                    <IonButton fill="outline" size="small" onClick={() => bumpQty(idx, 1)}>
+                      <IonIcon icon={addOutline} />
+                    </IonButton>
+                  </div>
+                  <IonItem lines="none">
+                    <IonLabel position="stacked">فی تومان (قابل تغییر)</IonLabel>
+                    <IonInput
+                      inputmode="numeric"
+                      value={l.unitPrice}
+                      onIonInput={(e) =>
+                        setLines(
+                          lines.map((x, i) =>
+                            i === idx
+                              ? { ...x, unitPrice: formatMoneyInput(e.detail.value || '') }
+                              : x
+                          )
+                        )
+                      }
+                    />
+                  </IonItem>
+                  {discountMode === 'product' && (
+                    <MoneyInput
+                      label="تخفیف این قلم (تومان)"
+                      value={l.discount}
+                      onChange={(v) =>
+                        setLines(lines.map((x, i) => (i === idx ? { ...x, discount: v } : x)))
+                      }
+                    />
+                  )}
+                  <p className="hint convert-hint">
+                    {formatKg(qtyKg)} · {Math.round(qtyPackages).toLocaleString('fa-IR')} بسته ·{' '}
+                    {formatToman(Math.max(0, perKg * qtyKg - (parseAmount(l.discount) || 0)))}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
 
           <details className="sale-details ios-glass-card sale-navy-card" open>
             <summary>تخفیف و پرداخت · {formatToman(totals.net)}</summary>
@@ -1280,7 +1377,7 @@ const Sale: React.FC = () => {
                 onChange={(v) => setDiscountPerKg(v)}
               />
             ) : discountMode === 'product' ? (
-              <p className="hint">تخفیف هر قلم داخل سبد</p>
+              <p className="hint">تخفیف هر قلم را در لیست اقلام بالا تنظیم کنید</p>
             ) : (
               <MoneyInput label="تخفیف کل" value={discount} onChange={(v) => setDiscount(v)} />
             )}
@@ -1395,185 +1492,34 @@ const Sale: React.FC = () => {
           )}
         </div>
 
-        <IonFab vertical="bottom" horizontal="start" slot="fixed" className="sale-cart-fab" ref={cartFabRef}>
-          <IonFabButton onClick={() => setCartOpen(true)} color="primary">
-            <IonIcon icon={cartOutline} />
-            {totals.count > 0 && <IonBadge className="cart-fab-badge">{totals.count}</IonBadge>}
-          </IonFabButton>
-        </IonFab>
-
-        {flying && (
-          <div
-            key={flyKey}
-            className="fly-ghost active"
-            style={{ left: flying.x, top: flying.y }}
-          >
-            {flying.name}
-          </div>
-        )}
-
-        {/* سبد خرید */}
-        <IonModal isOpen={cartOpen} onDidDismiss={() => setCartOpen(false)} initialBreakpoint={0.85} breakpoints={[0, 0.5, 0.85, 1]}>
+        {/* نقشه آدرس — فقط با دکمه باز می‌شود */}
+        <IonModal isOpen={mapOpen} onDidDismiss={() => setMapOpen(false)}>
           <IonHeader>
             <IonToolbar>
-              <IonTitle>سبد فاکتور</IonTitle>
+              <IonTitle>انتخاب روی نقشه</IonTitle>
               <IonButtons slot="end">
-                <IonButton onClick={() => setCartOpen(false)}>بستن</IonButton>
+                <IonButton onClick={() => setMapOpen(false)}>تأیید</IonButton>
               </IonButtons>
             </IonToolbar>
           </IonHeader>
           <IonContent className="ion-padding">
-            {lines.length === 0 && <div className="empty-state">سبد خالی است</div>}
-            {lines.map((l, idx) => {
-              const qty = parseFloat(l.qtyInput) || 0;
-              const price = parseAmount(l.unitPrice) || 0;
-              const { qtyKg, qtyPackages } = resolveQty(l.unit, qty, l.kgPerPackage);
-              const { perKg } = resolvePrices(l.unit, price, l.kgPerPackage);
-              return (
-                <div key={l.productId} className="cart-item-card">
-                  <div className="ios-row">
-                    <strong>{l.productName}</strong>
-                    <IonButton fill="clear" color="danger" size="small" onClick={() => setLines(lines.filter((_, i) => i !== idx))}>
-                      <IonIcon icon={trashOutline} />
-                    </IonButton>
-                  </div>
-                  <div className="chip-row">
-                    <IonChip
-                      className={l.unit === 'kg' ? 'ios-chip-active' : 'ios-chip'}
-                      onClick={() =>
-                        setLines(
-                          lines.map((x, i) =>
-                            i === idx
-                              ? {
-                                  ...x,
-                                  unit: 'kg',
-                                  unitPrice: formatMoneyInput(String(x.suggestedPerKg)),
-                                }
-                              : x
-                          )
-                        )
-                      }
-                    >
-                      کیلو
-                    </IonChip>
-                    <IonChip
-                      className={l.unit === 'package' ? 'ios-chip-active' : 'ios-chip'}
-                      onClick={() =>
-                        setLines(
-                          lines.map((x, i) =>
-                            i === idx
-                              ? {
-                                  ...x,
-                                  unit: 'package',
-                                  unitPrice: formatMoneyInput(
-                                    String(Math.round(x.suggestedPerKg * (x.kgPerPackage || 5)))
-                                  ),
-                                }
-                              : x
-                          )
-                        )
-                      }
-                    >
-                      بسته
-                    </IonChip>
-                  </div>
-                  <div className="qty-stepper">
-                    <IonButton fill="outline" size="small" onClick={() => bumpQty(idx, -1)}>
-                      <IonIcon icon={removeOutline} />
-                    </IonButton>
-                    <IonInput
-                      type="number"
-                      className="qty-input"
-                      value={l.qtyInput}
-                      onIonInput={(e) =>
-                        setLines(lines.map((x, i) => (i === idx ? { ...x, qtyInput: e.detail.value || '' } : x)))
-                      }
-                    />
-                    <IonButton fill="outline" size="small" onClick={() => bumpQty(idx, 1)}>
-                      <IonIcon icon={addOutline} />
-                    </IonButton>
-                  </div>
-                  <IonItem lines="none">
-                    <IonLabel position="stacked">فی تومان</IonLabel>
-                    <IonInput
-                      inputmode="numeric"
-                      value={l.unitPrice}
-                      onIonInput={(e) =>
-                        setLines(
-                          lines.map((x, i) =>
-                            i === idx ? { ...x, unitPrice: formatMoneyInput(e.detail.value || '') } : x
-                          )
-                        )
-                      }
-                    />
-                  </IonItem>
-                  <MoneyInput
-                    label="تخفیف این محصول (تومان)"
-                    value={l.discount}
-                    onChange={(v) =>
-                      setLines(lines.map((x, i) => (i === idx ? { ...x, discount: v } : x)))
-                    }
-                  />
-                  <p className="hint convert-hint">
-                    {formatKg(qtyKg)} · {Math.round(qtyPackages).toLocaleString('fa-IR')} بسته ·{' '}
-                    {formatToman(Math.max(0, perKg * qtyKg - (parseAmount(l.discount) || 0)))}
-                    {(parseAmount(l.discount) || 0) > 0
-                      ? ` (بعد از تخفیف ${formatToman(parseAmount(l.discount) || 0)})`
-                      : ''}
-                  </p>
-                </div>
-              );
-            })}
-
-            {(campaignOffers.length > 0 || suggestedInvoices.length > 0) && (
-              <div className="ios-glass-card" style={{ marginTop: 12 }}>
-                <div className="ios-section-title" style={{ marginTop: 0 }}>
-                  جشنواره
-                </div>
-                {suggestedInvoices.map((s) => (
-                  <IonButton
-                    key={`cart-sug-${s.campaignId}`}
-                    expand="block"
-                    size="small"
-                    fill="outline"
-                    className="ion-margin-bottom"
-                    onClick={() => applySuggestedInvoice(s)}
-                  >
-                    {s.title}
-                    {s.note ? ` — ${s.note}` : ''}
-                  </IonButton>
-                ))}
-                <div className="offer-row">
-                  {campaignOffers.map((o, i) => (
-                    <IonButton
-                      key={`cart-${o.campaignId}-${i}`}
-                      size="small"
-                      className={o.matched ? 'offer-btn special' : 'offer-btn'}
-                      fill={o.matched ? 'solid' : 'outline'}
-                      onClick={() => applyCampaignOffer(o)}
-                    >
-                      {o.label}
-                      <br />
-                      <span className="offer-amt">
-                        {o.matched ? formatToman(o.discountAmount) : o.hint || 'شرایط ناقص'}
-                      </span>
-                    </IonButton>
-                  ))}
-                </div>
-              </div>
+            <LocationPicker
+              lat={customerLat}
+              lng={customerLng}
+              address={customerAddress}
+              height={360}
+              onChange={({ lat, lng, address }) => {
+                setCustomerLat(lat);
+                setCustomerLng(lng);
+                if (address) setCustomerAddress(address);
+              }}
+            />
+            {customerAddress && (
+              <p className="hint convert-hint" style={{ marginTop: 10 }}>
+                {customerAddress}
+              </p>
             )}
           </IonContent>
-          <IonFooter>
-            <IonToolbar>
-              <div className="cart-footer">
-                <div>
-                  <div className="ios-caption">{totals.count} قلم · {formatKg(totals.kg)}</div>
-                  <strong>{formatToman(totals.net)}</strong>
-                </div>
-                <IonButton onClick={() => setCartOpen(false)}>ادامه</IonButton>
-              </div>
-            </IonToolbar>
-          </IonFooter>
         </IonModal>
 
         {/* تاریخچه فاکتور مشتری */}

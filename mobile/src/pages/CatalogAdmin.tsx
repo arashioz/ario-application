@@ -21,8 +21,11 @@ import {
 import { copyOutline, openOutline, imageOutline } from 'ionicons/icons';
 import { IonIcon } from '@ionic/react';
 import { wsClient } from '../api/ws';
+import { resolveMediaUrl } from '../api/client';
 import { formatToman, formatMoneyInput, parseAmount } from '../utils/format';
 import { useAuth } from '../auth/AuthContext';
+
+type PriceTier = 'retail' | 'supermarket' | 'wholesale';
 
 interface Product {
   _id: string;
@@ -35,7 +38,37 @@ interface Product {
   catalogPricePerKg?: number;
   catalogNote?: string;
   avgCostPerKg?: number;
-  categoryId?: { profitRetail?: number; profitPercent?: number };
+  lastPurchasePricePerKg?: number;
+  purchasePrice?: number;
+  profitPercent?: number;
+  categoryId?: {
+    profitRetail?: number;
+    profitSupermarket?: number;
+    profitWholesale?: number;
+    profitPercent?: number;
+  };
+}
+
+function tierPercent(p: Product, tier: PriceTier): number {
+  const c = p.categoryId;
+  if (tier === 'supermarket') return c?.profitSupermarket ?? 10;
+  if (tier === 'wholesale') return c?.profitWholesale ?? 6;
+  return p.profitPercent ?? c?.profitRetail ?? c?.profitPercent ?? 12;
+}
+
+function productCost(p: Product): number {
+  const last = p.lastPurchasePricePerKg || 0;
+  if (last > 0) return last;
+  return p.avgCostPerKg ?? p.purchasePrice ?? 0;
+}
+
+function tierPricePerKg(p: Product, tier: PriceTier): number {
+  if (tier === 'retail' && p.catalogPricePerKg && p.catalogPricePerKg > 0) {
+    return Math.round(p.catalogPricePerKg);
+  }
+  const cost = productCost(p);
+  const percent = tierPercent(p, tier);
+  return Math.round(cost * (1 + percent / 100));
 }
 
 const CatalogAdmin: React.FC = () => {
@@ -47,7 +80,7 @@ const CatalogAdmin: React.FC = () => {
   const [catalogNote, setCatalogNote] = useState('');
   const [brandName, setBrandName] = useState('');
   const [brandTagline, setBrandTagline] = useState('');
-  const [brandPrimaryColor, setBrandPrimaryColor] = useState('#0d9488');
+  const [brandPrimaryColor, setBrandPrimaryColor] = useState('#1e3a5f');
   const [brandLogoUrl, setBrandLogoUrl] = useState('');
   const [supermarketMinKg, setSupermarketMinKg] = useState('500');
   const [wholesaleMinKg, setWholesaleMinKg] = useState('2000');
@@ -82,7 +115,7 @@ const CatalogAdmin: React.FC = () => {
     setCatalogNote(settings.catalogNote || '');
     setBrandName(settings.brandName || settings.shopName || '');
     setBrandTagline(settings.brandTagline || '');
-    setBrandPrimaryColor(settings.brandPrimaryColor || '#0d9488');
+    setBrandPrimaryColor(settings.brandPrimaryColor || '#1e3a5f');
     setBrandLogoUrl(settings.brandLogoUrl || '');
     setSupermarketMinKg(String(settings.catalogSupermarketMinKg ?? 500));
     setWholesaleMinKg(String(settings.catalogWholesaleMinKg ?? 2000));
@@ -92,12 +125,7 @@ const CatalogAdmin: React.FC = () => {
     void load().catch(console.warn);
   });
 
-  const suggestedPrice = (p: Product) => {
-    if (p.catalogPricePerKg && p.catalogPricePerKg > 0) return p.catalogPricePerKg;
-    const cost = p.avgCostPerKg || 0;
-    const pct = p.categoryId?.profitRetail ?? p.categoryId?.profitPercent ?? 12;
-    return Math.round(cost * (1 + pct / 100));
-  };
+  const suggestedPrice = (p: Product) => tierPricePerKg(p, 'retail');
 
   const saveSettings = async () => {
     if (!isAdmin) {
@@ -152,6 +180,24 @@ const CatalogAdmin: React.FC = () => {
     reader.readAsDataURL(file);
   };
 
+  const renderTierRow = (p: Product, tier: PriceTier, label: string) => {
+    const kgPer = p.kgPerPackage || 5;
+    const perKg = tierPricePerKg(p, tier);
+    const perPack = Math.round(perKg * kgPer);
+    return (
+      <div className={`prod-tier-row ${tier}`} key={tier}>
+        <span className="prod-tier-label">{label}</span>
+        <span className="prod-tier-prices">
+          <strong>{formatToman(perKg)}</strong>
+          <small>/کیلو</small>
+          <span className="prod-tier-sep">·</span>
+          <strong>{formatToman(perPack)}</strong>
+          <small>/بسته</small>
+        </span>
+      </div>
+    );
+  };
+
   return (
     <IonPage>
       <IonHeader translucent className="ios-header">
@@ -159,7 +205,7 @@ const CatalogAdmin: React.FC = () => {
           <IonButtons slot="start">
             <IonBackButton defaultHref="/more" text="بازگشت" />
           </IonButtons>
-          <IonTitle>مدیریت کاتالوگ</IonTitle>
+          <IonTitle>مدیریت محصولات</IonTitle>
         </IonToolbar>
       </IonHeader>
       <IonContent fullscreen className="page-content ios-content">
@@ -197,7 +243,7 @@ const CatalogAdmin: React.FC = () => {
             </div>
             {brandLogoUrl && (
               <img
-                src={brandLogoUrl}
+                src={resolveMediaUrl(brandLogoUrl)}
                 alt="لوگو"
                 style={{ width: 64, height: 64, borderRadius: 14, objectFit: 'cover' }}
               />
@@ -242,7 +288,7 @@ const CatalogAdmin: React.FC = () => {
               <IonInput
                 value={brandPrimaryColor}
                 disabled={!isAdmin}
-                onIonInput={(e) => setBrandPrimaryColor(e.detail.value || '#0d9488')}
+                onIonInput={(e) => setBrandPrimaryColor(e.detail.value || '#1e3a5f')}
               />
             </IonItem>
           </div>
@@ -310,64 +356,77 @@ const CatalogAdmin: React.FC = () => {
 
           {isAdmin && (
             <>
-              <div className="ios-section-title">محصولات کاتالوگ</div>
-              <p className="hint">محصول را روشن کن، عکس بگذار، حداقل خرید و قیمت نمایشی</p>
+              <div className="ios-section-title">محصولات</div>
+              <p className="hint">عکس مربعی، قیمت تکی / سوپرمارکت / عمده · هر کیلو و بسته</p>
               {products.map((p) => (
-                <div key={p._id} className="ios-glass-card">
-                  <div className="ios-row">
-                    <strong>{p.name}</strong>
-                    <IonToggle
-                      checked={!!p.catalogVisible}
-                      onIonChange={(e) => {
-                        const checked = e.detail.checked;
-                        void wsClient
-                          .request('product.update', { id: p._id, catalogVisible: checked })
-                          .then(load)
-                          .catch((err) =>
-                            setToast({
-                              open: true,
-                              msg: err instanceof Error ? err.message : 'خطا',
-                              color: 'danger',
-                            })
-                          );
-                      }}
-                    />
+                <div key={p._id} className="ios-glass-card prod-admin-card">
+                  <div className="prod-admin-top">
+                    {/* در RTL اولین فرزند سمت راست می‌آید — عکس مربعی */}
+                    <div className="prod-admin-thumb-wrap">
+                      {p.imageUrl ? (
+                        <img
+                          src={resolveMediaUrl(p.imageUrl)}
+                          alt={p.name}
+                          className="prod-admin-thumb"
+                        />
+                      ) : (
+                        <div className="prod-admin-thumb prod-admin-thumb-ph">
+                          {p.name.slice(0, 1)}
+                        </div>
+                      )}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        style={{ display: 'none' }}
+                        ref={(el) => {
+                          fileRefs.current[p._id] = el;
+                        }}
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          if (f) uploadImage(p._id, f);
+                          e.target.value = '';
+                        }}
+                      />
+                      <IonButton
+                        size="small"
+                        fill="outline"
+                        className="prod-admin-photo-btn"
+                        onClick={() => fileRefs.current[p._id]?.click()}
+                      >
+                        <IonIcon slot="start" icon={imageOutline} />
+                        عکس
+                      </IonButton>
+                    </div>
+                    <div className="prod-admin-main">
+                      <div className="ios-row">
+                        <strong>{p.name}</strong>
+                        <IonToggle
+                          checked={!!p.catalogVisible}
+                          onIonChange={(e) => {
+                            const checked = e.detail.checked;
+                            void wsClient
+                              .request('product.update', { id: p._id, catalogVisible: checked })
+                              .then(load)
+                              .catch((err) =>
+                                setToast({
+                                  open: true,
+                                  msg: err instanceof Error ? err.message : 'خطا',
+                                  color: 'danger',
+                                })
+                              );
+                          }}
+                        />
+                      </div>
+                      <div className="ios-caption">
+                        موجودی {Math.round(p.stockKg || 0)} کیلو · بسته {p.kgPerPackage || 5}kg
+                      </div>
+                      <div className="prod-tier-list">
+                        {renderTierRow(p, 'retail', 'تکی')}
+                        {renderTierRow(p, 'supermarket', 'سوپرمارکت')}
+                        {renderTierRow(p, 'wholesale', 'عمده')}
+                      </div>
+                    </div>
                   </div>
-                  <div className="ios-caption">
-                    موجودی {Math.round(p.stockKg || 0)} کیلو · بسته {p.kgPerPackage || 5}kg
-                  </div>
-                  {p.imageUrl ? (
-                    <img
-                      src={p.imageUrl}
-                      alt={p.name}
-                      style={{
-                        width: '100%',
-                        maxHeight: 160,
-                        objectFit: 'cover',
-                        borderRadius: 12,
-                        marginTop: 8,
-                      }}
-                    />
-                  ) : (
-                    <p className="hint">بدون عکس</p>
-                  )}
-                  <input
-                    type="file"
-                    accept="image/*"
-                    style={{ display: 'none' }}
-                    ref={(el) => {
-                      fileRefs.current[p._id] = el;
-                    }}
-                    onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      if (f) uploadImage(p._id, f);
-                      e.target.value = '';
-                    }}
-                  />
-                  <IonButton size="small" fill="outline" onClick={() => fileRefs.current[p._id]?.click()}>
-                    <IonIcon slot="start" icon={imageOutline} />
-                    انتخاب عکس
-                  </IonButton>
                   <IonItem lines="none">
                     <IonLabel position="stacked">حداقل خرید (بسته)</IonLabel>
                     <IonInput
@@ -384,7 +443,7 @@ const CatalogAdmin: React.FC = () => {
                     />
                   </IonItem>
                   <IonItem lines="none">
-                    <IonLabel position="stacked">قیمت نمایشی هر کیلو</IonLabel>
+                    <IonLabel position="stacked">قیمت نمایشی هر کیلو (تکی)</IonLabel>
                     <IonInput
                       inputmode="numeric"
                       value={
@@ -405,9 +464,7 @@ const CatalogAdmin: React.FC = () => {
                       }}
                     />
                   </IonItem>
-                  <p className="hint">
-                    پیشنهادی: {formatToman(suggestedPrice(p))}/کیلو
-                  </p>
+                  <p className="hint">پیشنهادی تکی: {formatToman(suggestedPrice(p))}/کیلو</p>
                   <IonItem lines="none">
                     <IonLabel position="stacked">توضیح کوتاه</IonLabel>
                     <IonInput

@@ -28,8 +28,8 @@ const More: React.FC = () => {
     {
       href: '/catalog-admin',
       icon: pricetagOutline,
-      label: 'مدیریت کاتالوگ',
-      desc: 'لینک، برند، عکس، قیمت‌ها و پله‌ها',
+      label: 'مدیریت محصولات',
+      desc: 'عکس، قیمت تکی/سوپر/عمده، بسته و کیلو',
     },
     ...(isAdmin
       ? [

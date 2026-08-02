@@ -173,7 +173,16 @@ async function withIdempotency(
   }
   const result = await fn();
   if (clientMutationId) {
-    await MutationLog.create({ clientMutationId, type, userId, result });
+    try {
+      await MutationLog.create({ clientMutationId, type, userId, result });
+    } catch (err: unknown) {
+      // درخواست تکراری هم‌زمان — نتیجهٔ قبلی را برگردان
+      if ((err as { code?: number })?.code === 11000) {
+        const existing = await MutationLog.findOne({ clientMutationId });
+        if (existing) return existing.result;
+      }
+      throw err;
+    }
   }
   return result;
 }

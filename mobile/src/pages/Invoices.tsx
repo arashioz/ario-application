@@ -201,7 +201,7 @@ const Invoices: React.FC = () => {
             (unit === 'kg' ? it.unitPricePerKg : undefined) ??
             (it.qtyKg > 0 ? Math.round(it.totalPrice / it.qtyKg) : 0);
           return {
-            productId: it.productId,
+            productId: it.productId ? String(it.productId) : '',
             productName: it.productName,
             unit,
             qtyInput: String(it.qtyInput ?? it.qtyKg ?? 0),
@@ -223,7 +223,7 @@ const Invoices: React.FC = () => {
             (unit === 'kg' ? it.unitPricePerKg : undefined) ??
             (it.qtyKg > 0 ? Math.round(it.totalPrice / it.qtyKg) : 0);
           return {
-            productId: it.productId,
+            productId: it.productId ? String(it.productId) : '',
             productName: it.productName,
             unit,
             qtyInput: String(it.qtyInput ?? it.qtyKg ?? 0),
@@ -465,7 +465,7 @@ const Invoices: React.FC = () => {
                           onClick={() => openEdit('sale', inv)}
                         >
                           <IonIcon slot="start" icon={createOutline} />
-                          ویرایش
+                          ویرایش با رمز
                         </IonButton>
                         <IonButton
                           size="small"
@@ -523,7 +523,7 @@ const Invoices: React.FC = () => {
                           onClick={() => openEdit('purchase', inv)}
                         >
                           <IonIcon slot="start" icon={createOutline} />
-                          ویرایش
+                          ویرایش با رمز
                         </IonButton>
                         <IonButton
                           size="small"
@@ -603,11 +603,6 @@ const Invoices: React.FC = () => {
                 <p>
                   <b>تناژ:</b> {formatKg((detail as SaleRow).totalKg || 0)}
                 </p>
-                {(detail as SaleRow).totalProfit != null && (
-                  <p>
-                    <b>سود:</b> {formatToman((detail as SaleRow).totalProfit || 0)}
-                  </p>
-                )}
                 {(detail as SaleRow).discount ? (
                   <p>
                     <b>تخفیف:</b> {formatToman((detail as SaleRow).discount || 0)}
@@ -915,6 +910,7 @@ const Invoices: React.FC = () => {
                 type="password"
                 value={editPw}
                 onIonInput={(e) => setEditPw(e.detail.value || '')}
+                placeholder="رمز حذف/ویرایش"
               />
             </IonItem>
             <IonButton
@@ -924,7 +920,7 @@ const Invoices: React.FC = () => {
               disabled={saving || !editPw}
               onClick={() => void confirmEdit()}
             >
-              {saving ? '…' : 'ذخیره تغییرات'}
+              {saving ? '…' : 'ذخیره با رمز'}
             </IonButton>
           </IonContent>
         </IonModal>

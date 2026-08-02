@@ -300,16 +300,32 @@ export async function updateBalances(cashDelta: number, cardDelta: number) {
 }
 
 export async function generateInvoiceNumber(prefix: string): Promise<string> {
-  const models = await import('../models');
-  let count = 0;
-  if (prefix === 'PUR') count = await models.PurchaseInvoice.countDocuments();
-  else if (prefix === 'GOL') count = await models.SaleInvoice.countDocuments({ isGolden: true });
-  else count = await models.SaleInvoice.countDocuments({ isGolden: { $ne: true } });
+  const { PurchaseInvoice, SaleInvoice } = await import('../models');
   const date = new Date();
   const y = date.getFullYear().toString().slice(-2);
   const m = String(date.getMonth() + 1).padStart(2, '0');
   const d = String(date.getDate()).padStart(2, '0');
-  return `${prefix}-${y}${m}${d}-${String(count + 1).padStart(4, '0')}`;
+  const dayKey = `${prefix}-${y}${m}${d}`;
+  const range = { invoiceNumber: { $gte: `${dayKey}-0000`, $lte: `${dayKey}-9999` } };
+
+  // آخرین شمارهٔ همان روز — نه count کل (که بعد از حذف فاکتور duplicate می‌ساخت)
+  let lastNumber: string | undefined;
+  if (prefix === 'PUR') {
+    const last = await PurchaseInvoice.findOne(range).sort({ invoiceNumber: -1 }).select('invoiceNumber').lean();
+    lastNumber = last?.invoiceNumber;
+  } else {
+    const last = await SaleInvoice.findOne(range).sort({ invoiceNumber: -1 }).select('invoiceNumber').lean();
+    lastNumber = last?.invoiceNumber;
+  }
+
+  let seq = 1;
+  if (lastNumber) {
+    const suffix = lastNumber.slice(dayKey.length + 1);
+    const n = parseInt(suffix, 10);
+    if (!Number.isNaN(n)) seq = n + 1;
+  }
+
+  return `${dayKey}-${String(seq).padStart(4, '0')}`;
 }
 
 export async function updateProduct(
@@ -383,11 +399,13 @@ export async function getPublicCatalog() {
   }
 
   const products = await Product.find({ catalogVisible: true }).sort({ name: 1 });
+  const costBasis: CostBasis =
+    settings.costBasis === 'weighted' || settings.costBasis === 'last' ? settings.costBasis : 'last';
   const items = [];
   for (const p of products) {
-    const retail = await calculateSalePrice(p._id.toString(), undefined, 'retail');
-    const supermarket = await calculateSalePrice(p._id.toString(), undefined, 'supermarket');
-    const wholesale = await calculateSalePrice(p._id.toString(), undefined, 'wholesale');
+    const retail = await calculateSalePrice(p._id.toString(), undefined, 'retail', costBasis);
+    const supermarket = await calculateSalePrice(p._id.toString(), undefined, 'supermarket', costBasis);
+    const wholesale = await calculateSalePrice(p._id.toString(), undefined, 'wholesale', costBasis);
     const kgPer = p.kgPerPackage || 5;
     const retailPerKg =
       p.catalogPricePerKg && p.catalogPricePerKg > 0

@@ -202,7 +202,7 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
             (unit === 'kg' ? it.unitPricePerKg : undefined) ??
             (it.qtyKg > 0 ? Math.round(it.totalPrice / it.qtyKg) : 0);
           return {
-            productId: it.productId,
+            productId: it.productId ? String(it.productId) : '',
             productName: it.productName,
             unit,
             qtyInput: String(it.qtyInput ?? it.qtyKg ?? 0),
@@ -224,7 +224,7 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
             (unit === 'kg' ? it.unitPricePerKg : undefined) ??
             (it.qtyKg > 0 ? Math.round(it.totalPrice / it.qtyKg) : 0);
           return {
-            productId: it.productId,
+            productId: it.productId ? String(it.productId) : '',
             productName: it.productName,
             unit,
             qtyInput: String(it.qtyInput ?? it.qtyKg ?? 0),
@@ -376,7 +376,7 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
                       onClick={() => openEdit(inv)}
                     >
                       <IonIcon slot="start" icon={createOutline} />
-                      ویرایش
+                      ویرایش با رمز
                     </IonButton>
                     <IonButton
                       size="small"
@@ -426,7 +426,7 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
                       onClick={() => openEdit(inv)}
                     >
                       <IonIcon slot="start" icon={createOutline} />
-                      ویرایش
+                      ویرایش با رمز
                     </IonButton>
                     <IonButton
                       size="small"
@@ -751,7 +751,7 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
               type="password"
               value={editPw}
               onIonInput={(e) => setEditPw(e.detail.value || '')}
-              placeholder="رمز"
+              placeholder="رمز حذف/ویرایش"
             />
           </IonItem>
           <IonButton
@@ -761,7 +761,7 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
             disabled={saving || !editPw}
             onClick={() => void confirmEdit()}
           >
-            {saving ? '…' : 'ذخیره تغییرات'}
+            {saving ? '…' : 'ذخیره با رمز'}
           </IonButton>
         </IonContent>
       </IonModal>

@@ -252,10 +252,6 @@ const Orders: React.FC = () => {
                 <span className="stat-value">{formatKg(inv.totalKg)}</span>
               </div>
               <div className="stat-row">
-                <span className="stat-label">سود</span>
-                <span className="stat-value success">{formatToman(inv.totalProfit)}</span>
-              </div>
-              <div className="stat-row">
                 <span className="stat-label">تاریخ</span>
                 <span className="stat-value">{formatDate(inv.date)}</span>
               </div>

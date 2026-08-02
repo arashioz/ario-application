@@ -32,6 +32,18 @@ function resolveWsUrl(): string {
 export const API_BASE = resolveApiBase();
 export const WS_URL = resolveWsUrl();
 
+/** URL کامل برای عکس/آپلود — relative `/uploads/...` را درست resolve می‌کند */
+export function resolveMediaUrl(url?: string | null): string {
+  if (!url) return '';
+  if (/^(https?:|data:|blob:)/i.test(url)) return url;
+  const path = url.startsWith('/') ? url : `/${url}`;
+  if (typeof window !== 'undefined' && useSameOriginProxy()) {
+    return `${window.location.origin}${path}`;
+  }
+  const host = API_HOST || '127.0.0.1';
+  return `http://${host}:3001${path}`;
+}
+
 /** REST فقط برای health — منطق اصلی روی WS است */
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {

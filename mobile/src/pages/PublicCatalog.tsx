@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { IonPage, IonContent, IonSpinner } from '@ionic/react';
 import { callOutline, copyOutline } from 'ionicons/icons';
 import { IonIcon } from '@ionic/react';
+import { resolveMediaUrl } from '../api/client';
 
 interface TierPrice {
   label: string;
@@ -61,7 +62,7 @@ const PublicCatalog: React.FC = () => {
       .finally(() => setLoading(false));
   }, []);
 
-  const accent = data?.brandPrimaryColor || '#0d9488';
+  const accent = data?.brandPrimaryColor || '#1e3a5f';
   const brand = data?.brandName || data?.shopName || 'آریو';
   const supermarketKg = data?.tiers?.supermarketMinKg || 500;
   const wholesaleKg = data?.tiers?.wholesaleMinKg || 2000;
@@ -74,6 +75,28 @@ const PublicCatalog: React.FC = () => {
     } catch {
       /* ignore */
     }
+  };
+
+  const tierBlock = (
+    tier: 'retail' | 'supermarket' | 'wholesale',
+    label: string,
+    sub: string,
+    prices?: TierPrice,
+    fallbackKg?: number,
+    fallbackPack?: number
+  ) => {
+    const perKg = prices?.pricePerKg ?? fallbackKg ?? 0;
+    const perPack = prices?.pricePerPackage ?? fallbackPack ?? 0;
+    return (
+      <div className={`cpt ${tier === 'supermarket' ? 'super' : tier === 'wholesale' ? 'whole' : 'retail'}`}>
+        <span className="cpt-label">{label}</span>
+        <strong>{formatToman(perKg)}</strong>
+        <small>/کیلو</small>
+        <strong className="cpt-pack">{formatToman(perPack)}</strong>
+        <small>/بسته</small>
+        <span className="cpt-sub">{sub}</span>
+      </div>
+    );
   };
 
   return (
@@ -99,7 +122,7 @@ const PublicCatalog: React.FC = () => {
                 <div className="catalog-hero-glow" />
                 <div className="catalog-hero-inner">
                   {data.brandLogoUrl ? (
-                    <img src={data.brandLogoUrl} alt={brand} className="catalog-logo" />
+                    <img src={resolveMediaUrl(data.brandLogoUrl)} alt={brand} className="catalog-logo" />
                   ) : (
                     <div className="catalog-logo-fallback">{brand.slice(0, 1)}</div>
                   )}
@@ -139,20 +162,27 @@ const PublicCatalog: React.FC = () => {
                 <div className="catalog-empty">هنوز محصولی در کاتالوگ نیست</div>
               )}
 
-              <div className="catalog-grid">
+              <div className="catalog-grid catalog-grid-list">
                 {data.products.map((p, i) => {
                   const prices = p.prices;
                   return (
                     <article
                       key={p.id}
-                      className="catalog-card-v2"
+                      className="catalog-card-row"
                       style={{ animationDelay: `${Math.min(i, 12) * 60}ms` }}
                     >
-                      <div className="catalog-card-media">
+                      <div className="catalog-card-thumb-wrap">
                         {p.imageUrl ? (
-                          <img src={p.imageUrl} alt={p.name} loading="lazy" />
+                          <img
+                            src={resolveMediaUrl(p.imageUrl)}
+                            alt={p.name}
+                            loading="lazy"
+                            className="catalog-card-thumb"
+                          />
                         ) : (
-                          <div className="catalog-card-ph">{p.name.slice(0, 1)}</div>
+                          <div className="catalog-card-thumb catalog-card-thumb-ph">
+                            {p.name.slice(0, 1)}
+                          </div>
                         )}
                         <span className="catalog-pack-badge">{p.kgPerPackage}kg</span>
                       </div>
@@ -164,31 +194,19 @@ const PublicCatalog: React.FC = () => {
                         {p.note && <p className="catalog-item-note">{p.note}</p>}
 
                         <div className="catalog-price-tiers">
-                          <div className="cpt retail">
-                            <span className="cpt-label">تکی</span>
-                            <strong>
-                              {formatToman(prices?.retail.pricePerKg ?? p.pricePerKg ?? 0)}
-                            </strong>
-                            <small>/کیلو</small>
-                          </div>
-                          <div className="cpt super">
-                            <span className="cpt-label">
-                              ≥ {supermarketKg.toLocaleString('fa-IR')} کیلو
-                            </span>
-                            <strong>
-                              {formatToman(prices?.supermarket.pricePerKg ?? 0)}
-                            </strong>
-                            <small>سوپرمارکت</small>
-                          </div>
-                          <div className="cpt whole">
-                            <span className="cpt-label">
-                              ≥ {(wholesaleKg / 1000).toLocaleString('fa-IR')} تن
-                            </span>
-                            <strong>
-                              {formatToman(prices?.wholesale.pricePerKg ?? 0)}
-                            </strong>
-                            <small>عمده</small>
-                          </div>
+                          {tierBlock('retail', 'تکی', 'خرده‌فروشی', prices?.retail, p.pricePerKg, p.pricePerPackage)}
+                          {tierBlock(
+                            'supermarket',
+                            'سوپرمارکت',
+                            `≥ ${supermarketKg.toLocaleString('fa-IR')} کیلو`,
+                            prices?.supermarket
+                          )}
+                          {tierBlock(
+                            'wholesale',
+                            'عمده',
+                            `≥ ${(wholesaleKg / 1000).toLocaleString('fa-IR')} تن`,
+                            prices?.wholesale
+                          )}
                         </div>
                       </div>
                     </article>

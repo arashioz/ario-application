@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   IonPage,
   IonHeader,
@@ -18,9 +18,10 @@ import {
   IonToggle,
   IonIcon,
 } from '@ionic/react';
-import { addOutline, checkmarkCircleOutline, trashOutline, walletOutline } from 'ionicons/icons';
+import { addOutline, checkmarkCircleOutline, imageOutline, trashOutline, walletOutline } from 'ionicons/icons';
 import { useHistory } from 'react-router-dom';
 import { wsClient, newMutationId } from '../api/ws';
+import { resolveMediaUrl } from '../api/client';
 import { parseAmount, formatRial, formatKg, resolveQty, resolvePrices, todayIso, formatMoneyInput, formatToman } from '../utils/format';
 import { PersianDateField } from '../components/PersianDateField';
 import { InvoiceListPanel } from '../components/InvoiceListPanel';
@@ -57,6 +58,20 @@ interface Item {
   profitWholesale: string;
 }
 
+interface ProductSnapshot {
+  productId: string;
+  name: string;
+  avgCostPerKg: number;
+  lastPurchasePricePerKg?: number;
+  stockKg: number;
+  isNew: boolean;
+  imageUrl?: string;
+  categoryId?: string;
+  profitRetail?: number;
+  profitSupermarket?: number;
+  profitWholesale?: number;
+}
+
 const empty = (): Item => ({
   name: '',
   categoryId: '',
@@ -81,10 +96,14 @@ const Purchase: React.FC = () => {
   const [items, setItems] = useState<Item[]>([empty()]);
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState({ open: false, msg: '', color: 'success' });
-  const [summary, setSummary] = useState('');
+  const [snapshots, setSnapshots] = useState<ProductSnapshot[]>([]);
+  const [snapEdits, setSnapEdits] = useState<
+    Record<string, { retail: string; supermarket: string; wholesale: string }>
+  >({});
   const [listRefreshKey, setListRefreshKey] = useState(0);
   const [cashBalance, setCashBalance] = useState(0);
   const [cardBalance, setCardBalance] = useState(0);
+  const fileRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   useEffect(() => {
     void (async () => {
@@ -158,7 +177,7 @@ const Purchase: React.FC = () => {
     try {
       const res = await wsClient.request<{
         invoice: { totalAmount: number; totalKg: number };
-        productSnapshots: Array<{ name: string; avgCostPerKg: number; stockKg: number; isNew: boolean }>;
+        productSnapshots: ProductSnapshot[];
         queued?: boolean;
       }>(
         'purchase.create',
@@ -186,15 +205,17 @@ const Purchase: React.FC = () => {
         setToast({ open: true, msg: 'آفلاین ذخیره شد — بعد از وصل sync می‌شود', color: 'warning' });
       } else {
         const snaps = res.productSnapshots || [];
-        setSummary(
-          snaps
-            .map(
-              (s) =>
-                `${s.name}: موجودی ${formatKg(s.stockKg)} · میانگین ${formatRial(s.avgCostPerKg)}/کیلو${s.isNew ? ' (جدید)' : ''}`
-            )
-            .join('\n')
-        );
-        setToast({ open: true, msg: 'فاکتور خرید ثبت شد — محصولات به‌روز شدند', color: 'success' });
+        setSnapshots(snaps);
+        const edits: typeof snapEdits = {};
+        for (const s of snaps) {
+          edits[s.productId] = {
+            retail: String(s.profitRetail ?? 15),
+            supermarket: String(s.profitSupermarket ?? 10),
+            wholesale: String(s.profitWholesale ?? 6),
+          };
+        }
+        setSnapEdits(edits);
+        setToast({ open: true, msg: 'فاکتور خرید ثبت شد — عکس و درصد را تنظیم کنید', color: 'success' });
         setListRefreshKey((k) => k + 1);
         const [prods, cats, settings] = await Promise.all([
           wsClient.request<Product[]>('product.list'),
@@ -213,6 +234,57 @@ const Purchase: React.FC = () => {
       setToast({ open: true, msg: e instanceof Error ? e.message : 'خطا', color: 'danger' });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const uploadSnapImage = (productId: string, file: File) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      void wsClient
+        .request<{ imageUrl?: string }>('product.uploadImage', {
+          id: productId,
+          dataUrl: String(reader.result || ''),
+        })
+        .then((updated) => {
+          const url = (updated as { imageUrl?: string })?.imageUrl;
+          setSnapshots((prev) =>
+            prev.map((s) => (s.productId === productId ? { ...s, imageUrl: url || s.imageUrl } : s))
+          );
+          setToast({ open: true, msg: 'عکس ذخیره شد', color: 'success' });
+          return wsClient.request<Product[]>('product.list').then(setProducts);
+        })
+        .catch((e) =>
+          setToast({
+            open: true,
+            msg: e instanceof Error ? e.message : 'آپلود نشد',
+            color: 'danger',
+          })
+        );
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const saveSnapProfits = async (s: ProductSnapshot) => {
+    if (!s.categoryId) {
+      setToast({ open: true, msg: 'دسته این محصول مشخص نیست', color: 'warning' });
+      return;
+    }
+    const e = snapEdits[s.productId];
+    if (!e) return;
+    try {
+      await wsClient.request('category.update', {
+        id: s.categoryId,
+        profitRetail: parseFloat(e.retail) || 0,
+        profitSupermarket: parseFloat(e.supermarket) || 0,
+        profitWholesale: parseFloat(e.wholesale) || 0,
+      });
+      setToast({ open: true, msg: `درصد سود «${s.name}» ذخیره شد`, color: 'success' });
+    } catch (err) {
+      setToast({
+        open: true,
+        msg: err instanceof Error ? err.message : 'ذخیره نشد',
+        color: 'danger',
+      });
     }
   };
 
@@ -452,11 +524,121 @@ const Purchase: React.FC = () => {
             </IonCardContent>
           </IonCard>
 
-          {summary && (
+          {snapshots.length > 0 && (
             <IonCard className="tight-card">
+              <IonCardHeader>
+                <IonCardTitle className="small-title">محصولات این خرید — عکس و درصد</IonCardTitle>
+              </IonCardHeader>
               <IonCardContent>
-                <p className="hint">میانگین بعد از ثبت:</p>
-                <pre className="summary-pre">{summary}</pre>
+                <p className="hint">برای هر محصول عکس بگذارید و درصد سود را تنظیم کنید</p>
+                {snapshots.map((s) => {
+                  const edit = snapEdits[s.productId] || {
+                    retail: '15',
+                    supermarket: '10',
+                    wholesale: '6',
+                  };
+                  return (
+                    <div key={s.productId} className="ios-glass-card" style={{ marginBottom: 10 }}>
+                      <div className="ios-row">
+                        <strong>
+                          {s.name}
+                          {s.isNew ? ' · جدید' : ''}
+                        </strong>
+                        <span className="ios-caption">{formatKg(s.stockKg)}</span>
+                      </div>
+                      <p className="hint" style={{ margin: '4px 0 8px' }}>
+                        میانگین {formatRial(s.avgCostPerKg)}/کیلو
+                        {s.lastPurchasePricePerKg
+                          ? ` · آخر ${formatRial(s.lastPurchasePricePerKg)}`
+                          : ''}
+                      </p>
+                      {s.imageUrl ? (
+                        <img
+                          src={resolveMediaUrl(s.imageUrl)}
+                          alt={s.name}
+                          style={{
+                            width: '100%',
+                            maxHeight: 140,
+                            objectFit: 'cover',
+                            borderRadius: 10,
+                            marginBottom: 8,
+                          }}
+                        />
+                      ) : (
+                        <p className="hint">بدون عکس</p>
+                      )}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        style={{ display: 'none' }}
+                        ref={(el) => {
+                          fileRefs.current[s.productId] = el;
+                        }}
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          if (f) uploadSnapImage(s.productId, f);
+                          e.target.value = '';
+                        }}
+                      />
+                      <IonButton
+                        size="small"
+                        fill="outline"
+                        onClick={() => fileRefs.current[s.productId]?.click()}
+                      >
+                        <IonIcon slot="start" icon={imageOutline} />
+                        {s.imageUrl ? 'تعویض عکس' : 'افزودن عکس'}
+                      </IonButton>
+                      {s.categoryId && (
+                        <>
+                          <div className="profit-row" style={{ marginTop: 8 }}>
+                            <IonItem>
+                              <IonLabel position="stacked">تکی %</IonLabel>
+                              <IonInput
+                                type="number"
+                                value={edit.retail}
+                                onIonInput={(e) =>
+                                  setSnapEdits((prev) => ({
+                                    ...prev,
+                                    [s.productId]: { ...edit, retail: e.detail.value || '' },
+                                  }))
+                                }
+                              />
+                            </IonItem>
+                            <IonItem>
+                              <IonLabel position="stacked">سوپر %</IonLabel>
+                              <IonInput
+                                type="number"
+                                value={edit.supermarket}
+                                onIonInput={(e) =>
+                                  setSnapEdits((prev) => ({
+                                    ...prev,
+                                    [s.productId]: { ...edit, supermarket: e.detail.value || '' },
+                                  }))
+                                }
+                              />
+                            </IonItem>
+                            <IonItem>
+                              <IonLabel position="stacked">عمده %</IonLabel>
+                              <IonInput
+                                type="number"
+                                value={edit.wholesale}
+                                onIonInput={(e) =>
+                                  setSnapEdits((prev) => ({
+                                    ...prev,
+                                    [s.productId]: { ...edit, wholesale: e.detail.value || '' },
+                                  }))
+                                }
+                              />
+                            </IonItem>
+                          </div>
+                          <IonButton size="small" expand="block" onClick={() => void saveSnapProfits(s)}>
+                            ذخیره درصد سود
+                          </IonButton>
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
               </IonCardContent>
             </IonCard>
           )}

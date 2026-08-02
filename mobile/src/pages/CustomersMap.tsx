@@ -73,7 +73,7 @@ const STATUS: Record<string, string> = {
 
 const VISIT: Record<string, { label: string; color: string }> = {
   hot: { label: 'ویزیت اخیر', color: '#10b981' },
-  ok: { label: 'وضعیت خوب', color: '#0d9488' },
+  ok: { label: 'وضعیت خوب', color: '#1e3a5f' },
   due: { label: 'موعد فالوآپ', color: '#f59e0b' },
   cold: { label: 'مدتی ندیده', color: '#ef4444' },
   never: { label: 'هنوز فروشی نیست', color: '#64748b' },
@@ -325,11 +325,6 @@ const CustomersMap: React.FC = () => {
                 <p>
                   <b>تناژ:</b> {formatKg(openInv.totalKg)}
                 </p>
-                {openInv.totalProfit != null && (
-                  <p>
-                    <b>سود:</b> {formatToman(openInv.totalProfit)}
-                  </p>
-                )}
                 {openInv.discount ? (
                   <p>
                     <b>تخفیف:</b> {formatToman(openInv.discount)}

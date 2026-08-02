@@ -132,8 +132,8 @@ export const LocationPicker: React.FC<Props> = ({
     for (const m of extraMarkers) {
       const mk = L.circleMarker([m.lat, m.lng], {
         radius: 10,
-        color: m.color || '#0d9488',
-        fillColor: m.color || '#0d9488',
+        color: m.color || '#1e3a5f',
+        fillColor: m.color || '#1e3a5f',
         fillOpacity: 0.9,
       }).bindPopup(m.label || 'موقعیت');
       extrasRef.current.addLayer(mk);

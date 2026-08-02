@@ -1,25 +1,25 @@
 :root {
-  /* Teal Mint kit — جذاب و متفاوت از آبی پیش‌فرض */
-  --ion-color-primary: #0d9488;
-  --ion-color-primary-rgb: 13, 148, 136;
+  /* سورمه — هماهنگ با سیستم فروش */
+  --ion-color-primary: #1e3a5f;
+  --ion-color-primary-rgb: 30, 58, 95;
   --ion-color-primary-contrast: #ffffff;
   --ion-color-primary-contrast-rgb: 255, 255, 255;
-  --ion-color-primary-shade: #0b8278;
-  --ion-color-primary-tint: #259f94;
+  --ion-color-primary-shade: #152a45;
+  --ion-color-primary-tint: #354e6f;
 
-  --ion-color-secondary: #f59e0b;
-  --ion-color-secondary-rgb: 245, 158, 11;
-  --ion-color-secondary-contrast: #000000;
-  --ion-color-secondary-contrast-rgb: 0, 0, 0;
-  --ion-color-secondary-shade: #d88b0a;
-  --ion-color-secondary-tint: #f6a823;
+  --ion-color-secondary: #3b82f6;
+  --ion-color-secondary-rgb: 59, 130, 246;
+  --ion-color-secondary-contrast: #ffffff;
+  --ion-color-secondary-contrast-rgb: 255, 255, 255;
+  --ion-color-secondary-shade: #3472d8;
+  --ion-color-secondary-tint: #4f8ff7;
 
-  --ion-color-tertiary: #0891b2;
-  --ion-color-tertiary-rgb: 8, 145, 178;
+  --ion-color-tertiary: #2a4a73;
+  --ion-color-tertiary-rgb: 42, 74, 115;
   --ion-color-tertiary-contrast: #ffffff;
   --ion-color-tertiary-contrast-rgb: 255, 255, 255;
-  --ion-color-tertiary-shade: #07809c;
-  --ion-color-tertiary-tint: #219cba;
+  --ion-color-tertiary-shade: #254165;
+  --ion-color-tertiary-tint: #3f5c81;
 
   --ion-color-success: #10b981;
   --ion-color-success-rgb: 16, 185, 129;
@@ -49,13 +49,13 @@
   --ion-color-medium-shade: #58667a;
   --ion-color-medium-tint: #748297;
 
-  --ios-bg: #f0fdfa;
+  --ios-bg: #e8eef6;
   --ios-card: rgba(255, 255, 255, 0.78);
   --ios-card-solid: #ffffff;
-  --ios-separator: rgba(13, 148, 136, 0.12);
+  --ios-separator: rgba(30, 58, 95, 0.12);
   --ios-label: #5b6b73;
-  --ios-text: #134e4a;
-  --ios-blue: #0d9488;
+  --ios-text: #0f2744;
+  --ios-blue: #1e3a5f;
   --ios-green: #10b981;
   --ios-orange: #f59e0b;
   --ios-radius: 18px;
@@ -63,8 +63,8 @@
 
   --ion-background-color: var(--ios-bg);
   --ion-text-color: var(--ios-text);
-  --ion-toolbar-background: rgba(240, 253, 250, 0.85);
-  --ion-tab-bar-background: rgba(255, 255, 255, 0.88);
+  --ion-toolbar-background: rgba(232, 238, 246, 0.88);
+  --ion-tab-bar-background: rgba(255, 255, 255, 0.92);
   --ion-font-family: 'Vazirmatn', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Tahoma', sans-serif;
   --ion-font-size: 14px;
 }
@@ -157,19 +157,19 @@ body {
 }
 .ios-kpi .k-label { font-size: 12px; opacity: 0.92; font-weight: 600; }
 .ios-kpi .k-value { font-size: 1.05rem; font-weight: 800; letter-spacing: -0.02em; line-height: 1.25; }
-.ios-kpi.blue { background: linear-gradient(145deg, #14b8a6, #0d9488); }
+.ios-kpi.blue { background: linear-gradient(145deg, #2a4a73, #1e3a5f); }
 .ios-kpi.orange { background: linear-gradient(145deg, #fbbf24, #f59e0b); }
 .ios-kpi.green { background: linear-gradient(145deg, #34d399, #10b981); }
-.ios-kpi.gray { background: linear-gradient(145deg, #5eead4, #0f766e); }
+.ios-kpi.gray { background: linear-gradient(145deg, #64748b, #334155); }
 
 /* انبار */
 .warehouse-hero {
-  background: linear-gradient(145deg, #0f766e 0%, #134e4a 55%, #115e59 100%);
-  color: #ecfdf5;
+  background: linear-gradient(145deg, #1e3a5f 0%, #0f2744 55%, #152f52 100%);
+  color: #f8fafc;
   border-radius: 18px;
   padding: 16px;
   margin-bottom: 14px;
-  box-shadow: 0 12px 28px rgba(15, 118, 110, 0.28);
+  box-shadow: 0 12px 28px rgba(15, 39, 68, 0.28);
 }
 .wh-top {
   display: flex;
@@ -227,7 +227,7 @@ body {
   padding: 8px 10px;
   color: #fef3c7;
 }
-.wh-cta { --color: #ecfdf5; margin-top: 4px; font-weight: 700; }
+.wh-cta { --color: #f8fafc; margin-top: 4px; font-weight: 700; }
 
 /* دسترسی سریع */
 .quick-grid {
@@ -263,7 +263,7 @@ body {
 .quick-tile ion-icon {
   font-size: 22px;
 }
-.quick-tile.qa-teal .qt-inner ion-icon { color: #0d9488; }
+.quick-tile.qa-teal .qt-inner ion-icon { color: #1e3a5f; }
 .quick-tile.qa-amber .qt-inner ion-icon { color: #d97706; }
 .quick-tile.qa-blue .qt-inner ion-icon { color: #2563eb; }
 .quick-tile.qa-indigo .qt-inner ion-icon { color: #4f46e5; }
@@ -286,7 +286,7 @@ body {
   height: 34px;
 }
 .action-chip.warn { --background: #f59e0b; --color: #111; }
-.action-chip.teal { --background: #0d9488; --color: #fff; }
+.action-chip.teal { --background: #1e3a5f; --color: #fff; }
 .action-chip.rose { --background: #e11d48; --color: #fff; }
 .action-chip.violet { --background: #7c3aed; --color: #fff; }
 
@@ -296,7 +296,7 @@ body {
 }
 
 .ios-chip-active {
-  --background: #0d9488;
+  --background: #1e3a5f;
   --color: #fff;
 }
 
@@ -304,7 +304,7 @@ body {
   font-size: 10px;
   font-weight: 600;
   --padding-top: 4px;
-  --color-selected: #0d9488;
+  --color-selected: #1e3a5f;
 }
 .stat-value.warning { color: #f59e0b; }
 .mixed-pay { margin-top: 8px; }
@@ -340,7 +340,7 @@ body {
   text-align: right;
   cursor: pointer;
   transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
-  box-shadow: 0 4px 14px rgba(15, 118, 110, 0.06);
+  box-shadow: 0 4px 14px rgba(15, 39, 68, 0.06);
   min-height: 148px;
   display: flex;
   flex-direction: column;
@@ -350,8 +350,8 @@ body {
   transform: scale(0.96);
 }
 .product-card.in-cart {
-  border-color: #0d9488;
-  box-shadow: 0 0 0 2px rgba(13, 148, 136, 0.18);
+  border-color: #1e3a5f;
+  box-shadow: 0 0 0 2px rgba(30, 58, 95, 0.18);
 }
 .product-card.out {
   opacity: 0.55;
@@ -364,8 +364,8 @@ body {
 .pc-badge {
   font-size: 11px;
   font-weight: 800;
-  background: #ecfdf5;
-  color: #0f766e;
+  background: #e8eef6;
+  color: #1e3a5f;
   border-radius: 999px;
   padding: 2px 8px;
 }
@@ -373,7 +373,7 @@ body {
   font-size: 12px;
   font-weight: 800;
   color: #fff;
-  background: #0d9488;
+  background: #1e3a5f;
   border-radius: 999px;
   min-width: 24px;
   height: 24px;
@@ -396,7 +396,7 @@ body {
 .pc-price {
   font-size: 12.5px;
   font-weight: 700;
-  color: #0d9488;
+  color: #1e3a5f;
   margin-top: auto;
 }
 .pc-add {
@@ -406,7 +406,7 @@ body {
   gap: 4px;
   font-size: 12px;
   font-weight: 700;
-  color: #0f766e;
+  color: #1e3a5f;
 }
 .cart-mini { margin-bottom: 10px; }
 
@@ -415,13 +415,13 @@ body {
   z-index: 10000;
   pointer-events: none;
   transform: translate(-50%, -50%);
-  background: #0d9488;
+  background: #1e3a5f;
   color: #fff;
   font-size: 12px;
   font-weight: 800;
   padding: 8px 12px;
   border-radius: 999px;
-  box-shadow: 0 10px 24px rgba(13, 148, 136, 0.35);
+  box-shadow: 0 10px 24px rgba(30, 58, 95, 0.35);
   opacity: 0.95;
   white-space: nowrap;
   max-width: 160px;
@@ -465,7 +465,7 @@ body {
   min-height: 52px;
 }
 .offer-btn.special {
-  --background: linear-gradient(135deg, #0d9488, #0f766e);
+  --background: linear-gradient(135deg, #1e3a5f, #0f2744);
   --color: #fff;
 }
 .offer-amt {
@@ -554,7 +554,7 @@ body {
 .qty-input {
   text-align: center;
   max-width: 80px;
-  --background: #f0fdfa;
+  --background: #e8eef6;
   border-radius: 10px;
 }
 .cart-footer {
@@ -577,7 +577,7 @@ body {
 }
 .follow-card:last-child { border-bottom: none; }
 .cust-picked {
-  background: #f0fdfa;
+  background: #e8eef6;
   border-radius: 12px;
   padding: 10px;
   margin-bottom: 8px;
@@ -914,7 +914,7 @@ body {
   --background: #0b1220;
 }
 .catalog-shell {
-  --cat-accent: #0d9488;
+  --cat-accent: #1e3a5f;
   min-height: 100%;
   padding: 0 0 40px;
   background:
@@ -1053,7 +1053,10 @@ body {
   margin: 0 auto;
 }
 @media (min-width: 640px) {
-  .catalog-grid { grid-template-columns: 1fr 1fr; }
+  .catalog-grid:not(.catalog-grid-list) { grid-template-columns: 1fr 1fr; }
+}
+.catalog-grid-list {
+  gap: 12px;
 }
 .catalog-card-v2 {
   background: rgba(255,255,255,0.06);
@@ -1068,6 +1071,40 @@ body {
   transform: translateY(-4px);
   border-color: color-mix(in srgb, var(--cat-accent) 50%, transparent);
   box-shadow: 0 18px 40px rgba(0,0,0,0.28);
+}
+.catalog-card-row {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 12px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 18px;
+  padding: 12px;
+  backdrop-filter: blur(12px);
+  animation: catalogCardIn 0.55s ease both;
+}
+.catalog-card-thumb-wrap {
+  position: relative;
+  flex-shrink: 0;
+  width: 96px;
+  height: 96px;
+}
+.catalog-card-thumb {
+  width: 96px;
+  height: 96px;
+  border-radius: 14px;
+  object-fit: cover;
+  display: block;
+  background: #1e293b;
+}
+.catalog-card-thumb-ph {
+  display: grid;
+  place-items: center;
+  font-size: 28px;
+  font-weight: 800;
+  color: color-mix(in srgb, var(--cat-accent) 80%, white);
+  background: linear-gradient(135deg, rgba(255,255,255,0.04), color-mix(in srgb, var(--cat-accent) 25%, transparent));
 }
 @keyframes catalogCardIn {
   from { opacity: 0; transform: translateY(22px) scale(0.98); }
@@ -1094,42 +1131,44 @@ body {
 }
 .catalog-pack-badge {
   position: absolute;
-  top: 10px;
-  left: 10px;
+  top: 6px;
+  left: 6px;
   background: rgba(15,23,42,0.75);
   color: #fff;
-  font-size: 11px;
-  padding: 4px 8px;
+  font-size: 10px;
+  padding: 3px 7px;
   border-radius: 999px;
   backdrop-filter: blur(8px);
 }
 .catalog-card-body {
-  padding: 14px 14px 16px;
+  padding: 0;
+  flex: 1;
+  min-width: 0;
 }
 .catalog-card-body h2 {
   margin: 0;
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 700;
 }
 .catalog-min {
-  margin: 6px 0 0;
+  margin: 4px 0 0;
   font-size: 12px;
   color: #94a3b8;
 }
 .catalog-item-note {
-  margin: 8px 0 0;
+  margin: 6px 0 0;
   font-size: 12px;
   color: #cbd5e1;
 }
 .catalog-price-tiers {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
-  gap: 8px;
-  margin-top: 14px;
+  gap: 6px;
+  margin-top: 10px;
 }
 .cpt {
-  border-radius: 14px;
-  padding: 10px 8px;
+  border-radius: 12px;
+  padding: 8px 6px;
   text-align: center;
   background: rgba(15,23,42,0.55);
   border: 1px solid rgba(255,255,255,0.08);
@@ -1138,17 +1177,28 @@ body {
   display: block;
   font-size: 10px;
   color: #94a3b8;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
+  font-weight: 700;
 }
 .cpt strong {
   display: block;
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 800;
-  line-height: 1.3;
+  line-height: 1.25;
+}
+.cpt .cpt-pack {
+  margin-top: 4px;
+  font-size: 10px;
 }
 .cpt small {
   color: #64748b;
-  font-size: 10px;
+  font-size: 9px;
+}
+.cpt-sub {
+  display: block;
+  margin-top: 4px;
+  font-size: 9px;
+  color: #64748b;
 }
 .cpt.retail strong { color: #e2e8f0; }
 .cpt.super {
@@ -1166,6 +1216,111 @@ body {
   padding: 8px 16px 28px;
   color: #64748b;
   font-size: 12px;
+}
+
+/* —— مدیریت محصولات: ردیف با عکس مربعی راست —— */
+.prod-admin-card {
+  padding-bottom: 10px;
+}
+.prod-admin-top {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 12px;
+}
+.prod-admin-thumb-wrap {
+  flex-shrink: 0;
+  width: 88px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+.prod-admin-thumb {
+  width: 88px;
+  height: 88px;
+  border-radius: 14px;
+  object-fit: cover;
+  display: block;
+  background: #e8eef6;
+  border: 1px solid rgba(30, 58, 95, 0.12);
+}
+.prod-admin-thumb-ph {
+  display: grid;
+  place-items: center;
+  font-size: 28px;
+  font-weight: 800;
+  color: #1e3a5f;
+  background: linear-gradient(135deg, #e8eef6, #d5e0ef);
+}
+.prod-admin-photo-btn {
+  margin: 0;
+  height: 28px;
+  font-size: 11px;
+  --padding-start: 6px;
+  --padding-end: 6px;
+}
+.prod-admin-main {
+  flex: 1;
+  min-width: 0;
+}
+.prod-tier-list {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.prod-tier-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 10px;
+  background: #f1f5f9;
+  border: 1px solid rgba(30, 58, 95, 0.08);
+}
+.prod-tier-label {
+  font-size: 11px;
+  font-weight: 800;
+  color: #1e3a5f;
+  flex-shrink: 0;
+}
+.prod-tier-prices {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 2px 4px;
+  font-size: 11px;
+  text-align: left;
+}
+.prod-tier-prices strong {
+  font-weight: 800;
+  color: #0f2744;
+  font-size: 11px;
+}
+.prod-tier-prices small {
+  color: #64748b;
+  font-size: 9px;
+}
+.prod-tier-sep {
+  color: #94a3b8;
+  margin: 0 2px;
+}
+.prod-tier-row.supermarket {
+  background: rgba(103, 232, 249, 0.12);
+  border-color: rgba(8, 145, 178, 0.2);
+}
+.prod-tier-row.supermarket .prod-tier-label {
+  color: #0e7490;
+}
+.prod-tier-row.wholesale {
+  background: rgba(252, 211, 77, 0.14);
+  border-color: rgba(217, 119, 6, 0.2);
+}
+.prod-tier-row.wholesale .prod-tier-label {
+  color: #b45309;
 }
 
 /* —— صفحه فروش سورمه / فشرده —— */
@@ -1334,6 +1489,22 @@ body {
 .sale-details > summary::after {
   content: ' ▾';
   opacity: 0.6;
+}
+
+.sale-address-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.sale-address-row .sale-address-input {
+  flex: 1;
+  --padding-start: 0;
+  --inner-padding-end: 0;
+}
+.sale-map-btn {
+  flex-shrink: 0;
+  margin: 0 0 8px;
+  height: 40px;
 }
 
 @media (max-width: 360px) {

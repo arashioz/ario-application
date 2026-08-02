@@ -7,8 +7,11 @@ import {
   findProductByName,
   resolveQty,
   resolvePrices,
+  resolveProductCost,
+  getOrCreateSettings,
   QtyUnit,
   PriceTier as PricingTier,
+  CostBasis,
 } from './productService';
 import { PaymentMethod, PriceTier, SaleStatus } from '../models/SaleInvoice';
 
@@ -26,7 +29,8 @@ interface SaleItemInput {
 async function buildSaleItems(
   items: SaleItemInput[],
   priceTier: PriceTier,
-  checkStock: boolean
+  checkStock: boolean,
+  costBasis: CostBasis = 'last'
 ) {
   const saleItems = [];
   let totalAmount = 0;
@@ -53,7 +57,12 @@ async function buildSaleItems(
       throw new Error(`موجودی "${product.name}" کافی نیست (${stockKg} کیلو)`);
     }
 
-    const pricing = await calculateSalePrice(product._id.toString(), undefined, priceTier as PricingTier);
+    const pricing = await calculateSalePrice(
+      product._id.toString(),
+      undefined,
+      priceTier as PricingTier,
+      costBasis
+    );
     let unitPricePerKg = pricing.salePricePerKg;
     let unitPricePerPackage = pricing.salePricePerPackage;
 
@@ -66,8 +75,8 @@ async function buildSaleItems(
     const gross = Math.round(unitPricePerKg * qtyKg);
     const lineDisc = Math.max(0, Math.min(Math.round(item.discount || 0), gross));
     const totalPrice = gross - lineDisc;
-    const avgCost = product.avgCostPerKg ?? product.purchasePrice ?? 0;
-    const cost = Math.round(avgCost * qtyKg);
+    const unitCost = resolveProductCost(product, costBasis);
+    const cost = Math.round(unitCost * qtyKg);
     const profit = totalPrice - cost;
 
     saleItems.push({
@@ -78,11 +87,11 @@ async function buildSaleItems(
       qtyKg,
       qtyPackages,
       kgPerPackage,
-      unitCostPerKg: avgCost,
+      unitCostPerKg: unitCost,
       unitPricePerKg,
       unitPricePerPackage,
       quantity: qtyKg,
-      unitCost: avgCost,
+      unitCost: unitCost,
       unitPrice: unit === 'kg' ? unitPricePerKg : unitPricePerPackage,
       totalPrice,
       discount: lineDisc,
@@ -242,10 +251,15 @@ export async function createSaleInvoice(data: {
     if (customer) customerId = customer._id.toString();
   }
 
+  const settings = await getOrCreateSettings();
+  const costBasis: CostBasis =
+    settings.costBasis === 'weighted' || settings.costBasis === 'last' ? settings.costBasis : 'last';
+
   const { saleItems, totalAmount: rawTotal, totalCost, totalKg } = await buildSaleItems(
     data.items,
     priceTier,
-    !requiresApproval
+    !requiresApproval,
+    costBasis
   );
 
   const discountMode = data.discountMode || 'invoice';
@@ -295,38 +309,47 @@ export async function createSaleInvoice(data: {
 
   const status: SaleStatus = requiresApproval ? 'pending' : 'approved';
   const prefix = isGolden ? 'GOL' : 'SAL';
-  const invoiceNumber = await generateInvoiceNumber(prefix);
 
-  const invoice = await SaleInvoice.create({
-    invoiceNumber,
-    customerId,
-    customerName,
-    customerPhone,
-    customerAddress,
-    customerLat: data.customerLat,
-    customerLng: data.customerLng,
-    marketerId: data.marketerId,
-    items: saleItems,
-    totalAmount,
-    totalCost,
-    totalProfit,
-    totalKg,
-    paymentMethod: data.paymentMethod,
-    payment,
-    discount,
-    discountMode,
-    discountPerKg: discountMode === 'per_kg' ? discountPerKg : 0,
-    notes: data.notes,
-    date,
-    dueDate: data.dueDate,
-    isPaid: payment.credit === 0,
-    priceTier,
-    isGolden,
-    status,
-    deliveryMode: data.deliveryMode === 'self' ? 'self' : 'company',
-    stockApplied: false,
-    approvedAt: requiresApproval ? undefined : new Date(),
-  });
+  let invoice: InstanceType<typeof SaleInvoice> | null = null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      invoice = await SaleInvoice.create({
+        invoiceNumber: await generateInvoiceNumber(prefix),
+        customerId,
+        customerName,
+        customerPhone,
+        customerAddress,
+        customerLat: data.customerLat,
+        customerLng: data.customerLng,
+        marketerId: data.marketerId,
+        items: saleItems,
+        totalAmount,
+        totalCost,
+        totalProfit,
+        totalKg,
+        paymentMethod: data.paymentMethod,
+        payment,
+        discount,
+        discountMode,
+        discountPerKg: discountMode === 'per_kg' ? discountPerKg : 0,
+        notes: data.notes,
+        date,
+        dueDate: data.dueDate,
+        isPaid: payment.credit === 0,
+        priceTier,
+        isGolden,
+        status,
+        deliveryMode: data.deliveryMode === 'self' ? 'self' : 'company',
+        stockApplied: false,
+        approvedAt: requiresApproval ? undefined : new Date(),
+      });
+      break;
+    } catch (err: unknown) {
+      const code = (err as { code?: number })?.code;
+      if (code !== 11000 || attempt === 4) throw err;
+    }
+  }
+  if (!invoice) throw new Error('ثبت فاکتور فروش ناموفق بود');
 
   if (!requiresApproval) {
     await applyStockAndMoney(invoice);
@@ -600,10 +623,14 @@ export async function updateSaleInvoice(
   const priceTier: PriceTier = data.priceTier || invoice.priceTier || 'retail';
 
   const checkStock = wasApplied || invoice.status !== 'pending';
+  const settings = await getOrCreateSettings();
+  const costBasis: CostBasis =
+    settings.costBasis === 'weighted' || settings.costBasis === 'last' ? settings.costBasis : 'last';
   const { saleItems, totalAmount: rawTotal, totalCost, totalKg } = await buildSaleItems(
     data.items,
     priceTier,
-    checkStock
+    checkStock,
+    costBasis
   );
 
   const discountMode = data.discountMode || invoice.discountMode || 'invoice';
@@ -769,7 +796,7 @@ ${
 <div>تخفیف اقلام: ${itemsDisc.toLocaleString('fa-IR')} تومان</div>
 <div>تخفیف فاکتور (${modeLabel}): ${(invoice.discount || 0).toLocaleString('fa-IR')} تومان</div>
 <div class="total">مبلغ نهایی: ${invoice.totalAmount.toLocaleString('fa-IR')} تومان</div>
-<div>تناژ: ${invoice.totalKg.toLocaleString('fa-IR')} کیلو · سود: ${invoice.totalProfit.toLocaleString('fa-IR')} تومان</div>
+<div>تناژ: ${invoice.totalKg.toLocaleString('fa-IR')} کیلو</div>
 ${invoice.shippingNotes ? `<div class="ship"><b>ارسال بار:</b><br/>${invoice.shippingNotes}</div>` : ''}
 ${
   invoice.shippingBy && invoice.shippingBy !== 'none'

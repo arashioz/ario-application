@@ -1,4 +1,4 @@
-import { PurchaseInvoice, CashTransaction, SupplierDebt, Product } from '../models';
+import { PurchaseInvoice, CashTransaction, SupplierDebt, Product, Category } from '../models';
 import {
   upsertProduct,
   validateTransactionDate,
@@ -39,20 +39,29 @@ export async function createPurchaseInvoice(data: {
   validateTransactionDate(date);
 
   const { invoiceItems, totalAmount, totalKg, productSnapshots } = await buildPurchaseItems(data.items);
-  const invoiceNumber = await generateInvoiceNumber('PUR');
   const paidNow = data.paidNow === true;
 
-  const invoice = await PurchaseInvoice.create({
-    invoiceNumber,
-    supplier: data.supplier,
-    items: invoiceItems,
-    totalAmount,
-    totalKg,
-    notes: data.notes,
-    date,
-    paidNow,
-    createdBy: data.createdBy,
-  });
+  let invoice: InstanceType<typeof PurchaseInvoice> | null = null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      invoice = await PurchaseInvoice.create({
+        invoiceNumber: await generateInvoiceNumber('PUR'),
+        supplier: data.supplier,
+        items: invoiceItems,
+        totalAmount,
+        totalKg,
+        notes: data.notes,
+        date,
+        paidNow,
+        createdBy: data.createdBy,
+      });
+      break;
+    } catch (err: unknown) {
+      const code = (err as { code?: number })?.code;
+      if (code !== 11000 || attempt === 4) throw err;
+    }
+  }
+  if (!invoice) throw new Error('ثبت فاکتور خرید ناموفق بود');
 
   await applyPurchaseMoney(invoice, paidNow, totalAmount, date);
 
@@ -121,7 +130,19 @@ async function buildPurchaseItems(items: PurchaseItemInput[]) {
   const invoiceItems = [];
   let totalAmount = 0;
   let totalKg = 0;
-  const productSnapshots: Array<{ name: string; avgCostPerKg: number; stockKg: number; isNew: boolean }> = [];
+  const productSnapshots: Array<{
+    productId: string;
+    name: string;
+    avgCostPerKg: number;
+    lastPurchasePricePerKg: number;
+    stockKg: number;
+    isNew: boolean;
+    imageUrl?: string;
+    categoryId?: string;
+    profitRetail?: number;
+    profitSupermarket?: number;
+    profitWholesale?: number;
+  }> = [];
 
   for (const item of items) {
     let categoryId = item.categoryId;
@@ -187,11 +208,19 @@ async function buildPurchaseItems(items: PurchaseItemInput[]) {
       totalPrice,
     });
 
+    const catDoc = categoryId ? await Category.findById(categoryId) : null;
     productSnapshots.push({
+      productId: product._id.toString(),
       name: product.name,
       avgCostPerKg: product.avgCostPerKg,
+      lastPurchasePricePerKg: product.lastPurchasePricePerKg || 0,
       stockKg: product.stockKg,
       isNew,
+      imageUrl: product.imageUrl,
+      categoryId: categoryId || undefined,
+      profitRetail: catDoc?.profitRetail ?? catDoc?.profitPercent,
+      profitSupermarket: catDoc?.profitSupermarket,
+      profitWholesale: catDoc?.profitWholesale,
     });
   }
 
