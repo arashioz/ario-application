@@ -14,8 +14,8 @@ services:
       test: ['CMD', 'mongo', '--quiet', '--eval', "db.adminCommand('ping').ok"]
       interval: 10s
       timeout: 5s
-      retries: 8
-      start_period: 20s
+      retries: 10
+      start_period: 40s
     networks:
       - ario
 

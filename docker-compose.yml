@@ -11,7 +11,8 @@
 
 services:
   mongodb:
-    image: mongo:7
+    # 4.4: روی CPU بدون AVX کار می‌کند (mongo 5+ معمولاً کرش می‌کند)
+    image: mongo:4.4
     container_name: ario-mongodb
     restart: unless-stopped
     # روی سرور پورت را به بیرون باز نکن — فقط شبکه داخلی
@@ -24,8 +25,8 @@ services:
       test: ['CMD', 'mongo', '--quiet', '--eval', "db.adminCommand('ping').ok"]
       interval: 10s
       timeout: 5s
-      retries: 8
-      start_period: 20s
+      retries: 10
+      start_period: 40s
     networks:
       - ario
 
