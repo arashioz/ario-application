@@ -59,10 +59,11 @@ chmod +x deploy/*.sh
 
 اگر HTTPS نمی‌خواهی: `SSL_MODE=off` و آدرس `http://IP/`
 
-> **CPU بدون AVX:** تصویر Mongo روی `mongo:4.4` است. اگر قبلاً `mongo:7` را اجرا کرده‌ای و دیتابیس خالی/خراب است:
+> **MongoDB 7** نیاز به CPU با AVX دارد. اگر در لاگ `Illegal instruction` دیدی، VPS باید CPU جدیدتر داشته باشد.
+> اگر از نسخهٔ قدیمی‌تر ارتقا می‌دهی، یک‌بار volume را پاک کن:
 > ```bash
-> docker compose -f docker-compose.prod.yml --env-file .env.prod down
-> docker volume rm ario-application_ario_mongo_data   # نام volume را با docker volume ls چک کن
+> docker compose --env-file .env.prod down
+> docker volume rm $(docker volume ls -q | grep mongo)
 > ./deploy/up.sh
 > ```
 

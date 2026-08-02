@@ -33,9 +33,9 @@ if [[ -z "${DOMAIN:-}" || "$DOMAIN" == "YOUR.SERVER.IP" || "$DOMAIN" == "localho
   fi
 fi
 
-# volume خراب mongo7؟
+# اگر قبلاً mongo:4.4 بوده، volume با mongo:7 ناسازگار است
 if docker volume ls -q | grep -q mongo; then
-  echo "==> اگر Mongo قبلاً با نسخه ۷ کرش کرده، یک‌بار:"
+  echo "==> اگر mongodb unhealthy شد (ارتقا از ۴.۴)، یک‌بار:"
   echo "    docker compose --env-file .env.prod down"
   echo "    docker volume rm \$(docker volume ls -q | grep mongo | head -1)"
 fi

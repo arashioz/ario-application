@@ -1,5 +1,5 @@
 # آریو — استک کامل سرور
-# MongoDB 4.4 (بدون AVX) + Backend + Nginx (HTTPS روی IP)
+# MongoDB 7 + Backend + Nginx (HTTPS روی IP)
 #
 # روی سرور:
 #   cp .env.prod.example .env.prod
@@ -11,8 +11,7 @@
 
 services:
   mongodb:
-    # 4.4: روی CPU بدون AVX کار می‌کند (mongo 5+ معمولاً کرش می‌کند)
-    image: mongo:4.4
+    image: mongo:7
     container_name: ario-mongodb
     restart: unless-stopped
     # روی سرور پورت را به بیرون باز نکن — فقط شبکه داخلی
@@ -22,7 +21,8 @@ services:
     environment:
       MONGO_INITDB_DATABASE: ario-shop
     healthcheck:
-      test: ['CMD', 'mongo', '--quiet', '--eval', "db.adminCommand('ping').ok"]
+      # mongo:5+ فقط mongosh دارد (دستور mongo حذف شده)
+      test: ['CMD', 'mongosh', '--quiet', '--eval', "db.adminCommand('ping').ok"]
       interval: 10s
       timeout: 5s
       retries: 10

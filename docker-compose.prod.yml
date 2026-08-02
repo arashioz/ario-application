@@ -3,7 +3,7 @@
 
 services:
   mongodb:
-    image: mongo:4.4
+    image: mongo:7
     container_name: ario-mongodb
     restart: unless-stopped
     volumes:
@@ -11,7 +11,7 @@ services:
     environment:
       MONGO_INITDB_DATABASE: ario-shop
     healthcheck:
-      test: ['CMD', 'mongo', '--quiet', '--eval', "db.adminCommand('ping').ok"]
+      test: ['CMD', 'mongosh', '--quiet', '--eval', "db.adminCommand('ping').ok"]
       interval: 10s
       timeout: 5s
       retries: 10
