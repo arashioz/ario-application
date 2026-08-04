@@ -6,7 +6,7 @@ import {
   updateBalances,
   findProductByName,
   resolveQty,
-  resolvePrices,
+  resolveLineAmount,
   resolveProductCost,
   getOrCreateSettings,
   QtyUnit,
@@ -14,7 +14,7 @@ import {
   CostBasis,
 } from './productService';
 import { PaymentMethod, PriceTier, SaleStatus } from '../models/SaleInvoice';
-import { createCustomer, normalizePhoneDigits, findCustomerByPhone } from './customerService';
+import { createCustomer, normalizePhoneDigits, findCustomerByPhone, getCustomerPreferredTier } from './customerService';
 
 interface SaleItemInput {
   productId?: string;
@@ -66,14 +66,20 @@ async function buildSaleItems(
     );
     let unitPricePerKg = pricing.salePricePerKg;
     let unitPricePerPackage = pricing.salePricePerPackage;
+    let gross = Math.round(unitPricePerKg * qtyKg);
 
     if (item.unitPrice != null) {
-      const resolved = resolvePrices({ unit, unitPrice: item.unitPrice, kgPerPackage });
-      unitPricePerKg = resolved.unitPricePerKg;
+      const resolved = resolveLineAmount({
+        unit,
+        unitPrice: item.unitPrice,
+        qtyInput,
+        kgPerPackage,
+      });
+      unitPricePerKg = Math.round(resolved.unitPricePerKg);
       unitPricePerPackage = resolved.unitPricePerPackage;
+      gross = resolved.totalPrice;
     }
 
-    const gross = Math.round(unitPricePerKg * qtyKg);
     const lineDisc = Math.max(0, Math.min(Math.round(item.discount || 0), gross));
     const totalPrice = gross - lineDisc;
     const unitCost = resolveProductCost(product, costBasis);
@@ -204,6 +210,14 @@ export async function createSaleInvoice(data: {
     !data.customerName?.trim()
   ) {
     throw new Error('برای فروش سوپرمارکت یا عمده، انتخاب / ثبت مشتری الزامی است');
+  }
+
+  // قانون: مشتری عمده → فاکتور تکی مجاز نیست
+  if (priceTier === 'retail' && data.customerId) {
+    const preferred = await getCustomerPreferredTier(data.customerId);
+    if (preferred === 'wholesale') {
+      throw new Error('این مشتری عمده است — صدور فاکتور تکی مجاز نیست');
+    }
   }
 
   const date = data.date ? new Date(data.date) : new Date();
@@ -640,6 +654,15 @@ export async function updateSaleInvoice(
   if (data.dueDate) invoice.dueDate = new Date(data.dueDate);
   const priceTier: PriceTier = data.priceTier || invoice.priceTier || 'retail';
 
+  // قانون: مشتری عمده → فاکتور تکی مجاز نیست
+  const custId = invoice.customerId?.toString() || undefined;
+  if (priceTier === 'retail' && custId) {
+    const preferred = await getCustomerPreferredTier(custId);
+    if (preferred === 'wholesale') {
+      throw new Error('این مشتری عمده است — صدور فاکتور تکی مجاز نیست');
+    }
+  }
+
   const checkStock = wasApplied || invoice.status !== 'pending';
   const settings = await getOrCreateSettings();
   const costBasis: CostBasis =
@@ -819,7 +842,7 @@ ${
 <div>تخفیف فاکتور (${modeLabel}): ${(invoice.discount || 0).toLocaleString('fa-IR')} تومان</div>
 ${
   invoice.appliedOffer
-    ? `<div class="ship" style="background:#fff7ed;border:1px solid #fdba74"><b>آفر تخفیف:</b> در ${invoice.appliedOffer} برده</div>`
+    ? `<div class="ship" style="background:#fff7ed;border:1px solid #fdba74"><b>طرح / آفر:</b> ${invoice.appliedOffer}</div>`
     : ''
 }
 <div class="total">مبلغ نهایی: ${invoice.totalAmount.toLocaleString('fa-IR')} تومان</div>

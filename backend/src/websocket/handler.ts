@@ -2,7 +2,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { Server } from 'http';
 import { MutationLog } from '../models';
 import { getSession, login, logout, listUsers, listMarketers, createUser } from '../services/authService';
-import { getDashboard, getPeriodSummary, updateShopSettings, listDebtors } from '../services/dashboardService';
+import { getDashboard, getPeriodSummary, updateShopSettings, listDebtors, getProductAnalytics } from '../services/dashboardService';
 import {
   listProducts,
   getCategories,
@@ -17,6 +17,7 @@ import {
 import { createPurchaseInvoice, listPurchaseInvoices, deletePurchaseInvoice, updatePurchaseInvoice } from '../services/purchaseService';
 import { createSaleInvoice, listSaleInvoices, recordDebtPayment, approveSale, shipSale, cancelSale, getSalePdfHtml, deleteSaleInvoice, updateSaleInvoice } from '../services/saleService';
 import { createExpense, recordCardDeposit, listExpenses, listCardDeposits, deleteExpense, deleteCardDeposit, deleteCompanyPayment, listCashTransactions } from '../services/expenseService';
+import { wipeDevData, listWipeSections, getMongoCompassHint } from '../services/devWipeService';
 import { createCustomer, listCustomers, getCustomer, getCustomerInvoices, updateCustomer, getCustomerSuggestedPricing, quickFindCustomer, getCustomerCrmInsights, listCustomerDirectory, getCustomersMap } from '../services/customerService';
 import {
   createCompanyPayment,
@@ -244,8 +245,17 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
     }
 
     case 'settings.get': {
-      await requireAuth(ws, msg);
-      return { type: 'settings.get', payload: await getSettings() };
+      const user = await requireAuth(ws, msg);
+      const settings = await getSettings();
+      const base =
+        settings && typeof (settings as { toObject?: () => unknown }).toObject === 'function'
+          ? (settings as { toObject: () => Record<string, unknown> }).toObject()
+          : settings;
+      const payload =
+        user.role === 'admin'
+          ? { ...(base as object), mongoUriHint: getMongoCompassHint() }
+          : base;
+      return { type: 'settings.get', payload };
     }
 
     case 'settings.update': {
@@ -274,14 +284,51 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
         platformMinOrderKg: p.platformMinOrderKg as number | undefined,
         platformCities: p.platformCities as string | undefined,
         costBasis: p.costBasis as 'weighted' | 'last' | undefined,
+        mongoCompassUri: p.mongoCompassUri as string | undefined,
+        bankCards: p.bankCards as
+          | Array<{ label: string; cardNumber: string; accountHolder?: string; bankName?: string }>
+          | undefined,
+        goldenAutoEnabled: p.goldenAutoEnabled as boolean | undefined,
+        goldenMinKg: p.goldenMinKg as number | undefined,
+        goldenSuggestGiftName: p.goldenSuggestGiftName as string | undefined,
+        goldenSuggestGiftQty: p.goldenSuggestGiftQty as number | undefined,
+        goldenSuggestDiscountPercent: p.goldenSuggestDiscountPercent as number | undefined,
       });
       notifyDataChange('settings', 'update', result);
       return { type: 'settings.update', payload: result };
     }
 
+    case 'dev.wipe.sections': {
+      const user = await requireAuth(ws, msg);
+      requireAdmin(user);
+      return { type: 'dev.wipe.sections', payload: { sections: listWipeSections() } };
+    }
+
+    case 'dev.wipe': {
+      const user = await requireAuth(ws, msg);
+      requireAdmin(user);
+      const sections = Array.isArray(p.sections) ? (p.sections as string[]) : [];
+      const result = await wipeDevData(
+        p.password as string | undefined,
+        sections as Parameters<typeof wipeDevData>[1]
+      );
+      notifyDataChange('dev', 'wipe', result);
+      return { type: 'dev.wipe', payload: result };
+    }
+
     case 'product.list': {
       await requireAuth(ws, msg);
       return { type: 'product.list', payload: await listProducts(p.search as string | undefined) };
+    }
+
+    case 'product.analytics': {
+      await requireAuth(ws, msg);
+      const from = p.from ? new Date(String(p.from)) : undefined;
+      const to = p.to ? new Date(String(p.to)) : undefined;
+      return {
+        type: 'product.analytics',
+        payload: await getProductAnalytics(String(p.id || p.productId), { from, to }),
+      };
     }
 
     case 'product.update': {
@@ -940,6 +987,7 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
         description: p.description as string | undefined,
         active: p.active !== false,
         forMarketers: p.forMarketers !== false,
+        targetLoyaltyTiers: p.targetLoyaltyTiers as never,
         startDate: p.startDate ? new Date(String(p.startDate)) : undefined,
         endDate: p.endDate ? new Date(String(p.endDate)) : undefined,
         rules: p.rules as never,
@@ -957,6 +1005,7 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
         description: p.description as string | undefined,
         active: p.active as boolean | undefined,
         forMarketers: p.forMarketers as boolean | undefined,
+        targetLoyaltyTiers: p.targetLoyaltyTiers as never,
         startDate: p.startDate ? new Date(String(p.startDate)) : undefined,
         endDate: p.endDate ? new Date(String(p.endDate)) : undefined,
         rules: p.rules as never,

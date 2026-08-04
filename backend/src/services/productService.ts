@@ -26,12 +26,52 @@ export function resolvePrices(input: {
   if (input.unit === 'package') {
     return {
       unitPricePerPackage: input.unitPrice,
-      unitPricePerKg: kgPer > 0 ? Math.round(input.unitPrice / kgPer) : input.unitPrice,
+      // بدون گرد کردن میانی — جمع قلم جداگانه از قیمت واردشده حساب می‌شود
+      unitPricePerKg: kgPer > 0 ? input.unitPrice / kgPer : input.unitPrice,
     };
   }
   return {
     unitPricePerKg: input.unitPrice,
     unitPricePerPackage: Math.round(input.unitPrice * kgPer),
+  };
+}
+
+/** جمع دقیق یک قلم — جلوگیری از ±۱ تومان به‌خاطر round(قیمت÷کیلو)×کیلو */
+export function resolveLineAmount(input: {
+  unit: QtyUnit;
+  unitPrice: number;
+  qtyInput: number;
+  kgPerPackage: number;
+}): {
+  qtyKg: number;
+  qtyPackages: number;
+  unitPricePerKg: number;
+  unitPricePerPackage: number;
+  totalPrice: number;
+} {
+  const kgPer = input.kgPerPackage || 5;
+  const { qtyKg, qtyPackages } = resolveQty({
+    unit: input.unit,
+    qtyInput: input.qtyInput,
+    kgPerPackage: kgPer,
+  });
+  if (input.unit === 'package') {
+    const totalPrice = Math.round(input.unitPrice * qtyPackages);
+    return {
+      qtyKg,
+      qtyPackages,
+      unitPricePerPackage: input.unitPrice,
+      unitPricePerKg: qtyKg > 0 ? totalPrice / qtyKg : 0,
+      totalPrice,
+    };
+  }
+  const totalPrice = Math.round(input.unitPrice * qtyKg);
+  return {
+    qtyKg,
+    qtyPackages,
+    unitPricePerKg: input.unitPrice,
+    unitPricePerPackage: Math.round(input.unitPrice * kgPer),
+    totalPrice,
   };
 }
 
@@ -258,11 +298,10 @@ export function resolveProductCost(
   },
   costBasis: CostBasis = 'last'
 ): number {
-  if (costBasis === 'last') {
-    const last = product.lastPurchasePricePerKg || 0;
-    if (last > 0) return last;
-  }
-  return product.avgCostPerKg ?? product.purchasePrice ?? 0;
+  const avg = product.avgCostPerKg ?? product.purchasePrice ?? 0;
+  const last = product.lastPurchasePricePerKg || product.purchasePrice || 0;
+  if (costBasis === 'weighted') return avg || last;
+  return last || avg;
 }
 
 export async function calculateSalePrice(

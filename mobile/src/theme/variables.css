@@ -220,6 +220,15 @@ body {
   border-radius: 12px;
   background: rgba(255,255,255,0.1);
   font-size: 13px;
+  width: 100%;
+  border: none;
+  color: inherit;
+  text-align: right;
+  cursor: pointer;
+  font-family: inherit;
+}
+.wh-prod:active {
+  background: rgba(255,255,255,0.2);
 }
 .wh-prod.low {
   background: rgba(251, 191, 36, 0.18);
@@ -908,6 +917,226 @@ body {
 .more-item h3 { font-size: 13.5px; font-weight: 700; margin: 0; }
 .more-item p { font-size: 11.5px; color: var(--ios-label); margin: 2px 0 0; }
 
+/* More page — grouped tiles */
+.more-page {
+  padding-bottom: 28px;
+}
+.more-profile {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: linear-gradient(145deg, #1e3a5f, #2a4a73);
+  color: #fff;
+  border-radius: 18px;
+  padding: 14px 14px 14px 12px;
+  margin-bottom: 12px;
+  box-shadow: 0 8px 24px rgba(30, 58, 95, 0.22);
+}
+.more-avatar {
+  width: 46px;
+  height: 46px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.18);
+  display: grid;
+  place-items: center;
+  font-weight: 800;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+.more-profile-body {
+  flex: 1;
+  min-width: 0;
+}
+.more-name {
+  display: block;
+  font-size: 16px;
+  font-weight: 800;
+}
+.more-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+  align-items: center;
+}
+.more-role-pill,
+.more-status,
+.more-queue {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+}
+.more-status.on { background: rgba(52, 199, 89, 0.25); }
+.more-status.off { background: rgba(255, 69, 58, 0.25); }
+.more-logout {
+  appearance: none;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  border-radius: 12px;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 700;
+}
+.more-flags {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+.more-flag-btn {
+  flex: 1;
+  min-width: 120px;
+  border: 1px solid rgba(30, 58, 95, 0.12);
+  background: #e8eef6;
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #1e3a5f;
+  cursor: pointer;
+}
+.more-flag-btn.on {
+  background: #e8f7ef;
+  border-color: #34c759;
+  color: #0b6b2f;
+}
+.more-flag-btn.off {
+  background: #f2f2f7;
+  border-color: #c7c7cc;
+  color: #8e8e93;
+}
+.more-flag-btn:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+.more-group {
+  margin-bottom: 16px;
+}
+.more-group-title {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 800;
+  color: #6b7c93;
+  letter-spacing: 0.02em;
+}
+.more-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.more-tile {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 16px;
+  background: #fff;
+  border: 1px solid rgba(30, 58, 95, 0.08);
+  text-decoration: none;
+  color: inherit;
+  box-shadow: 0 1px 2px rgba(15, 39, 68, 0.04);
+}
+.more-tile-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: #e8eef6;
+  color: #1e3a5f;
+  display: grid;
+  place-items: center;
+  font-size: 20px;
+  flex-shrink: 0;
+}
+.more-tile-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.more-tile-label {
+  font-size: 14px;
+  font-weight: 750;
+  color: #12263f;
+}
+.more-tile-desc {
+  font-size: 11.5px;
+  color: #6b7c93;
+}
+.more-tile-chevron {
+  color: #a8b4c4;
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+/* مربعی — شبکه ۴ ستونه */
+.more-square-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+.more-square {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 4px;
+  aspect-ratio: 1;
+  padding: 8px 4px;
+  border-radius: 14px;
+  background: #fff;
+  border: 1px solid rgba(30, 58, 95, 0.08);
+  text-decoration: none;
+  color: inherit;
+  box-shadow: 0 2px 8px rgba(15, 39, 68, 0.05);
+}
+.more-square-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: #e8eef6;
+  color: #1e3a5f;
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+}
+.more-square-label {
+  font-size: 11px;
+  font-weight: 800;
+  color: #12263f;
+  line-height: 1.2;
+}
+.more-square-desc {
+  font-size: 9px;
+  color: #6b7c93;
+  line-height: 1.15;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+@media (max-width: 380px) {
+  .more-square-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.wipe-card code {
+  background: #f2f2f7;
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.wipe-item {
+  --min-height: 44px;
+}
+
 .profit-row {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
@@ -1560,6 +1789,12 @@ body {
 .sale-page-navy .sale-tier-btn.active {
   background: #1e3a5f;
 }
+.sale-tier-btn.locked,
+.sale-tier-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  text-decoration: line-through;
+}
 
 .cart-item-title {
   display: flex;
@@ -1814,4 +2049,164 @@ body {
   border-radius: 8px;
   border: 1px solid rgba(30, 58, 95, 0.25);
   font-weight: 700;
+}
+
+.cart-item-compact {
+  cursor: pointer;
+  padding: 10px 12px;
+}
+.cart-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.cart-line-total {
+  font-size: 13px;
+  color: #1e3a5f;
+  white-space: nowrap;
+}
+.prod-modal-body {
+  padding-bottom: 24px;
+}
+.prod-modal-head {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 14px;
+}
+.prod-modal-thumb {
+  width: 64px;
+  height: 64px;
+  border-radius: 14px;
+  object-fit: cover;
+  flex-shrink: 0;
+  background: #e8eef6;
+}
+.prod-modal-thumb.ph {
+  display: grid;
+  place-items: center;
+  font-size: 22px;
+  font-weight: 800;
+  color: #1e3a5f;
+}
+.prod-modal-name {
+  font-size: 17px;
+  display: block;
+  margin-bottom: 4px;
+}
+.prod-modal-cust {
+  background: #f5f7fb;
+  border-radius: 14px;
+  padding: 10px;
+  margin-bottom: 10px;
+  border: 1px solid rgba(30, 58, 95, 0.08);
+}
+.product-pick-modal {
+  --border-radius: 18px 18px 0 0;
+}
+
+/* آنالیز محصول */
+.pa-page .pa-hero {
+  margin-bottom: 12px;
+}
+.pa-title {
+  margin: 2px 0 6px;
+  font-size: 1.25rem;
+  font-weight: 800;
+  color: #12263f;
+}
+.pa-hero-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+.pa-stock {
+  font-size: 13px;
+  color: #6b7c93;
+}
+.pa-cost {
+  text-align: left;
+  font-size: 12px;
+}
+.pa-segment {
+  margin: 8px 0 12px;
+}
+.pa-detail .pa-row,
+.pa-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: baseline;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(30, 58, 95, 0.06);
+  font-size: 13px;
+}
+.pa-row:last-child {
+  border-bottom: none;
+}
+.pa-cust,
+.pa-recent {
+  margin-bottom: 8px;
+  width: 100%;
+  border: none;
+  text-align: right;
+  font-family: inherit;
+  cursor: pointer;
+  color: inherit;
+  display: block;
+}
+.pa-cust-nums {
+  text-align: left;
+  font-size: 12px;
+  font-weight: 700;
+}
+.pa-trend-row {
+  display: grid;
+  grid-template-columns: 48px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+.pa-trend-bar-wrap {
+  height: 10px;
+  background: #e8eef6;
+  border-radius: 999px;
+  overflow: hidden;
+}
+.pa-trend-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #1e3a5f, #3b82f6);
+  border-radius: 999px;
+}
+.pa-trend-val {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* امتیاز فاکتور طلایی */
+.golden-perks {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed rgba(245, 158, 11, 0.45);
+}
+.golden-perks-title {
+  font-size: 12px;
+  font-weight: 800;
+  color: #b45309;
+  margin-bottom: 6px;
+}
+.golden-perk-btn {
+  --background: #fff8eb;
+  --color: #92400e;
+  --border-radius: 12px;
+  font-weight: 700;
+  font-size: 12px;
+}
+.golden-perk-btn.special {
+  --background: #f59e0b;
+  --color: #fff;
 }

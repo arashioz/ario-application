@@ -18,7 +18,6 @@ import {
   chatbubbleEllipsesOutline,
   gridOutline,
   fileTrayFullOutline,
-  navigateOutline,
   bicycleOutline,
 } from 'ionicons/icons';
 
@@ -51,6 +50,7 @@ import PartnerApprovals from './pages/PartnerApprovals';
 import PlatformSettings from './pages/PlatformSettings';
 import VolumeOrders from './pages/VolumeOrders';
 import MyWallet from './pages/MyWallet';
+import ProductAnalytics from './pages/ProductAnalytics';
 import { wsClient } from './api/ws';
 
 import '@ionic/react/css/core.css';
@@ -107,13 +107,21 @@ const AuthedApp: React.FC = () => {
 
   useEffect(() => {
     if (!user) return;
-    void wsClient
-      .request<{ driverPanelEnabled?: boolean; marketerPanelEnabled?: boolean }>('settings.get')
-      .then((s) => {
-        setDriverPanelEnabled(s.driverPanelEnabled !== false);
-        setMarketerPanelEnabled(s.marketerPanelEnabled !== false);
-      })
-      .catch(() => undefined);
+    const loadFlags = () => {
+      void wsClient
+        .request<{ driverPanelEnabled?: boolean; marketerPanelEnabled?: boolean }>('settings.get')
+        .then((s) => {
+          setDriverPanelEnabled(s.driverPanelEnabled !== false);
+          setMarketerPanelEnabled(s.marketerPanelEnabled !== false);
+        })
+        .catch(() => undefined);
+    };
+    loadFlags();
+    const unsub = wsClient.onEvent('data_changed', (payload: unknown) => {
+      const p = payload as { entity?: string };
+      if (p?.entity === 'settings') loadFlags();
+    });
+    return unsub;
   }, [user]);
 
   if (!user) return <Login />;
@@ -149,6 +157,7 @@ const AuthedApp: React.FC = () => {
         <Route exact path="/platform-settings" component={PlatformSettings} />
         <Route exact path="/volume-orders" component={VolumeOrders} />
         <Route exact path="/my-wallet" component={MyWallet} />
+        <Route exact path="/product-analytics/:id" component={ProductAnalytics} />
         <Route exact path="/more" component={More} />
         <Route exact path="/invoices" component={Invoices} />
         <Route exact path="/customers-map" component={CustomersMap} />
@@ -181,12 +190,6 @@ const AuthedApp: React.FC = () => {
           <IonIcon icon={fileTrayFullOutline} />
           <IonLabel>سفارش</IonLabel>
         </IonTabButton>
-        {isAdmin && (
-          <IonTabButton tab="drivers-map" href="/drivers-map">
-            <IonIcon icon={navigateOutline} />
-            <IonLabel>نقشه</IonLabel>
-          </IonTabButton>
-        )}
         {!isAdmin && (
           <IonTabButton tab="chat" href="/chat">
             <IonIcon icon={chatbubbleEllipsesOutline} />

@@ -32,6 +32,7 @@ import {
 import { wsClient } from '../api/ws';
 import { useAuth } from '../auth/AuthContext';
 import { formatKg, formatToman, formatRial, formatDate } from '../utils/format';
+import { useHistory } from 'react-router-dom';
 
 interface InvProduct {
   id: string;
@@ -112,6 +113,19 @@ interface Dash {
       lastDate: string;
       suggestedDiscount?: number;
       suggestReason?: string;
+      preferredTier?: string;
+    }>;
+    followUpDue?: Array<{
+      customerId: string;
+      name: string;
+      phone?: string;
+      lastAmount: number;
+      lastKg?: number;
+      lastDate: string;
+      suggestedDiscount?: number;
+      suggestReason?: string;
+      preferredTier?: string;
+      daysSince?: number;
     }>;
   };
   debtors: {
@@ -123,6 +137,7 @@ interface Dash {
 
 const Dashboard: React.FC = () => {
   const { user, isAdmin, logout, online, queueLen } = useAuth();
+  const history = useHistory();
   const [data, setData] = useState<Dash | null>(null);
   const [error, setError] = useState('');
 
@@ -232,13 +247,15 @@ const Dashboard: React.FC = () => {
                 {(inv?.products || []).length > 0 && (
                   <div className="wh-products">
                     {(inv?.products || []).map((p) => (
-                      <div
+                      <button
                         key={p.id}
+                        type="button"
                         className={`wh-prod${p.stockKg <= 0 ? ' empty' : p.stockKg < 200 ? ' low' : ''}`}
+                        onClick={() => history.push(`/product-analytics/${p.id}`)}
                       >
                         <span className="wh-prod-name">{p.name}</span>
                         <span className="wh-prod-kg">{formatKg(p.stockKg)}</span>
-                      </div>
+                      </button>
                     ))}
                   </div>
                 )}
@@ -374,29 +391,50 @@ const Dashboard: React.FC = () => {
                 </div>
               </div>
 
-              <div className="ios-section-title">پیگیری مشتری (همین روز ماه قبل)</div>
+              <div className="ios-section-title">پیگیری مشتری</div>
               <div className="ios-glass-card">
-                {(data.crm?.followUpSameDayLastMonth || []).length === 0 && (
-                  <p className="hint">امروز فالوآپی نیست</p>
-                )}
-                {(data.crm?.followUpSameDayLastMonth || []).slice(0, 5).map((c) => (
-                  <div key={c.customerId} className="follow-card">
-                    <div className="ios-row">
-                      <strong>{c.name}</strong>
-                      <span className="ios-caption">{c.phone || ''}</span>
+                {(() => {
+                  const same = data.crm?.followUpSameDayLastMonth || [];
+                  const due = data.crm?.followUpDue || [];
+                  const list = [
+                    ...same.map((c) => ({ ...c, tag: 'همین روز ماه قبل' })),
+                    ...due.map((c) => ({
+                      ...c,
+                      tag: c.daysSince ? `${c.daysSince} روز گذشته` : 'موعد فالوآپ',
+                    })),
+                  ];
+                  if (!list.length) {
+                    return <p className="hint">امروز فالوآپی نیست</p>;
+                  }
+                  return list.slice(0, 8).map((c) => (
+                    <div key={`${c.customerId}-${c.tag}`} className="follow-card">
+                      <div className="ios-row">
+                        <strong>{c.name}</strong>
+                        <span className="ios-caption">{c.phone || ''}</span>
+                      </div>
+                      <div className="ios-caption">{c.tag}</div>
+                      <div className="ios-caption">
+                        خرید قبلی {formatToman(c.lastAmount)}
+                        {c.lastKg != null ? ` · ${formatKg(c.lastKg)}` : ''} · {formatDate(c.lastDate)}
+                      </div>
+                      <p className="hint convert-hint">
+                        {c.suggestReason || 'پیشنهاد'} · تخفیف {formatToman(c.suggestedDiscount || 0)}
+                      </p>
+                      <IonButton
+                        size="small"
+                        onClick={() =>
+                          history.push('/sale', {
+                            followUpCustomerId: c.customerId,
+                            followUpDiscount: c.suggestedDiscount || 0,
+                            followUpTier: c.preferredTier,
+                          })
+                        }
+                      >
+                        فاکتور پیشنهادی
+                      </IonButton>
                     </div>
-                    <div className="ios-caption">
-                      خرید قبلی {formatToman(c.lastAmount)}
-                      {c.lastKg != null ? ` · ${formatKg(c.lastKg)}` : ''} · {formatDate(c.lastDate)}
-                    </div>
-                    <p className="hint convert-hint">
-                      {c.suggestReason || 'پیشنهاد'} · تخفیف {formatToman(c.suggestedDiscount || 0)}
-                    </p>
-                    <IonButton size="small" routerLink="/sale">
-                      فاکتور پیشنهادی
-                    </IonButton>
-                  </div>
-                ))}
+                  ));
+                })()}
               </div>
 
               {data.month && (

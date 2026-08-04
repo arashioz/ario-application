@@ -25,7 +25,14 @@ import { wsClient } from '../api/ws';
 import { MoneyInput } from '../components/MoneyInput';
 import { parseAmount, formatMoneyInput, sanitizeNumberInput } from '../utils/format';
 
-type RuleType = 'bundle' | 'volume_kg' | 'volume_amount' | 'payment_cash' | 'payment_card' | 'loyalty';
+type RuleType =
+  | 'bundle'
+  | 'volume_kg'
+  | 'volume_amount'
+  | 'payment_cash'
+  | 'payment_card'
+  | 'loyalty'
+  | 'free_gift';
 
 interface RuleDraft {
   type: RuleType;
@@ -39,6 +46,11 @@ interface RuleDraft {
   bundleAQty: string;
   bundleBName: string;
   bundleBQty: string;
+  /** اشانتیون: خرید X → هدیه Y */
+  triggerName: string;
+  triggerQty: string;
+  giftName: string;
+  giftQty: string;
 }
 
 interface SuggestLine {
@@ -53,14 +65,15 @@ interface CampaignRow {
   description?: string;
   active: boolean;
   forMarketers: boolean;
+  targetLoyaltyTiers?: Array<'gold' | 'silver' | 'bronze' | 'new'>;
   rules?: Array<{ type: string; label?: string; discountPercent: number }>;
   suggestedInvoice?: { title?: string; note?: string; lines?: Array<{ productName: string; qty: number; unit: string }> };
 }
 
 const emptyRule = (): RuleDraft => ({
-  type: 'bundle',
+  type: 'free_gift',
   label: '',
-  discountPercent: '5',
+  discountPercent: '0',
   minKg: '500',
   minAmount: '10000000',
   minInvoiceCount: '3',
@@ -69,9 +82,14 @@ const emptyRule = (): RuleDraft => ({
   bundleAQty: '20',
   bundleBName: 'کارتن',
   bundleBQty: '2',
+  triggerName: 'کارتن',
+  triggerQty: '10',
+  giftName: 'کارتن',
+  giftQty: '1',
 });
 
 const RULE_TYPES: Array<{ value: RuleType; label: string }> = [
+  { value: 'free_gift', label: 'اشانتیون (مثلاً ۱۰ کارتن → ۱ رایگان)' },
   { value: 'bundle', label: 'پکیج (مثلاً ۲۰ نایلون + ۲ کارتن)' },
   { value: 'volume_kg', label: 'خرید حجمی (کیلو)' },
   { value: 'volume_amount', label: 'خرید مبلغی' },
@@ -80,12 +98,71 @@ const RULE_TYPES: Array<{ value: RuleType; label: string }> = [
   { value: 'loyalty', label: 'مشتری خوب / وفادار' },
 ];
 
+const MARKETING_PRESETS: Array<{
+  name: string;
+  description: string;
+  apply: () => { name: string; description: string; rule: RuleDraft };
+}> = [
+  {
+    name: '۱۰+۱ کارتن',
+    description: '۱۰ کارتن بخر، ۱ اشانتیون',
+    apply: () => ({
+      name: 'جشنواره ۱۰+۱ کارتن',
+      description: 'با خرید ۱۰ کارتن، یک کارتن اشانتیون',
+      rule: {
+        ...emptyRule(),
+        type: 'free_gift',
+        label: 'اشانتیون ۱ کارتن',
+        triggerName: 'کارتن',
+        triggerQty: '10',
+        giftName: 'کارتن',
+        giftQty: '1',
+        discountPercent: '0',
+      },
+    }),
+  },
+  {
+    name: 'تخفیف حجمی',
+    description: 'از ۵۰۰ کیلو ۵٪ تخفیف',
+    apply: () => ({
+      name: 'تخفیف خرید حجمی',
+      description: 'برای سفارش‌های بالای ۵۰۰ کیلو',
+      rule: {
+        ...emptyRule(),
+        type: 'volume_kg',
+        label: 'تخفیف حجمی ۵٪',
+        minKg: '500',
+        discountPercent: '5',
+      },
+    }),
+  },
+  {
+    name: 'پکیج نایلون+کارتن',
+    description: '۲۰ نایلون + ۲ کارتن → تخفیف',
+    apply: () => ({
+      name: 'پکیج ویژه',
+      description: 'خرید همزمان نایلون و کارتن',
+      rule: {
+        ...emptyRule(),
+        type: 'bundle',
+        label: 'پکیج ویژه ۸٪',
+        discountPercent: '8',
+        bundleAName: 'نایلون',
+        bundleAQty: '20',
+        bundleBName: 'کارتن',
+        bundleBQty: '2',
+      },
+    }),
+  },
+];
+
 const Campaigns: React.FC = () => {
   const [list, setList] = useState<CampaignRow[]>([]);
   const [name, setName] = useState('جشنواره فروش');
   const [description, setDescription] = useState('');
   const [active, setActive] = useState(true);
   const [forMarketers, setForMarketers] = useState(true);
+  const [goldOnly, setGoldOnly] = useState(false);
   const [rule, setRule] = useState<RuleDraft>(emptyRule());
   const [suggestTitle, setSuggestTitle] = useState('فاکتور پیشنهادی جشنواره');
   const [suggestNote, setSuggestNote] = useState('');
@@ -139,6 +216,20 @@ const Campaigns: React.FC = () => {
         minInvoiceCount: parseFloat(rule.minInvoiceCount) || undefined,
         minMonthKg: parseFloat(rule.minMonthKg) || undefined,
       };
+    if (rule.type === 'free_gift')
+      return {
+        ...base,
+        discountPercent: percent,
+        label:
+          rule.label ||
+          `اشانتیون: ${rule.triggerQty} ${rule.triggerName} → ${rule.giftQty} ${rule.giftName}`,
+        triggerNameContains: rule.triggerName.trim(),
+        triggerQty: parseFloat(rule.triggerQty) || 0,
+        triggerUnit: 'package' as const,
+        giftProductName: rule.giftName.trim(),
+        giftQty: parseFloat(rule.giftQty) || 1,
+        giftUnit: 'package' as const,
+      };
     return base;
   };
 
@@ -154,6 +245,7 @@ const Campaigns: React.FC = () => {
         description,
         active,
         forMarketers,
+        targetLoyaltyTiers: goldOnly ? ['gold'] : [],
         rules: [buildRulePayload()],
         suggestedInvoice: {
           title: suggestTitle || name,
@@ -169,6 +261,7 @@ const Campaigns: React.FC = () => {
       });
       setToast({ open: true, msg: 'جشنواره ثبت شد — برای بازاریاب‌ها فعال است', color: 'success' });
       setRule(emptyRule());
+      setGoldOnly(false);
       await load();
     } catch (e) {
       setToast({ open: true, msg: e instanceof Error ? e.message : 'خطا', color: 'danger' });
@@ -203,6 +296,26 @@ const Campaigns: React.FC = () => {
             <div className="ios-section-title" style={{ marginTop: 0 }}>
               جشنواره جدید
             </div>
+            <p className="hint">
+              مثل شرکت‌های پخش: اشانتیون کارتن، تخفیف حجمی، پکیج ترکیبی — روی فاکتور فروش خودکار پیشنهاد
+              می‌شود
+            </p>
+            <div className="chip-row" style={{ marginBottom: 8 }}>
+              {MARKETING_PRESETS.map((p) => (
+                <IonChip
+                  key={p.name}
+                  className="ios-chip"
+                  onClick={() => {
+                    const applied = p.apply();
+                    setName(applied.name);
+                    setDescription(applied.description);
+                    setRule(applied.rule);
+                  }}
+                >
+                  {p.name}
+                </IonChip>
+              ))}
+            </div>
             <IonItem>
               <IonLabel position="stacked">نام</IonLabel>
               <IonInput value={name} onIonInput={(e) => setName(e.detail.value || '')} />
@@ -219,6 +332,15 @@ const Campaigns: React.FC = () => {
               <span>نمایش به بازاریاب</span>
               <IonToggle checked={forMarketers} onIonChange={(e) => setForMarketers(e.detail.checked)} />
             </div>
+            <div className="ios-row" style={{ padding: '8px 0' }}>
+              <span>فقط مشتریان طلایی (≥۵ تن/ماه)</span>
+              <IonToggle checked={goldOnly} onIonChange={(e) => setGoldOnly(e.detail.checked)} />
+            </div>
+            {goldOnly && (
+              <p className="hint" style={{ marginTop: 0 }}>
+                این طرح فقط وقتی مشتری طلایی انتخاب شده باشد در فروش پیشنهاد می‌شود
+              </p>
+            )}
 
             <div className="ios-section-title">قانون تخفیف</div>
             <div className="chip-row">
@@ -241,7 +363,9 @@ const Campaigns: React.FC = () => {
               />
             </IonItem>
             <IonItem>
-              <IonLabel position="stacked">درصد تخفیف</IonLabel>
+              <IonLabel position="stacked">
+                {rule.type === 'free_gift' ? 'درصد تخفیف اضافه (اختیاری، معمولاً ۰)' : 'درصد تخفیف'}
+              </IonLabel>
               <IonInput
                 type="text"
                 inputMode="numeric"
@@ -255,6 +379,60 @@ const Campaigns: React.FC = () => {
                 }
               />
             </IonItem>
+
+            {rule.type === 'free_gift' && (
+              <>
+                <IonItem>
+                  <IonLabel position="stacked">اگر مشتری بخرد (نام محصول شامل)</IonLabel>
+                  <IonInput
+                    value={rule.triggerName}
+                    placeholder="مثلاً کارتن"
+                    onIonInput={(e) => setRule({ ...rule, triggerName: e.detail.value || '' })}
+                  />
+                </IonItem>
+                <IonItem>
+                  <IonLabel position="stacked">حداقل تعداد بسته / کارتن</IonLabel>
+                  <IonInput
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    value={rule.triggerQty}
+                    onIonInput={(e) =>
+                      setRule({
+                        ...rule,
+                        triggerQty: sanitizeNumberInput(e.detail.value || ''),
+                      })
+                    }
+                  />
+                </IonItem>
+                <IonItem>
+                  <IonLabel position="stacked">اشانتیون / هدیه (نام محصول)</IonLabel>
+                  <IonInput
+                    value={rule.giftName}
+                    placeholder="مثلاً کارتن"
+                    onIonInput={(e) => setRule({ ...rule, giftName: e.detail.value || '' })}
+                  />
+                </IonItem>
+                <IonItem>
+                  <IonLabel position="stacked">تعداد اشانتیون</IonLabel>
+                  <IonInput
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    value={rule.giftQty}
+                    onIonInput={(e) =>
+                      setRule({
+                        ...rule,
+                        giftQty: sanitizeNumberInput(e.detail.value || ''),
+                      })
+                    }
+                  />
+                </IonItem>
+                <p className="hint convert-hint">
+                  مثال: ۱۰ کارتن بخر → ۱ کارتن رایگان به فاکتور پیشنهاد می‌شود
+                </p>
+              </>
+            )}
 
             {rule.type === 'bundle' && (
               <>
@@ -452,6 +630,7 @@ const Campaigns: React.FC = () => {
                   <div className="ios-caption">
                     {c.active ? 'فعال' : 'خاموش'}
                     {c.forMarketers ? ' · بازاریاب' : ''}
+                    {(c.targetLoyaltyTiers || []).includes('gold') ? ' · فقط طلایی' : ''}
                   </div>
                 </div>
                 <IonButton

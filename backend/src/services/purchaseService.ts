@@ -4,8 +4,7 @@ import {
   validateTransactionDate,
   generateInvoiceNumber,
   updateBalances,
-  resolveQty,
-  resolvePrices,
+  resolveLineAmount,
   getOrCreateCategoryByName,
   findProductByName,
   QtyUnit,
@@ -174,22 +173,30 @@ async function buildPurchaseItems(items: PurchaseItemInput[]) {
     const unit: QtyUnit = item.unit || 'kg';
     const qtyInput = item.qtyInput ?? item.quantity ?? 0;
     const kgPerPackage = item.kgPerPackage || 5;
-    const { qtyKg, qtyPackages } = resolveQty({ unit, qtyInput, kgPerPackage });
-    const { unitPricePerKg, unitPricePerPackage } = resolvePrices({
+    const {
+      qtyKg,
+      qtyPackages,
+      unitPricePerKg,
+      unitPricePerPackage,
+      totalPrice,
+    } = resolveLineAmount({
       unit,
       unitPrice: item.unitPrice,
+      qtyInput,
       kgPerPackage,
     });
+
+    // برای میانگین موزون، قیمت هر کیلو را گرد نگه می‌داریم
+    const costPerKg = Math.round(unitPricePerKg);
 
     const { product, isNew } = await upsertProduct({
       name: item.name,
       categoryId,
-      purchasePricePerKg: unitPricePerKg,
+      purchasePricePerKg: costPerKg,
       quantityKg: qtyKg,
       kgPerPackage,
     });
 
-    const totalPrice = Math.round(unitPricePerKg * qtyKg);
     totalAmount += totalPrice;
     totalKg += qtyKg;
 
@@ -201,10 +208,10 @@ async function buildPurchaseItems(items: PurchaseItemInput[]) {
       qtyKg,
       qtyPackages,
       kgPerPackage,
-      unitPricePerKg,
+      unitPricePerKg: costPerKg,
       unitPricePerPackage,
       quantity: qtyKg,
-      unitPrice: unit === 'kg' ? unitPricePerKg : unitPricePerPackage,
+      unitPrice: unit === 'kg' ? costPerKg : unitPricePerPackage,
       totalPrice,
     });
 

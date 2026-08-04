@@ -372,6 +372,31 @@ function suggestDiscountAmount(
   };
 }
 
+/** نوع غالب مشتری از تاریخچه فاکتورها (برای قانون عمده ≠ تکی) */
+export async function getCustomerPreferredTier(
+  customerId: string
+): Promise<'retail' | 'supermarket' | 'wholesale' | null> {
+  const invoices = await SaleInvoice.find({
+    customerId,
+    status: { $nin: ['cancelled'] },
+  })
+    .sort({ date: -1 })
+    .limit(20)
+    .select('priceTier')
+    .lean();
+
+  if (!invoices.length) return null;
+
+  const tierCount: Record<string, number> = {};
+  for (const inv of invoices) {
+    const t = inv.priceTier || 'retail';
+    tierCount[t] = (tierCount[t] || 0) + 1;
+  }
+  return (Object.entries(tierCount).sort((a, b) => b[1] - a[1])[0]?.[0] ||
+    invoices[0].priceTier ||
+    'retail') as 'retail' | 'supermarket' | 'wholesale';
+}
+
 /** پیشنهاد قیمت بر اساس آخرین فاکتور مشتری یا قیمت دسته */
 export async function getCustomerSuggestedPricing(customerId: string, productId?: string) {
   const invoices = await SaleInvoice.find({
@@ -461,38 +486,67 @@ export async function getCustomerSuggestedPricing(customerId: string, productId?
       date: i.date,
       status: i.status,
       itemCount: i.items.length,
+      items: i.items.map((it) => ({
+        productId: it.productId,
+        productName: it.productName,
+        unit: it.unit,
+        qtyInput: it.qtyInput,
+        qtyKg: it.qtyKg,
+        unitPricePerKg: it.unitPricePerKg,
+        kgPerPackage: it.kgPerPackage,
+      })),
     })),
   };
 }
 
 export async function getCustomerCrmInsights(refDate?: Date) {
   const now = refDate ? new Date(refDate) : new Date();
-  const day = now.getDate();
   const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
   const monthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+  const activeStatuses = { $in: ['approved', 'shipped', 'delivered'] };
 
-  // همان روز ماه قبل
-  const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, day);
+  // همان روز ماه قبل — بدون overflow (۳۱ → آخر ماه قبل)
+  const prevMonthLastDay = new Date(now.getFullYear(), now.getMonth(), 0).getDate();
+  const safeDay = Math.min(now.getDate(), prevMonthLastDay);
+  const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, safeDay);
   const lastMonthStart = startOfDay(lastMonth);
   const lastMonthEnd = endOfDay(lastMonth);
+  const todayStart = startOfDay(now);
+  const todayEnd = endOfDay(now);
 
-  const [weekSales, monthSales, sameDaySales] = await Promise.all([
+  const [weekSales, monthSales, sameDaySales, todaySales, recentForDue] = await Promise.all([
     SaleInvoice.find({
       date: { $gte: weekAgo, $lte: now },
-      status: { $in: ['approved', 'shipped'] },
+      status: activeStatuses,
       customerId: { $ne: null },
     }),
     SaleInvoice.find({
       date: { $gte: monthAgo, $lte: now },
-      status: { $in: ['approved', 'shipped'] },
+      status: activeStatuses,
       customerId: { $ne: null },
     }),
     SaleInvoice.find({
       date: { $gte: lastMonthStart, $lte: lastMonthEnd },
-      status: { $in: ['approved', 'shipped'] },
+      status: activeStatuses,
       customerId: { $ne: null },
     }),
+    SaleInvoice.find({
+      date: { $gte: todayStart, $lte: todayEnd },
+      status: { $in: ['approved', 'shipped', 'delivered', 'pending'] },
+      customerId: { $ne: null },
+    }).select('customerId'),
+    SaleInvoice.find({
+      date: { $gte: new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000), $lte: now },
+      status: activeStatuses,
+      customerId: { $ne: null },
+    })
+      .sort({ date: -1 })
+      .limit(400),
   ]);
+
+  const boughtToday = new Set(
+    todaySales.map((i) => i.customerId!.toString()).filter(Boolean)
+  );
 
   const countByCustomer = (invoices: typeof weekSales) => {
     const map = new Map<string, { count: number; total: number; last: Date; name?: string; phone?: string }>();
@@ -543,27 +597,64 @@ export async function getCustomerCrmInsights(refDate?: Date) {
       segment: weekMap.has(id) && (weekMap.get(id)?.count || 0) >= 2 ? 'weekly' : 'monthly',
     }));
 
-  // فالوآپ: کسانی که همان روز ماه قبل خرید کردند
+  // فالوآپ: همان روز ماه قبل (اگر امروز هنوز نخریده)
   const followUp = [];
   const seen = new Set<string>();
   for (const inv of sameDaySales) {
     const id = inv.customerId!.toString();
-    if (seen.has(id)) continue;
+    if (seen.has(id) || boughtToday.has(id)) continue;
     seen.add(id);
     const suggest = await getCustomerSuggestedPricing(id);
     followUp.push({
       customerId: id,
       name: inv.customerName || '—',
       phone: inv.customerPhone,
-      lastYearInvoice: inv.invoiceNumber,
+      lastInvoiceNumber: inv.invoiceNumber,
       lastAmount: inv.totalAmount,
       lastKg: inv.totalKg,
       lastDate: inv.date,
       preferredTier: suggest.preferredTier,
       suggestedDiscount: suggest.suggestedDiscount,
-      suggestReason: suggest.suggestReason,
+      suggestReason: suggest.suggestReason || 'همین روز ماه قبل خرید کرده بود',
       avgOrder: suggest.avgOrder,
       lastInvoice: suggest.lastInvoice,
+      kind: 'same_day' as const,
+    });
+  }
+
+  // فالوآپ موعد: ۲۵ تا ۴۰ روز از آخرین خرید
+  const lastByCustomer = new Map<
+    string,
+    { inv: (typeof recentForDue)[0]; days: number }
+  >();
+  for (const inv of recentForDue) {
+    const id = inv.customerId!.toString();
+    if (!lastByCustomer.has(id)) {
+      const days = (now.getTime() - new Date(inv.date).getTime()) / (1000 * 60 * 60 * 24);
+      lastByCustomer.set(id, { inv, days });
+    }
+  }
+  const dueFollowUp = [];
+  for (const [id, { inv, days }] of lastByCustomer) {
+    if (boughtToday.has(id) || seen.has(id)) continue;
+    if (days < 25 || days > 40) continue;
+    seen.add(id);
+    const suggest = await getCustomerSuggestedPricing(id);
+    dueFollowUp.push({
+      customerId: id,
+      name: inv.customerName || '—',
+      phone: inv.customerPhone,
+      lastInvoiceNumber: inv.invoiceNumber,
+      lastAmount: inv.totalAmount,
+      lastKg: inv.totalKg,
+      lastDate: inv.date,
+      preferredTier: suggest.preferredTier,
+      suggestedDiscount: suggest.suggestedDiscount,
+      suggestReason: suggest.suggestReason || `حدود ${Math.round(days)} روز از آخرین خرید`,
+      avgOrder: suggest.avgOrder,
+      lastInvoice: suggest.lastInvoice,
+      kind: 'due' as const,
+      daysSince: Math.round(days),
     });
   }
 
@@ -571,6 +662,7 @@ export async function getCustomerCrmInsights(refDate?: Date) {
     weekly,
     monthly,
     followUpSameDayLastMonth: followUp.slice(0, 20),
+    followUpDue: dueFollowUp.slice(0, 20),
   };
 }
 

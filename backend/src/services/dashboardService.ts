@@ -193,6 +193,7 @@ export async function getDashboard(date?: Date, marketerId?: string) {
       weekly: crm.weekly.slice(0, 8),
       monthly: crm.monthly.slice(0, 8),
       followUpSameDayLastMonth: crm.followUpSameDayLastMonth.slice(0, 10),
+      followUpDue: (crm.followUpDue || []).slice(0, 10),
     },
     shipping: {
       ready: readyShip.map((s) => ({
@@ -357,6 +358,18 @@ export async function updateShopSettings(data: {
   platformMinOrderKg?: number;
   platformCities?: string;
   costBasis?: 'weighted' | 'last';
+  mongoCompassUri?: string;
+  bankCards?: Array<{
+    label: string;
+    cardNumber: string;
+    accountHolder?: string;
+    bankName?: string;
+  }>;
+  goldenAutoEnabled?: boolean;
+  goldenMinKg?: number;
+  goldenSuggestGiftName?: string;
+  goldenSuggestGiftQty?: number;
+  goldenSuggestDiscountPercent?: number;
 }) {
   const settings = await getOrCreateSettings();
   if (data.shopName) settings.shopName = data.shopName;
@@ -389,6 +402,25 @@ export async function updateShopSettings(data: {
   if (data.platformMinOrderKg !== undefined) settings.platformMinOrderKg = data.platformMinOrderKg;
   if (data.platformCities !== undefined) settings.platformCities = data.platformCities;
   if (data.costBasis === 'weighted' || data.costBasis === 'last') settings.costBasis = data.costBasis;
+  if (data.mongoCompassUri !== undefined) settings.mongoCompassUri = data.mongoCompassUri;
+  if (data.bankCards !== undefined) {
+    settings.bankCards = data.bankCards
+      .filter((c) => c.label?.trim() && c.cardNumber?.trim())
+      .map((c) => ({
+        label: c.label.trim(),
+        cardNumber: c.cardNumber.replace(/\s+/g, '').trim(),
+        accountHolder: c.accountHolder?.trim() || undefined,
+        bankName: c.bankName?.trim() || undefined,
+      }));
+  }
+  if (data.goldenAutoEnabled !== undefined) settings.goldenAutoEnabled = data.goldenAutoEnabled;
+  if (data.goldenMinKg !== undefined) settings.goldenMinKg = Math.max(0, data.goldenMinKg);
+  if (data.goldenSuggestGiftName !== undefined)
+    settings.goldenSuggestGiftName = data.goldenSuggestGiftName.trim() || 'کارتن';
+  if (data.goldenSuggestGiftQty !== undefined)
+    settings.goldenSuggestGiftQty = Math.max(0, data.goldenSuggestGiftQty);
+  if (data.goldenSuggestDiscountPercent !== undefined)
+    settings.goldenSuggestDiscountPercent = Math.max(0, Math.min(50, data.goldenSuggestDiscountPercent));
   await settings.save();
   return settings;
 }
@@ -398,3 +430,262 @@ export async function listDebtors(settled?: boolean) {
   if (settled !== undefined) filter.isSettled = settled;
   return Debtor.find(filter).sort({ dueDate: 1 });
 }
+
+/** آنالیز فروش یک محصول — کلی + بازه‌ها + برترین مشتریان */
+export async function getProductAnalytics(productId: string, opts?: { from?: Date; to?: Date }) {
+  if (!productId) throw new Error('شناسه محصول الزامی است');
+  const product = await Product.findById(productId).populate('categoryId');
+  if (!product) throw new Error('محصول یافت نشد');
+
+  const oid = product._id;
+  const nameKey = (product.name || '').trim();
+  const sameName = nameKey
+    ? await Product.find({ name: nameKey }).select('_id')
+    : [];
+  const ids = sameName.length ? sameName.map((p) => p._id) : [oid];
+
+  const now = new Date();
+  const dayStart = startOfDay(now);
+  const monthStart = startOfDay(new Date(now.getFullYear(), now.getMonth(), 1));
+  const yearStart = startOfDay(new Date(now.getFullYear(), 0, 1));
+
+  const matchBase: Record<string, unknown> = {
+    status: { $in: ['approved', 'shipped', 'delivered'] },
+    'items.productId': { $in: ids },
+  };
+  if (opts?.from || opts?.to) {
+    matchBase.date = {};
+    if (opts.from) (matchBase.date as Record<string, Date>).$gte = opts.from;
+    if (opts.to) (matchBase.date as Record<string, Date>).$lte = opts.to;
+  }
+
+  const [agg] = await SaleInvoice.aggregate([
+    { $match: matchBase },
+    { $unwind: '$items' },
+    { $match: { 'items.productId': { $in: ids } } },
+    {
+      $group: {
+        _id: null,
+        soldKg: { $sum: '$items.qtyKg' },
+        soldPackages: { $sum: '$items.qtyPackages' },
+        revenue: { $sum: '$items.totalPrice' },
+        cost: {
+          $sum: {
+            $multiply: [{ $ifNull: ['$items.unitCostPerKg', 0] }, { $ifNull: ['$items.qtyKg', 0] }],
+          },
+        },
+        profit: { $sum: '$items.profit' },
+        discount: { $sum: { $ifNull: ['$items.discount', 0] } },
+        lineCount: { $sum: 1 },
+        invoiceIds: { $addToSet: '$_id' },
+      },
+    },
+  ]);
+
+  const periodBuckets = async (from: Date) => {
+    const [row] = await SaleInvoice.aggregate([
+      {
+        $match: {
+          status: { $in: ['approved', 'shipped', 'delivered'] },
+          date: { $gte: from },
+          'items.productId': { $in: ids },
+        },
+      },
+      { $unwind: '$items' },
+      { $match: { 'items.productId': { $in: ids } } },
+      {
+        $group: {
+          _id: null,
+          soldKg: { $sum: '$items.qtyKg' },
+          revenue: { $sum: '$items.totalPrice' },
+          profit: { $sum: '$items.profit' },
+          invoiceIds: { $addToSet: '$_id' },
+        },
+      },
+    ]);
+    return {
+      soldKg: Math.round((row?.soldKg || 0) * 100) / 100,
+      revenue: Math.round(row?.revenue || 0),
+      profit: Math.round(row?.profit || 0),
+      invoiceCount: (row?.invoiceIds || []).length,
+    };
+  };
+
+  const [today, month, year] = await Promise.all([
+    periodBuckets(dayStart),
+    periodBuckets(monthStart),
+    periodBuckets(yearStart),
+  ]);
+
+  const topCustomers = await SaleInvoice.aggregate([
+    {
+      $match: {
+        status: { $in: ['approved', 'shipped', 'delivered'] },
+        'items.productId': { $in: ids },
+      },
+    },
+    { $unwind: '$items' },
+    { $match: { 'items.productId': { $in: ids } } },
+    {
+      $group: {
+        _id: {
+          customerId: '$customerId',
+          customerName: '$customerName',
+        },
+        soldKg: { $sum: '$items.qtyKg' },
+        revenue: { $sum: '$items.totalPrice' },
+        profit: { $sum: '$items.profit' },
+        times: { $sum: 1 },
+        lastDate: { $max: '$date' },
+      },
+    },
+    { $sort: { revenue: -1 } },
+    { $limit: 8 },
+  ]);
+
+  const recent = await SaleInvoice.aggregate([
+    {
+      $match: {
+        status: { $in: ['approved', 'shipped', 'delivered'] },
+        'items.productId': { $in: ids },
+      },
+    },
+    { $unwind: '$items' },
+    { $match: { 'items.productId': { $in: ids } } },
+    { $sort: { date: -1 } },
+    { $limit: 12 },
+    {
+      $project: {
+        invoiceId: '$_id',
+        invoiceNumber: 1,
+        date: 1,
+        customerName: 1,
+        isGolden: 1,
+        qtyKg: '$items.qtyKg',
+        qtyPackages: '$items.qtyPackages',
+        revenue: '$items.totalPrice',
+        profit: '$items.profit',
+        unitPricePerKg: '$items.unitPricePerKg',
+        priceTier: '$items.priceTier',
+      },
+    },
+  ]);
+
+  const byTier = await SaleInvoice.aggregate([
+    {
+      $match: {
+        status: { $in: ['approved', 'shipped', 'delivered'] },
+        'items.productId': { $in: ids },
+      },
+    },
+    { $unwind: '$items' },
+    { $match: { 'items.productId': { $in: ids } } },
+    {
+      $group: {
+        _id: { $ifNull: ['$items.priceTier', '$priceTier'] },
+        soldKg: { $sum: '$items.qtyKg' },
+        revenue: { $sum: '$items.totalPrice' },
+        profit: { $sum: '$items.profit' },
+      },
+    },
+  ]);
+
+  const monthlyTrend = await SaleInvoice.aggregate([
+    {
+      $match: {
+        status: { $in: ['approved', 'shipped', 'delivered'] },
+        date: { $gte: new Date(now.getFullYear(), now.getMonth() - 5, 1) },
+        'items.productId': { $in: ids },
+      },
+    },
+    { $unwind: '$items' },
+    { $match: { 'items.productId': { $in: ids } } },
+    {
+      $group: {
+        _id: {
+          y: { $year: '$date' },
+          m: { $month: '$date' },
+        },
+        soldKg: { $sum: '$items.qtyKg' },
+        revenue: { $sum: '$items.totalPrice' },
+        profit: { $sum: '$items.profit' },
+      },
+    },
+    { $sort: { '_id.y': 1, '_id.m': 1 } },
+  ]);
+
+  const soldKg = agg?.soldKg || 0;
+  const revenue = agg?.revenue || 0;
+  const profit = agg?.profit || 0;
+  const cost = agg?.cost || Math.max(0, revenue - profit);
+  const stockKg = Number(product.stockKg ?? product.stock ?? 0) || 0;
+  const kgPer = product.kgPerPackage || 5;
+  const cat = product.categoryId as { name?: string } | null;
+
+  return {
+    product: {
+      id: product._id.toString(),
+      name: product.name,
+      stockKg,
+      packages: kgPer > 0 ? Math.round((stockKg / kgPer) * 10) / 10 : 0,
+      kgPerPackage: kgPer,
+      avgCostPerKg: product.avgCostPerKg || 0,
+      lastPurchasePricePerKg: product.lastPurchasePricePerKg || 0,
+      imageUrl: product.imageUrl,
+      categoryName: cat?.name || '—',
+      profitRetail: product.profitRetail ?? product.profitPercent,
+      profitSupermarket: product.profitSupermarket,
+      profitWholesale: product.profitWholesale,
+    },
+    overall: {
+      soldKg: Math.round(soldKg * 100) / 100,
+      soldPackages: Math.round((agg?.soldPackages || 0) * 10) / 10,
+      revenue: Math.round(revenue),
+      cost: Math.round(cost),
+      profit: Math.round(profit),
+      marginPercent: revenue > 0 ? Math.round((profit / revenue) * 1000) / 10 : 0,
+      discount: Math.round(agg?.discount || 0),
+      invoiceCount: (agg?.invoiceIds || []).length,
+      lineCount: agg?.lineCount || 0,
+      avgPricePerKg: soldKg > 0 ? Math.round(revenue / soldKg) : 0,
+      avgProfitPerKg: soldKg > 0 ? Math.round(profit / soldKg) : 0,
+    },
+    periods: { today, month, year },
+    byTier: byTier.map((t) => ({
+      tier: t._id || 'retail',
+      soldKg: Math.round((t.soldKg || 0) * 100) / 100,
+      revenue: Math.round(t.revenue || 0),
+      profit: Math.round(t.profit || 0),
+    })),
+    monthlyTrend: monthlyTrend.map((t) => ({
+      year: t._id.y,
+      month: t._id.m,
+      soldKg: Math.round((t.soldKg || 0) * 100) / 100,
+      revenue: Math.round(t.revenue || 0),
+      profit: Math.round(t.profit || 0),
+    })),
+    topCustomers: topCustomers.map((c) => ({
+      customerId: c._id?.customerId?.toString?.() || null,
+      name: c._id?.customerName || 'بدون نام',
+      soldKg: Math.round((c.soldKg || 0) * 100) / 100,
+      revenue: Math.round(c.revenue || 0),
+      profit: Math.round(c.profit || 0),
+      times: c.times || 0,
+      lastDate: c.lastDate,
+    })),
+    recent: recent.map((r) => ({
+      invoiceId: r.invoiceId?.toString?.() || r._id?.toString?.(),
+      invoiceNumber: r.invoiceNumber,
+      date: r.date,
+      customerName: r.customerName || '—',
+      isGolden: !!r.isGolden,
+      qtyKg: Math.round((r.qtyKg || 0) * 100) / 100,
+      qtyPackages: Math.round((r.qtyPackages || 0) * 10) / 10,
+      revenue: Math.round(r.revenue || 0),
+      profit: Math.round(r.profit || 0),
+      unitPricePerKg: Math.round(r.unitPricePerKg || 0),
+      priceTier: r.priceTier,
+    })),
+  };
+}
+

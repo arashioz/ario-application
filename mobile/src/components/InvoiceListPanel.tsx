@@ -31,6 +31,7 @@ import {
   periodRange,
   InvoicePeriod,
 } from '../utils/format';
+import { buildInvoiceShareText, copyText } from '../utils/invoiceShare';
 import { useAuth } from '../auth/AuthContext';
 import { DigitInput } from './DigitInput';
 
@@ -507,6 +508,7 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
             <>
               <p>
                 <b>شماره:</b> {(detail as SaleInvRow).invoiceNumber}
+                {(detail as SaleInvRow).isGolden ? ' ⭐ طلایی' : ''}
               </p>
               <p>
                 <b>مشتری:</b> {(detail as SaleInvRow).customerName || '—'}
@@ -520,6 +522,18 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
               <p>
                 <b>تناژ:</b> {formatKg((detail as SaleInvRow).totalKg || 0)}
               </p>
+              {(detail as SaleInvRow).discount ? (
+                <p>
+                  <b>تخفیف:</b> {formatToman((detail as SaleInvRow).discount || 0)}
+                </p>
+              ) : null}
+              {(detail as SaleInvRow).paymentMethod ? (
+                <p>
+                  <b>پرداخت:</b>{' '}
+                  {PAY[(detail as SaleInvRow).paymentMethod || ''] ||
+                    (detail as SaleInvRow).paymentMethod}
+                </p>
+              ) : null}
               <p>
                 <b>وضعیت:</b>{' '}
                 {STATUS[(detail as SaleInvRow).status || ''] || (detail as SaleInvRow).status || '—'}
@@ -529,16 +543,56 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
                   <div className="ios-section-title" style={{ marginTop: 0 }}>
                     اقلام
                   </div>
-                  {(detail as SaleInvRow).items!.map((it, i) => (
-                    <div key={i} className="stat-row">
-                      <span>
-                        {it.productName} · {formatKg(it.qtyKg)}
-                      </span>
-                      <span>{formatToman(it.totalPrice)}</span>
-                    </div>
-                  ))}
+                  {(detail as SaleInvRow).items!.map((it, i) => {
+                    const perKg =
+                      it.unitPricePerKg ||
+                      (it.qtyKg > 0 ? Math.round(it.totalPrice / it.qtyKg) : 0);
+                    return (
+                      <div key={i} style={{ marginBottom: 10 }}>
+                        <div className="stat-row">
+                          <span>
+                            <strong>{it.productName}</strong>
+                          </span>
+                          <span>{formatToman(it.totalPrice)}</span>
+                        </div>
+                        <div className="ios-caption">
+                          {formatKg(it.qtyKg)}
+                          {it.unit === 'package' && it.qtyInput
+                            ? ` · ${it.qtyInput} بسته`
+                            : ''}
+                          {' · '}
+                          فی {formatToman(perKg)}/کیلو
+                          {it.discount ? ` · تخفیف ${formatToman(it.discount)}` : ''}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               ) : null}
+              <IonButton
+                expand="block"
+                fill="outline"
+                onClick={() => {
+                  const inv = detail as SaleInvRow;
+                  const text = buildInvoiceShareText({
+                    invoiceNumber: inv.invoiceNumber,
+                    customerName: inv.customerName,
+                    customerPhone: inv.customerPhone,
+                    date: inv.date,
+                    totalAmount: inv.totalAmount,
+                    totalKg: inv.totalKg,
+                    discount: inv.discount,
+                    paymentMethod: inv.paymentMethod,
+                    isGolden: inv.isGolden,
+                    items: inv.items,
+                  });
+                  void copyText(text).then((ok) =>
+                    onToast?.(ok ? 'متن فاکتور کپی شد — برای مشتری بفرستید' : 'کپی نشد', ok ? 'success' : 'danger')
+                  );
+                }}
+              >
+                کپی متن برای مشتری
+              </IonButton>
               <IonButton expand="block" onClick={() => void openPdf(detail._id)}>
                 چاپ / PDF
               </IonButton>
@@ -588,14 +642,29 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
                   <div className="ios-section-title" style={{ marginTop: 0 }}>
                     اقلام
                   </div>
-                  {(detail as PurchaseInvRow).items!.map((it, i) => (
-                    <div key={i} className="stat-row">
-                      <span>
-                        {it.productName} · {formatKg(it.qtyKg)}
-                      </span>
-                      <span>{formatToman(it.totalPrice)}</span>
-                    </div>
-                  ))}
+                  {(detail as PurchaseInvRow).items!.map((it, i) => {
+                    const perKg =
+                      it.unitPricePerKg ||
+                      (it.qtyKg > 0 ? Math.round(it.totalPrice / it.qtyKg) : 0);
+                    return (
+                      <div key={i} style={{ marginBottom: 10 }}>
+                        <div className="stat-row">
+                          <span>
+                            <strong>{it.productName}</strong>
+                          </span>
+                          <span>{formatToman(it.totalPrice)}</span>
+                        </div>
+                        <div className="ios-caption">
+                          {formatKg(it.qtyKg)}
+                          {it.unit === 'package' && it.qtyInput
+                            ? ` · ${it.qtyInput} بسته`
+                            : ''}
+                          {' · '}
+                          فی {formatToman(perKg)}/کیلو
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               ) : null}
               {isAdmin && (

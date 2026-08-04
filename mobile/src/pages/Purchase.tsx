@@ -22,7 +22,7 @@ import { addOutline, checkmarkCircleOutline, imageOutline, trashOutline, walletO
 import { useHistory } from 'react-router-dom';
 import { wsClient, newMutationId } from '../api/ws';
 import { resolveMediaUrl } from '../api/client';
-import { parseAmount, formatRial, formatKg, resolveQty, resolvePrices, todayIso, formatMoneyInput, formatToman, sanitizeNumberInput } from '../utils/format';
+import { parseAmount, formatRial, formatKg, resolveLineAmount, todayIso, formatMoneyInput, formatToman, sanitizeNumberInput } from '../utils/format';
 import { PersianDateField } from '../components/PersianDateField';
 import { InvoiceListPanel } from '../components/InvoiceListPanel';
 import { useAuth } from '../auth/AuthContext';
@@ -159,13 +159,38 @@ const Purchase: React.FC = () => {
       const qty = parseFloat(it.qtyInput) || 0;
       const price = parseAmount(it.unitPrice) || 0;
       const kgPer = parseFloat(it.kgPerPackage) || 5;
-      const { qtyKg } = resolveQty(it.unit, qty, kgPer);
-      const { perKg } = resolvePrices(it.unit, price, kgPer);
+      const { qtyKg, lineAmount } = resolveLineAmount(it.unit, price, qty, kgPer);
       kg += qtyKg;
-      amount += perKg * qtyKg;
+      amount += lineAmount;
     }
     return { kg, amount };
   }, [items]);
+
+  const pickProduct = (index: number, p: Product) => {
+    setItems((prev) => {
+      const next = [...prev];
+      const catId =
+        typeof p.categoryId === 'string' ? p.categoryId : p.categoryId?._id || '';
+      const catName =
+        typeof p.categoryId === 'object' ? p.categoryId?.name || '' : '';
+      const cat = categories.find((c) => c._id === catId);
+      next[index] = {
+        ...next[index],
+        name: p.name,
+        kgPerPackage: String(p.kgPerPackage || 5),
+        categoryId: catId,
+        categoryName: catName,
+        profitRetail: String(cat?.profitRetail ?? cat?.profitPercent ?? 15),
+        profitSupermarket: String(cat?.profitSupermarket ?? 10),
+        profitWholesale: String(cat?.profitWholesale ?? 6),
+        unitPrice:
+          p.avgCostPerKg > 0
+            ? formatMoneyInput(String(Math.round(p.avgCostPerKg)))
+            : next[index].unitPrice,
+      };
+      return next;
+    });
+  };
 
   const submit = async () => {
     const valid = items.filter((i) => i.name && (i.categoryName.trim() || i.categoryId) && i.unitPrice && i.qtyInput);
@@ -316,8 +341,15 @@ const Purchase: React.FC = () => {
             const qty = parseFloat(item.qtyInput) || 0;
             const price = parseAmount(item.unitPrice) || 0;
             const kgPer = parseFloat(item.kgPerPackage) || 5;
-            const { qtyKg, qtyPackages } = resolveQty(item.unit, qty, kgPer);
-            const { perKg, perPackage } = resolvePrices(item.unit, price, kgPer);
+            const { qtyKg, qtyPackages, perKg, perPackage, lineAmount } = resolveLineAmount(
+              item.unit,
+              price,
+              qty,
+              kgPer
+            );
+            const nameSuggestions = item.name.trim()
+              ? products.filter((p) => p.name.includes(item.name)).slice(0, 6)
+              : products.slice(0, 8);
             return (
               <IonCard key={index} className="tight-card">
                 <IonCardHeader>
@@ -339,18 +371,28 @@ const Purchase: React.FC = () => {
                       placeholder="مثلاً قند ۵ کیلویی"
                     />
                   </IonItem>
-                  {products.filter((p) => item.name && p.name.includes(item.name)).slice(0, 4).map((p) => (
-                    <IonChip key={p._id} outline onClick={() => update(index, 'name', p.name)}>
-                      {p.name}
-                    </IonChip>
-                  ))}
+                  <p className="hint" style={{ margin: '4px 0 2px' }}>
+                    {item.name.trim() ? 'محصولات مشابه:' : 'محصولات موجود — بزن تا پر شود:'}
+                  </p>
+                  <div className="chip-row">
+                    {nameSuggestions.map((p) => (
+                      <IonChip
+                        key={p._id}
+                        color={item.name === p.name ? 'primary' : 'medium'}
+                        outline={item.name !== p.name}
+                        onClick={() => pickProduct(index, p)}
+                      >
+                        {p.name}
+                      </IonChip>
+                    ))}
+                  </div>
 
                   <IonItem>
                     <IonLabel position="stacked">دسته (خودتان بنویسید — اگر نبود ساخته می‌شود)</IonLabel>
                     <IonInput
                       value={item.categoryName}
                       onIonInput={(e) => update(index, 'categoryName', e.detail.value || '')}
-                      placeholder="مثلاً قند ۵ کیلویی"
+                      placeholder="مثلاً قند"
                     />
                   </IonItem>
                   <div className="chip-row">
@@ -503,9 +545,9 @@ const Purchase: React.FC = () => {
                   </IonItem>
                   {qty > 0 && price > 0 && (
                     <p className="hint convert-hint">
-                      جمع قلم: {formatRial(perKg * qtyKg)}
+                      جمع قلم: {formatRial(lineAmount)}
                       <br />
-                      نرخ: {formatRial(perKg)}/کیلو · {formatRial(perPackage)}/بسته
+                      نرخ: {formatRial(Math.round(perKg))}/کیلو · {formatRial(perPackage)}/بسته
                     </p>
                   )}
                 </IonCardContent>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   IonPage,
   IonHeader,
@@ -31,7 +31,10 @@ import {
   removeOutline,
   timeOutline,
   sparklesOutline,
+  personAddOutline,
   mapOutline,
+  eyeOutline,
+  copyOutline,
 } from 'ionicons/icons';
 import { wsClient, newMutationId } from '../api/ws';
 import {
@@ -40,6 +43,7 @@ import {
   formatToman,
   resolveQty,
   resolvePrices,
+  resolveLineAmount,
   todayIso,
   formatMoneyInput,
   formatDate,
@@ -52,14 +56,19 @@ import {
 import { paymentMethods } from '../theme/colors';
 import { PersianDateField } from '../components/PersianDateField';
 import { MoneyInput } from '../components/MoneyInput';
-import { LocationPicker } from '../components/LocationPicker';
 import { InvoiceListPanel } from '../components/InvoiceListPanel';
 import { useAuth } from '../auth/AuthContext';
 import { resolveMediaUrl } from '../api/client';
 import { geoErrorMessage, getCurrentPositionAsync, isGeoSecureContext } from '../utils/geo';
 import { reverseGeocode } from '../utils/geocode';
-import { useHistory } from 'react-router-dom';
+import { useHistory, useLocation } from 'react-router-dom';
 import { DigitInput } from '../components/DigitInput';
+import { LocationPicker } from '../components/LocationPicker';
+import {
+  buildInvoiceShareText,
+  buildCardTransferText,
+  copyText,
+} from '../utils/invoiceShare';
 
 type PriceTier = 'retail' | 'supermarket' | 'wholesale';
 type CostBasis = 'weighted' | 'last';
@@ -125,9 +134,16 @@ interface LineItem {
   unitPrice: string;
   kgPerPackage: number;
   suggestedPerKg: number;
-  /** تخفیف این قلم (تومان) */
+  /** تخفیف این قلم — در حالت محصول = تومان/کیلو */
   discount: string;
 }
+
+type BankCard = {
+  label: string;
+  cardNumber: string;
+  accountHolder?: string;
+  bankName?: string;
+};
 
 type DiscountMode = 'invoice' | 'per_kg' | 'product';
 
@@ -145,11 +161,10 @@ function tierPercent(p: Product, tier: PriceTier): number {
 }
 
 function productCost(p: Product, basis: CostBasis): number {
-  if (basis === 'last') {
-    const last = p.lastPurchasePricePerKg || 0;
-    if (last > 0) return last;
-  }
-  return p.avgCostPerKg ?? p.purchasePrice ?? 0;
+  const avg = p.avgCostPerKg ?? p.purchasePrice ?? 0;
+  const last = p.lastPurchasePricePerKg || p.purchasePrice || 0;
+  if (basis === 'weighted') return avg || last;
+  return last || avg;
 }
 
 const COST_BASIS_KEY = 'ario_cost_basis';
@@ -161,6 +176,11 @@ function newLineKey() {
 const Sale: React.FC = () => {
   const { isAdmin, user } = useAuth();
   const history = useHistory();
+  const location = useLocation<{
+    followUpCustomerId?: string;
+    followUpDiscount?: number;
+    followUpTier?: string;
+  }>();
   const [listRefreshKey, setListRefreshKey] = useState(0);
   const [showInvoiceList, setShowInvoiceList] = useState(false);
   const [cashBalance, setCashBalance] = useState(0);
@@ -199,6 +219,12 @@ const Sale: React.FC = () => {
       discountAmount: number;
       matched: boolean;
       hint?: string;
+      giftLine?: {
+        productName: string;
+        qty: number;
+        unit: 'kg' | 'package';
+        resolvedProductId?: string;
+      };
     }>
   >([]);
   const [suggestedInvoices, setSuggestedInvoices] = useState<
@@ -245,19 +271,152 @@ const Sale: React.FC = () => {
   const [appliedOffer, setAppliedOffer] = useState('');
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState({ open: false, msg: '', color: 'success' });
-  const [mapOpen, setMapOpen] = useState(false);
   const [histOpen, setHistOpen] = useState(false);
   const [saleTab, setSaleTab] = useState<'single' | 'bulk'>('single');
   const [bulkCount, setBulkCount] = useState(0);
-  /** تعداد مستقیم روی کارت محصول (مناسب عمده/سوپر) */
-  const [quickQtyOn, setQuickQtyOn] = useState(false);
+  /** نوع غالب مشتری از تاریخچه — برای قفل قانون عمده≠تکی */
+  const [customerPreferredTier, setCustomerPreferredTier] = useState<PriceTier | null>(null);
+  /** پاپ‌آپ افزودن/ویرایش مشتری */
+  const [custModalOpen, setCustModalOpen] = useState(false);
+  const [custModalName, setCustModalName] = useState('');
+  const [custModalPhone, setCustModalPhone] = useState('');
+  const [custModalAddress, setCustModalAddress] = useState('');
+  const [custModalSaving, setCustModalSaving] = useState(false);
+  const [custModalMode, setCustModalMode] = useState<'create' | 'edit'>('create');
+  const [custModalShowMap, setCustModalShowMap] = useState(false);
+  const [custModalLat, setCustModalLat] = useState<number | null>(null);
+  const [custModalLng, setCustModalLng] = useState<number | null>(null);
+  const [histDetailId, setHistDetailId] = useState<string | null>(null);
+  const [bankCards, setBankCards] = useState<BankCard[]>([]);
+  const [selectedBankCard, setSelectedBankCard] = useState(0);
+  const [goldenAutoEnabled, setGoldenAutoEnabled] = useState(true);
+  const [goldenMinKg, setGoldenMinKg] = useState(500);
+  const [goldenGiftName, setGoldenGiftName] = useState('کارتن');
+  const [goldenGiftQty, setGoldenGiftQty] = useState(1);
+  const [goldenDiscPercent, setGoldenDiscPercent] = useState(5);
+  const [shopName, setShopName] = useState('');
+  const followUpHandled = useRef(false);
+  const goldenAutoToastShown = useRef(false);
+  /** پاپ‌آپ افزودن/ویرایش محصول */
+  const [prodModalOpen, setProdModalOpen] = useState(false);
+  const [prodModalProduct, setProdModalProduct] = useState<Product | null>(null);
+  const [prodModalEditKey, setProdModalEditKey] = useState<string | null>(null);
+  const [prodModalUnit, setProdModalUnit] = useState<'kg' | 'package'>('package');
+  const [prodModalQty, setProdModalQty] = useState('1');
+  const [prodModalPrice, setProdModalPrice] = useState('');
   const needsCustomer = priceTier !== 'retail';
+  const isWholesaleCustomer = customerPreferredTier === 'wholesale';
 
-  useEffect(() => {
-    if (priceTier === 'wholesale' || priceTier === 'supermarket') {
-      setQuickQtyOn(true);
+  const selectPriceTier = (t: PriceTier) => {
+    if (t === 'retail' && isWholesaleCustomer) {
+      setToast({
+        open: true,
+        msg: 'مشتری عمده است — فاکتور تکی مجاز نیست',
+        color: 'danger',
+      });
+      return;
     }
-  }, [priceTier]);
+    setPriceTier(t);
+  };
+
+  const openAddCustomerModal = (
+    phone = '',
+    name = '',
+    address = '',
+    mode: 'create' | 'edit' = 'create'
+  ) => {
+    setCustModalMode(mode);
+    setCustModalPhone(phone || (mode === 'edit' ? customerPhone : '') || '');
+    setCustModalName(name || (mode === 'edit' ? customerName : '') || '');
+    setCustModalAddress(address || (mode === 'edit' ? customerAddress : '') || '');
+    setCustModalLat(mode === 'edit' ? customerLat : null);
+    setCustModalLng(mode === 'edit' ? customerLng : null);
+    setCustModalShowMap(false);
+    setCustModalOpen(true);
+  };
+
+  const saveCustomerFromModal = async () => {
+    const name = custModalName.trim();
+    const phone = normalizePhone(custModalPhone) || custModalPhone.trim();
+    if (!name) {
+      setToast({ open: true, msg: 'نام مشتری را وارد کنید', color: 'danger' });
+      return;
+    }
+    setCustModalSaving(true);
+    try {
+      if (custModalMode === 'edit' && customerId) {
+        await wsClient.request(
+          'customer.update',
+          {
+            id: customerId,
+            name,
+            phone: phone || undefined,
+            address: custModalAddress.trim() || undefined,
+            lat: custModalLat ?? undefined,
+            lng: custModalLng ?? undefined,
+          },
+          { clientMutationId: newMutationId(), queueIfOffline: true }
+        );
+        setCustomerName(name);
+        setCustomerPhone(phone);
+        setCustomerAddress(custModalAddress.trim());
+        setCustomerLat(custModalLat);
+        setCustomerLng(custModalLng);
+        setCustModalOpen(false);
+        setToast({ open: true, msg: 'مشتری به‌روز شد', color: 'success' });
+        return;
+      }
+      const created = await wsClient.request<Customer>(
+        'customer.create',
+        {
+          name,
+          phone: phone || undefined,
+          address: custModalAddress.trim() || undefined,
+          lat: custModalLat ?? undefined,
+          lng: custModalLng ?? undefined,
+        },
+        { clientMutationId: newMutationId(), queueIfOffline: true }
+      );
+      setCustModalOpen(false);
+      setToast({ open: true, msg: 'مشتری اضافه شد', color: 'success' });
+      if (created?._id) {
+        await pickCustomer(created);
+      } else {
+        setCustomerName(name);
+        setCustomerPhone(phone);
+        setCustomerAddress(custModalAddress.trim());
+        setCustomerLat(custModalLat);
+        setCustomerLng(custModalLng);
+        setCustSearch(name);
+      }
+    } catch (e) {
+      setToast({
+        open: true,
+        msg: e instanceof Error ? e.message : 'ثبت مشتری نشد',
+        color: 'danger',
+      });
+    } finally {
+      setCustModalSaving(false);
+    }
+  };
+
+  const clearCustomer = () => {
+    setCustomerId('');
+    setCustomerName('');
+    setCustomerPhone('');
+    setCustomerAddress('');
+    setCustomerLat(null);
+    setCustomerLng(null);
+    setCustomerPreferredTier(null);
+    setCustSearch('');
+    setCustomers([]);
+    setPrevInvoices([]);
+    setSuggestHint('');
+    setPowerLabel('');
+    setOffers([]);
+    setSuggestedDiscount(0);
+    setAppliedOffer('');
+  };
 
   const loadProducts = useCallback(async () => {
     try {
@@ -297,7 +456,7 @@ const Sale: React.FC = () => {
     void loadProducts();
     void loadActiveCampaigns();
     void wsClient
-      .request<{ cashBalance?: number; cardBalance?: number; costBasis?: CostBasis }>('settings.get')
+      .request<{ cashBalance?: number; cardBalance?: number; costBasis?: CostBasis; bankCards?: BankCard[]; goldenAutoEnabled?: boolean; goldenMinKg?: number; goldenSuggestGiftName?: string; goldenSuggestGiftQty?: number; goldenSuggestDiscountPercent?: number; shopName?: string }>('settings.get')
       .then((s) => {
         if (isAdmin) {
           setCashBalance(s.cashBalance || 0);
@@ -311,6 +470,13 @@ const Sale: React.FC = () => {
             /* ignore */
           }
         }
+        if (Array.isArray(s.bankCards)) setBankCards(s.bankCards);
+        if (s.goldenAutoEnabled !== undefined) setGoldenAutoEnabled(s.goldenAutoEnabled !== false);
+        if (s.goldenMinKg != null) setGoldenMinKg(s.goldenMinKg);
+        if (s.goldenSuggestGiftName) setGoldenGiftName(s.goldenSuggestGiftName);
+        if (s.goldenSuggestGiftQty != null) setGoldenGiftQty(s.goldenSuggestGiftQty);
+        if (s.goldenSuggestDiscountPercent != null) setGoldenDiscPercent(s.goldenSuggestDiscountPercent);
+        if (s.shopName) setShopName(s.shopName);
       })
       .catch(() => undefined);
   });
@@ -328,6 +494,18 @@ const Sale: React.FC = () => {
       } catch {
         /* local fallback ok */
       }
+    }
+    const sample = products[0];
+    if (sample) {
+      const cost = productCost(sample, basis);
+      setToast({
+        open: true,
+        msg:
+          basis === 'weighted'
+            ? `میانگین موزون فعال — نمونه ${sample.name}: ${formatToman(cost)}/کیلو`
+            : `قیمت آخر خرید فعال — نمونه ${sample.name}: ${formatToman(cost)}/کیلو`,
+        color: 'success',
+      });
     }
   };
 
@@ -410,10 +588,13 @@ const Sale: React.FC = () => {
         }>('customer.quick', { query: q })
         .then(async (res) => {
           setCustomers(res.customers || []);
+          const phoneDigits = normalizePhone(q).replace(/\D/g, '');
+          const looksLikePhone = phoneDigits.length >= 10;
+
           // موبایل دقیق → خودکار لود
           if (
             res.exactPhone?._id &&
-            normalizePhone(q).replace(/\D/g, '').length >= 8 &&
+            phoneDigits.length >= 8 &&
             String(res.exactPhone._id) !== customerId
           ) {
             await pickCustomer(res.exactPhone as Customer);
@@ -424,7 +605,9 @@ const Sale: React.FC = () => {
             const c = res.fromInvoice.customer;
             if (c?._id) {
               await pickCustomer(c as Customer);
-            } else if (inv) {
+              return;
+            }
+            if (inv) {
               setCustomerName(inv.customerName || '');
               setCustomerPhone(inv.customerPhone || '');
               setCustomerAddress(inv.customerAddress || '');
@@ -434,7 +617,18 @@ const Sale: React.FC = () => {
                 msg: `فاکتور ${inv.invoiceNumber} پیدا شد`,
                 color: 'success',
               });
+              return;
             }
+          }
+
+          // شماره کامل زده شده ولی مشتری نیست → پاپ‌آپ افزودن
+          if (
+            looksLikePhone &&
+            !res.exactPhone &&
+            !(res.customers || []).length &&
+            !customerId
+          ) {
+            openAddCustomerModal(phoneDigits);
           }
         })
         .catch(console.warn)
@@ -458,12 +652,17 @@ const Sale: React.FC = () => {
     for (const l of lines) {
       const qty = parseFloat(l.qtyInput) || 0;
       const price = parseAmount(l.unitPrice) || 0;
-      const { qtyKg } = resolveQty(l.unit, qty, l.kgPerPackage);
-      const { perKg } = resolvePrices(l.unit, price, l.kgPerPackage);
-      const gross = perKg * qtyKg;
-      const disc = Math.max(0, Math.min(parseAmount(l.discount) || 0, gross));
+      const { qtyKg, lineAmount } = resolveLineAmount(l.unit, price, qty, l.kgPerPackage);
+      let disc = 0;
+      if (discountMode === 'product') {
+        // تخفیف محصول = تومان به ازای هر کیلو
+        const perKgDisc = parseAmount(l.discount) || 0;
+        disc = Math.max(0, Math.min(roundToman(perKgDisc * qtyKg), lineAmount));
+      } else {
+        disc = Math.max(0, Math.min(parseAmount(l.discount) || 0, lineAmount));
+      }
       kg += qtyKg;
-      amount += gross;
+      amount += lineAmount;
       lineDisc += disc;
     }
     const afterLines = Math.max(0, amount - lineDisc);
@@ -519,7 +718,12 @@ const Sale: React.FC = () => {
   }) => {
     const tier = (suggest.preferredTier || suggest.lastTier) as PriceTier | undefined;
     if (tier && ['retail', 'supermarket', 'wholesale'].includes(tier)) {
-      setPriceTier(tier);
+      setCustomerPreferredTier(tier);
+      // مشتری عمده → تکی ممنوع؛ نوع را روی عمده می‌گذاریم
+      if (tier === 'wholesale') setPriceTier('wholesale');
+      else setPriceTier(tier);
+    } else {
+      setCustomerPreferredTier(null);
     }
     const disc = suggest.suggestedDiscount ?? suggest.lastDiscount ?? 0;
     setSuggestedDiscount(disc);
@@ -581,10 +785,19 @@ const Sale: React.FC = () => {
       return;
     }
     if (discountMode === 'product' && lines.length === 1) {
+      const qty = parseFloat(lines[0].qtyInput) || 0;
+      const { qtyKg } = resolveQty(lines[0].unit, qty, lines[0].kgPerPackage);
+      const perKgDisc = qtyKg > 0 ? Math.round(capped / qtyKg) : capped;
       setLines((prev) =>
-        prev.map((l, i) => (i === 0 ? { ...l, discount: formatMoneyInput(String(capped)) } : l))
+        prev.map((l, i) =>
+          i === 0 ? { ...l, discount: formatMoneyInput(String(perKgDisc)) } : l
+        )
       );
-      setToast({ open: true, msg: `${label} روی محصول اعمال شد`, color: 'success' });
+      setToast({
+        open: true,
+        msg: `${label}: ${formatToman(perKgDisc)}/کیلو (≈ ${formatToman(capped)})`,
+        color: 'success',
+      });
       return;
     }
     if (discountMode === 'product' && lines.length > 1) {
@@ -618,12 +831,221 @@ const Sale: React.FC = () => {
     setToast({ open: true, msg: `${label} اعمال شد: ${formatToman(capped)}`, color: 'success' });
   };
 
+  /** امتیازهای مدیر فروش روی فاکتور طلایی */
+  const applyGoldenPerk = (
+    kind: 'pct5' | 'pct10' | 'pct15' | 'perkg' | 'gift1' | 'vip_combo'
+  ) => {
+    if (!lines.length) {
+      setToast({ open: true, msg: 'اول اقلام را به سبد اضافه کن', color: 'warning' });
+      return;
+    }
+    const addGift = (qty = 1) => {
+      const base = lines.find((l) => (parseAmount(l.unitPrice) || 0) > 0) ?? lines[0];
+      if (!base) return false;
+      const p = products.find((x) => x._id === base.productId);
+      if (!p) return false;
+      setLines((prev) => {
+        const without = prev.filter(
+          (l) => !(l.productId === p._id && (parseAmount(l.unitPrice) || 0) === 0)
+        );
+        return [
+          ...without,
+          {
+            key: newLineKey(),
+            productId: p._id,
+            productName: `🎁 اشانتیون طلایی ${p.name}`,
+            imageUrl: p.imageUrl,
+            unit: 'package' as const,
+            qtyInput: String(qty),
+            unitPrice: '0',
+            kgPerPackage: p.kgPerPackage || 5,
+            suggestedPerKg: 0,
+            discount: '',
+          },
+        ];
+      });
+      return true;
+    };
+
+    if (kind === 'gift1') {
+      if (!addGift(1)) {
+        setToast({ open: true, msg: 'محصول برای اشانتیون پیدا نشد', color: 'danger' });
+        return;
+      }
+      setAppliedOffer('اشانتیون طلایی ۱ بسته');
+      setToast({ open: true, msg: 'اشانتیون طلایی ۱ بسته اضافه شد', color: 'success' });
+      return;
+    }
+
+    if (kind === 'perkg') {
+      setDiscountMode('per_kg');
+      setDiscountPerKg(formatMoneyInput('1000'));
+      setAppliedOffer('تخفیف طلایی ۱۰۰۰ ت/کیلو');
+      setToast({
+        open: true,
+        msg: `تخفیف طلایی ۱۰۰۰ ت/کیلو ≈ ${formatToman(1000 * totals.kg)}`,
+        color: 'success',
+      });
+      return;
+    }
+
+    const pct = kind === 'pct5' ? 5 : kind === 'pct10' ? 10 : kind === 'pct15' ? 15 : 5;
+    const amount = roundToman((totals.amount * pct) / 100);
+    if (kind === 'vip_combo') {
+      addGift(1);
+      applyOffer(amount, `بسته VIP طلایی ${pct}٪ + اشانتیون`);
+      return;
+    }
+    applyOffer(amount, `تخفیف طلایی ${pct}٪`);
+  };
+
+  const goldenSuggestions = useMemo(() => {
+    if (!lines.length) return [] as Array<{ key: string; text: string; action: 'disc' | 'gift' | 'vip' }>;
+    const tips: Array<{ key: string; text: string; action: 'disc' | 'gift' | 'vip' }> = [];
+    const minKg = goldenMinKg || 500;
+    const hit = goldenAutoEnabled && totals.kg >= minKg;
+    if (hit || isGolden) {
+      tips.push({
+        key: 'disc',
+        text: `بیش از ${minKg} کیلو — تخفیف ${goldenDiscPercent}٪ می‌خوای؟ (≈ ${formatToman(roundToman((totals.amount * goldenDiscPercent) / 100))})`,
+        action: 'disc',
+      });
+      tips.push({
+        key: 'gift',
+        text: `پیشنهاد: ${goldenGiftQty} ${goldenGiftName} اشانتیون اضافه کنم؟`,
+        action: 'gift',
+      });
+      tips.push({
+        key: 'vip',
+        text: `بسته طلایی: تخفیف ${goldenDiscPercent}٪ + ${goldenGiftQty} ${goldenGiftName}`,
+        action: 'vip',
+      });
+    } else if (isGolden) {
+      tips.push({
+        key: 'manual',
+        text: 'مشتری ویژه — یکی از امتیازهای زیر را بزن',
+        action: 'disc',
+      });
+    }
+    return tips;
+  }, [
+    lines.length,
+    totals.kg,
+    totals.amount,
+    isGolden,
+    goldenAutoEnabled,
+    goldenMinKg,
+    goldenGiftName,
+    goldenGiftQty,
+    goldenDiscPercent,
+  ]);
+
+  // وقتی از حد طلایی رد شد، خودکار حالت طلایی را پیشنهاد بده
+  useEffect(() => {
+    if (!goldenAutoEnabled || !lines.length) {
+      if (totals.kg < (goldenMinKg || 500)) goldenAutoToastShown.current = false;
+      return;
+    }
+    if (totals.kg >= (goldenMinKg || 500)) {
+      if (!isGolden) setIsGolden(true);
+      if (!goldenAutoToastShown.current) {
+        goldenAutoToastShown.current = true;
+        setToast({
+          open: true,
+          msg: `تناژ از ${goldenMinKg} کیلو گذشت — فاکتور طلایی فعال شد`,
+          color: 'warning',
+        });
+      }
+    }
+  }, [totals.kg, goldenAutoEnabled, goldenMinKg]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // فالوآپ از داشبورد
+  useEffect(() => {
+    if (followUpHandled.current) return;
+    const st = location.state;
+    if (!st?.followUpCustomerId) return;
+    followUpHandled.current = true;
+    void (async () => {
+      try {
+        const res = await wsClient.request<{
+          customer: Customer;
+        }>('customer.get', { id: st.followUpCustomerId });
+        if (res.customer) {
+          await pickCustomer(res.customer);
+          if (st.followUpTier) {
+            const t = st.followUpTier as PriceTier;
+            if (!(t === 'retail' && isWholesaleCustomer)) setPriceTier(t);
+          }
+          if (st.followUpDiscount) {
+            setDiscountMode('invoice');
+            setDiscount(formatMoneyInput(String(st.followUpDiscount)));
+            setAppliedOffer('آفر فالوآپ پیشنهادی');
+          }
+          setToast({
+            open: true,
+            msg: `فالوآپ ${res.customer.name} — تخفیف پیشنهادی اعمال شد`,
+            color: 'success',
+          });
+        }
+      } catch {
+        /* ignore */
+      }
+      history.replace('/sale');
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.state]);
+
+  const applyAutoGolden = (action: 'disc' | 'gift' | 'vip') => {
+    setIsGolden(true);
+    if (action === 'gift' || action === 'vip') {
+      const name = goldenGiftName || 'کارتن';
+      const p =
+        products.find((x) => x.name.includes(name) || name.includes(x.name)) || products[0];
+      if (p) {
+        setLines((prev) => {
+          const withoutGift = prev.filter(
+            (l) => !(l.productId === p._id && parseAmount(l.unitPrice) === 0)
+          );
+          return [
+            ...withoutGift,
+            {
+              key: newLineKey(),
+              productId: p._id,
+              productName: `🎁 اشانتیون ${p.name}`,
+              imageUrl: p.imageUrl,
+              unit: 'package' as const,
+              qtyInput: String(goldenGiftQty || 1),
+              unitPrice: '0',
+              kgPerPackage: p.kgPerPackage || 5,
+              suggestedPerKg: 0,
+              discount: '',
+            },
+          ];
+        });
+      }
+    }
+    if (action === 'disc' || action === 'vip') {
+      const amount = roundToman((totals.amount * (goldenDiscPercent || 5)) / 100);
+      applyOffer(amount, `از طرح طلایی ${goldenDiscPercent}٪ استفاده شد`);
+    } else {
+      setAppliedOffer(`اشانتیون طلایی: ${goldenGiftQty} ${goldenGiftName}`);
+      setToast({ open: true, msg: 'اشانتیون اضافه شد', color: 'success' });
+    }
+  };
+
   const applyCampaignOffer = (o: {
+    campaignName?: string;
     ruleType: string;
     label: string;
     discountAmount: number;
     matched: boolean;
     hint?: string;
+    giftLine?: {
+      productName: string;
+      qty: number;
+      unit: 'kg' | 'package';
+      resolvedProductId?: string;
+    };
   }) => {
     if (!o.matched) {
       setToast({
@@ -637,10 +1059,57 @@ const Sale: React.FC = () => {
     }
     if (o.ruleType === 'payment_cash') setPaymentMethod('cash');
     if (o.ruleType === 'payment_card') setPaymentMethod('card');
-    applyOffer(o.discountAmount, o.label);
+
+    if (o.ruleType === 'free_gift' && o.giftLine) {
+      const gl = o.giftLine;
+      const p =
+        products.find((x) => x._id === gl.resolvedProductId) ||
+        products.find((x) => x.name.includes(gl.productName) || gl.productName.includes(x.name));
+      if (!p) {
+        setToast({
+          open: true,
+          msg: `محصول اشانتیون پیدا نشد: ${gl.productName}`,
+          color: 'danger',
+        });
+        return;
+      }
+      const unit = gl.unit || 'package';
+      const offerLabel = `از طرح «${o.campaignName || o.label}» استفاده شد`;
+      setLines((prev) => {
+        const withoutGift = prev.filter((l) => !(l.productId === p._id && parseAmount(l.unitPrice) === 0));
+        return [
+          ...withoutGift,
+          {
+            key: newLineKey(),
+            productId: p._id,
+            productName: `🎁 اشانتیون ${p.name}`,
+            imageUrl: p.imageUrl,
+            unit,
+            qtyInput: String(gl.qty),
+            unitPrice: '0',
+            kgPerPackage: p.kgPerPackage || 5,
+            suggestedPerKg: 0,
+            discount: '',
+          },
+        ];
+      });
+      setAppliedOffer(offerLabel);
+      if (o.discountAmount > 0) applyOffer(o.discountAmount, offerLabel);
+      else setToast({ open: true, msg: `${offerLabel} — اشانتیون اضافه شد`, color: 'success' });
+      return;
+    }
+
+    if (o.discountAmount > 0) {
+      applyOffer(o.discountAmount, `از طرح «${o.campaignName || o.label}» استفاده شد`);
+    } else {
+      const label = `از طرح «${o.campaignName || o.label}» استفاده شد`;
+      setAppliedOffer(label);
+      setToast({ open: true, msg: label, color: 'success' });
+    }
   };
 
   const applySuggestedInvoice = (sug: {
+    campaignName?: string;
     title: string;
     note?: string;
     lines: Array<{
@@ -686,6 +1155,7 @@ const Sale: React.FC = () => {
       return;
     }
     setLines(next);
+    setAppliedOffer(`از طرح «${sug.campaignName || sug.title}» استفاده شد`);
     setToast({
       open: true,
       msg:
@@ -701,15 +1171,14 @@ const Sale: React.FC = () => {
       const payloadLines = lines.map((l) => {
         const qty = parseFloat(l.qtyInput) || 0;
         const price = parseAmount(l.unitPrice) || 0;
-        const { qtyKg } = resolveQty(l.unit, qty, l.kgPerPackage);
-        const { perKg } = resolvePrices(l.unit, price, l.kgPerPackage);
+        const { qtyKg, lineAmount } = resolveLineAmount(l.unit, price, qty, l.kgPerPackage);
         return {
           productId: l.productId,
           productName: l.productName,
           unit: l.unit,
           qtyInput: qty,
           qtyKg,
-          lineAmount: perKg * qtyKg,
+          lineAmount,
           kgPerPackage: l.kgPerPackage,
         };
       });
@@ -778,13 +1247,26 @@ const Sale: React.FC = () => {
       );
       if (res.suggest) applySuggest(res.suggest);
       setHistOpen(true);
+      setHistDetailId(null);
     } catch {
       setPrevInvoices([]);
     }
   };
 
   const applyInvoiceTemplate = (inv: PrevInv) => {
-    if (inv.priceTier) setPriceTier(inv.priceTier as PriceTier);
+    if (inv.priceTier) {
+      const t = inv.priceTier as PriceTier;
+      if (t === 'retail' && isWholesaleCustomer) {
+        setToast({
+          open: true,
+          msg: 'مشتری عمده است — فاکتور تکی از تاریخچه اعمال نشد؛ نوع عمده ماند',
+          color: 'warning',
+        });
+        setPriceTier('wholesale');
+      } else {
+        setPriceTier(t);
+      }
+    }
     if (inv.discount) setDiscount(formatMoneyInput(String(inv.discount)));
     if (inv.items?.length) {
       setLines(
@@ -821,56 +1303,88 @@ const Sale: React.FC = () => {
     setHistOpen(false);
   };
 
-  const addProduct = (p: Product, qty = 1) => {
+  const openProductModal = (p: Product, existing?: LineItem) => {
     const percent = tierPercent(p, priceTier);
     const cost = productCost(p, costBasis);
     const suggested = priceFromPercent(cost, percent);
-    const unitPrice = formatMoneyInput(String(suggested * (p.kgPerPackage || 5)));
-    setLines((prev) => {
-      if (quickQtyOn) {
-        const idx = prev.findIndex((l) => l.productId === p._id);
-        if (idx >= 0) {
-          const next = [...prev];
-          const cur = parseFloat(next[idx].qtyInput) || 0;
-          const n = Math.max(0, cur + qty);
-          if (n <= 0) return next.filter((_, i) => i !== idx);
-          next[idx] = { ...next[idx], qtyInput: String(n) };
-          return next;
-        }
-        if (qty <= 0) return prev;
-      }
-      return [
-        ...prev,
-        {
-          key: newLineKey(),
-          productId: p._id,
-          productName: p.name,
-          imageUrl: p.imageUrl,
-          unit: 'package',
-          qtyInput: String(Math.max(1, qty)),
-          unitPrice,
-          kgPerPackage: p.kgPerPackage || 5,
-          suggestedPerKg: suggested,
-          discount: '',
-        },
-      ];
-    });
+    if (existing) {
+      setProdModalEditKey(existing.key);
+      setProdModalUnit(existing.unit);
+      setProdModalQty(existing.qtyInput || '1');
+      setProdModalPrice(existing.unitPrice);
+    } else {
+      setProdModalEditKey(null);
+      setProdModalUnit('package');
+      setProdModalQty('1');
+      setProdModalPrice(formatMoneyInput(String(Math.round(suggested * (p.kgPerPackage || 5)))));
+    }
+    setProdModalProduct(p);
+    setProdModalOpen(true);
   };
 
-  const setProductQty = (p: Product, qty: number) => {
-    const n = Math.max(0, qty);
+  const setModalUnit = (unit: 'kg' | 'package') => {
+    const p = prodModalProduct;
+    if (!p) {
+      setProdModalUnit(unit);
+      return;
+    }
     const percent = tierPercent(p, priceTier);
     const cost = productCost(p, costBasis);
     const suggested = priceFromPercent(cost, percent);
-    const unitPrice = formatMoneyInput(String(suggested * (p.kgPerPackage || 5)));
+    setProdModalUnit(unit);
+    setProdModalPrice(
+      formatMoneyInput(
+        String(Math.round(unit === 'package' ? suggested * (p.kgPerPackage || 5) : suggested))
+      )
+    );
+  };
+
+  const confirmProductModal = () => {
+    const p = prodModalProduct;
+    if (!p) return;
+    const qty = parseFloat(prodModalQty) || 0;
+    if (qty <= 0) {
+      setToast({ open: true, msg: 'تعداد معتبر وارد کنید', color: 'danger' });
+      return;
+    }
+    if (needsCustomer && !customerId && !customerName.trim()) {
+      setToast({
+        open: true,
+        msg: 'اول مشتری را انتخاب یا اضافه کنید',
+        color: 'warning',
+      });
+      openAddCustomerModal();
+      return;
+    }
+    const percent = tierPercent(p, priceTier);
+    const cost = productCost(p, costBasis);
+    const suggested = priceFromPercent(cost, percent);
+    const priceStr = prodModalPrice || formatMoneyInput(String(Math.round(suggested)));
+
     setLines((prev) => {
-      const idx = prev.findIndex((l) => l.productId === p._id);
-      if (n <= 0) {
-        return idx >= 0 ? prev.filter((_, i) => i !== idx) : prev;
+      if (prodModalEditKey) {
+        return prev.map((l) =>
+          l.key === prodModalEditKey
+            ? {
+                ...l,
+                unit: prodModalUnit,
+                qtyInput: String(qty),
+                unitPrice: priceStr,
+                suggestedPerKg: suggested,
+              }
+            : l
+        );
       }
+      const idx = prev.findIndex((l) => l.productId === p._id && l.unit === prodModalUnit);
       if (idx >= 0) {
         const next = [...prev];
-        next[idx] = { ...next[idx], qtyInput: String(n) };
+        const cur = parseFloat(next[idx].qtyInput) || 0;
+        next[idx] = {
+          ...next[idx],
+          qtyInput: String(cur + qty),
+          unitPrice: priceStr,
+          suggestedPerKg: suggested,
+        };
         return next;
       }
       return [
@@ -880,15 +1394,35 @@ const Sale: React.FC = () => {
           productId: p._id,
           productName: p.name,
           imageUrl: p.imageUrl,
-          unit: 'package',
-          qtyInput: String(n),
-          unitPrice,
+          unit: prodModalUnit,
+          qtyInput: String(qty),
+          unitPrice: priceStr,
           kgPerPackage: p.kgPerPackage || 5,
           suggestedPerKg: suggested,
           discount: '',
         },
       ];
     });
+    setProdModalOpen(false);
+    setProdModalProduct(null);
+    setToast({
+      open: true,
+      msg: prodModalEditKey ? 'قلم به‌روز شد' : `${p.name} اضافه شد`,
+      color: 'success',
+    });
+  };
+
+  const addProduct = (p: Product) => {
+    if (needsCustomer && !customerId && !customerName.trim()) {
+      openAddCustomerModal();
+      setToast({
+        open: true,
+        msg: 'برای سوپر/عمده اول مشتری را اضافه کنید',
+        color: 'warning',
+      });
+      return;
+    }
+    openProductModal(p);
   };
 
   useEffect(() => {
@@ -904,18 +1438,6 @@ const Sale: React.FC = () => {
       })
     );
   }, [priceTier, costBasis]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const bumpQty = (idx: number, delta: number) => {
-    setLines((prev) =>
-      prev
-        .map((l, i) => {
-          if (i !== idx) return l;
-          const next = Math.max(0, (parseFloat(l.qtyInput) || 0) + delta);
-          return { ...l, qtyInput: String(next) };
-        })
-        .filter((l) => (parseFloat(l.qtyInput) || 0) > 0)
-    );
-  };
 
   const openPdf = async (id: string) => {
     const res = await wsClient.request<{ html: string }>('sale.pdf', { id });
@@ -939,6 +1461,14 @@ const Sale: React.FC = () => {
       setToast({
         open: true,
         msg: 'برای سوپرمارکت / عمده باید مشتری انتخاب یا ثبت شود',
+        color: 'danger',
+      });
+      return;
+    }
+    if (priceTier === 'retail' && isWholesaleCustomer) {
+      setToast({
+        open: true,
+        msg: 'مشتری عمده است — فاکتور تکی مجاز نیست',
         color: 'danger',
       });
       return;
@@ -989,13 +1519,25 @@ const Sale: React.FC = () => {
             discountMode === 'per_kg' ? roundPerKgDiscount(parseAmount(discountPerKg) || 0) : undefined,
           notes: notes || undefined,
           appliedOffer: appliedOffer || undefined,
-          items: lines.map((l) => ({
-            productId: l.productId,
-            unit: l.unit,
-            qtyInput: parseFloat(l.qtyInput) || 0,
-            unitPrice: parseAmount(l.unitPrice) || undefined,
-            discount: roundToman(parseAmount(l.discount) || 0),
-          })),
+          items: lines.map((l) => {
+            const qty = parseFloat(l.qtyInput) || 0;
+            const price = parseAmount(l.unitPrice) || 0;
+            const { qtyKg, lineAmount } = resolveLineAmount(l.unit, price, qty, l.kgPerPackage);
+            const disc =
+              discountMode === 'product'
+                ? Math.max(
+                    0,
+                    Math.min(roundToman((parseAmount(l.discount) || 0) * qtyKg), lineAmount)
+                  )
+                : roundToman(parseAmount(l.discount) || 0);
+            return {
+              productId: l.productId,
+              unit: l.unit,
+              qtyInput: qty,
+              unitPrice: price || undefined,
+              discount: disc,
+            };
+          }),
         },
         { clientMutationId: newMutationId(), queueIfOffline: true }
       );
@@ -1003,10 +1545,57 @@ const Sale: React.FC = () => {
       if ((invoice as { queued?: boolean }).queued) {
         setToast({ open: true, msg: 'آفلاین در صف قرار گرفت — بعد از وصل ثبت می‌شود', color: 'warning' });
       } else {
+        const shareText = buildInvoiceShareText({
+          invoiceNumber: invoice.invoiceNumber,
+          customerName: customerName || undefined,
+          customerPhone: customerPhone || undefined,
+          date,
+          totalAmount: totals.net,
+          totalKg: totals.kg,
+          discount: totals.disc,
+          paymentMethod,
+          isGolden,
+          appliedOffer: appliedOffer || undefined,
+          shopName: shopName || undefined,
+          items: lines.map((l) => {
+            const qty = parseFloat(l.qtyInput) || 0;
+            const price = parseAmount(l.unitPrice) || 0;
+            const { qtyKg, perKg, lineAmount } = resolveLineAmount(
+              l.unit,
+              price,
+              qty,
+              l.kgPerPackage
+            );
+            return {
+              productName: l.productName,
+              qtyKg,
+              qtyInput: qty,
+              unit: l.unit,
+              unitPricePerKg: Math.round(perKg),
+              totalPrice: lineAmount,
+            };
+          }),
+        });
+        let cardText = '';
+        if (paymentMethod === 'card_to_card' && bankCards[selectedBankCard]) {
+          const c = bankCards[selectedBankCard];
+          cardText =
+            '\n\n' +
+            buildCardTransferText({
+              cardLabel: c.label,
+              cardNumber: c.cardNumber,
+              accountHolder: c.accountHolder,
+              bankName: c.bankName,
+              amount: totals.net,
+              invoiceNumber: invoice.invoiceNumber,
+              customerName: customerName || undefined,
+            });
+        }
+        await copyText(shareText + cardText);
         const msg =
           invoice.status === 'pending'
-            ? `فاکتور ${invoice.invoiceNumber} ثبت شد — منتظر تأیید ادمین`
-            : `فاکتور ${invoice.invoiceNumber} ثبت شد`;
+            ? `فاکتور ${invoice.invoiceNumber} ثبت شد — متن برای مشتری کپی شد`
+            : `فاکتور ${invoice.invoiceNumber} ثبت شد — متن کپی شد، بفرستید برای مشتری`;
         setToast({ open: true, msg, color: 'success' });
         if (saleTab !== 'bulk') {
           await openPdf(invoice._id);
@@ -1038,6 +1627,7 @@ const Sale: React.FC = () => {
       setCustomers([]);
       setPrevInvoices([]);
       setSuggestHint('');
+      setCustomerPreferredTier(null);
       if (saleTab === 'bulk') {
         setBulkCount((c) => c + 1);
       } else {
@@ -1052,8 +1642,8 @@ const Sale: React.FC = () => {
       setDate(todayIso());
       setDeliveryMode('company');
       setPriceTier('retail');
-      setMapOpen(false);
       setHistOpen(false);
+      setCustModalOpen(false);
     } catch (e) {
       setToast({
         open: true,
@@ -1139,22 +1729,94 @@ const Sale: React.FC = () => {
               </p>
             )}
             <div className="sale-tier-row">
-              {(Object.keys(TIER_LABELS) as PriceTier[]).map((t) => (
-                <button
-                  type="button"
-                  key={t}
-                  className={`sale-tier-btn ${priceTier === t ? 'active' : ''}`}
-                  onClick={() => setPriceTier(t)}
-                >
-                  {TIER_LABELS[t]}
-                </button>
-              ))}
+              {(Object.keys(TIER_LABELS) as PriceTier[]).map((t) => {
+                const lockedRetail = t === 'retail' && isWholesaleCustomer;
+                return (
+                  <button
+                    type="button"
+                    key={t}
+                    className={`sale-tier-btn ${priceTier === t ? 'active' : ''} ${lockedRetail ? 'locked' : ''}`}
+                    disabled={lockedRetail}
+                    onClick={() => selectPriceTier(t)}
+                  >
+                    {TIER_LABELS[t]}
+                  </button>
+                );
+              })}
               <IonToggle
                 checked={isGolden}
                 onIonChange={(e) => setIsGolden(e.detail.checked)}
-                title="فاکتور طلایی"
+                title="فاکتور ویژه / VIP"
               />
             </div>
+            {(isGolden || (goldenAutoEnabled && totals.kg >= (goldenMinKg || 500))) && (
+              <div className="golden-perks">
+                <div className="golden-perks-title">⭐ امتیاز مدیر فروش (فاکتور طلایی)</div>
+                {goldenSuggestions.map((t) => (
+                  <div key={t.key} style={{ marginBottom: 8 }}>
+                    <p className="hint convert-hint" style={{ margin: '0 0 4px' }}>
+                      {t.text}
+                    </p>
+                    <IonButton
+                      size="small"
+                      className="golden-perk-btn special"
+                      onClick={() => applyAutoGolden(t.action)}
+                    >
+                      اعمال این پیشنهاد
+                    </IonButton>
+                  </div>
+                ))}
+                <div className="chip-row">
+                  <IonButton
+                    size="small"
+                    className="golden-perk-btn"
+                    onClick={() => applyGoldenPerk('pct5')}
+                  >
+                    تخفیف ۵٪
+                  </IonButton>
+                  <IonButton
+                    size="small"
+                    className="golden-perk-btn"
+                    onClick={() => applyGoldenPerk('pct10')}
+                  >
+                    تخفیف ۱۰٪
+                  </IonButton>
+                  <IonButton
+                    size="small"
+                    className="golden-perk-btn"
+                    onClick={() => applyGoldenPerk('pct15')}
+                  >
+                    تخفیف ۱۵٪
+                  </IonButton>
+                  <IonButton
+                    size="small"
+                    className="golden-perk-btn"
+                    onClick={() => applyGoldenPerk('perkg')}
+                  >
+                    ۱۰۰۰ ت/کیلو
+                  </IonButton>
+                  <IonButton
+                    size="small"
+                    className="golden-perk-btn"
+                    onClick={() => applyGoldenPerk('gift1')}
+                  >
+                    اشانتیون ۱ بسته
+                  </IonButton>
+                  <IonButton
+                    size="small"
+                    className="golden-perk-btn special"
+                    onClick={() => applyGoldenPerk('vip_combo')}
+                  >
+                    VIP: ۵٪ + اشانتیون
+                  </IonButton>
+                </div>
+              </div>
+            )}
+            {isWholesaleCustomer && (
+              <p className="hint convert-hint" style={{ margin: '6px 0 0' }}>
+                مشتری عمده — فاکتور تکی مجاز نیست
+              </p>
+            )}
             <div className="chip-row" style={{ marginTop: 6 }}>
               <IonChip
                 className={costBasis === 'last' ? 'ios-chip-active' : 'ios-chip'}
@@ -1171,26 +1833,39 @@ const Sale: React.FC = () => {
             </div>
             <p className="hint" style={{ margin: '4px 0 0' }}>
               {costBasis === 'last'
-                ? 'قیمت پیشنهادی بر اساس آخرین خرید است'
-                : 'قیمت پیشنهادی بر اساس میانگین موزون موجودی است'}
+                ? 'قیمت پیشنهادی بر اساس آخرین خرید است — روی محصول هزینه و پیشنهاد را ببینید'
+                : 'قیمت پیشنهادی بر اساس میانگین موزون موجودی است — روی محصول هزینه و پیشنهاد را ببینید'}
             </p>
           </div>
 
           <div className="ios-glass-card sale-navy-card">
+            <div className="ios-row" style={{ marginBottom: 6 }}>
+              <strong>مشتری</strong>
+              <IonButton
+                size="small"
+                fill="outline"
+                onClick={() =>
+                  openAddCustomerModal(normalizePhone(custSearch) || '', '', '', 'create')
+                }
+              >
+                <IonIcon slot="start" icon={personAddOutline} />
+                افزودن
+              </IonButton>
+            </div>
             <IonSearchbar
               value={custSearch}
               debounce={150}
-              placeholder="مشتری: موبایل، نام یا فاکتور…"
+              placeholder="موبایل، نام یا فاکتور…"
               className="ios-search"
               inputMode="search"
               onIonInput={(e) => {
                 const raw = e.detail.value || '';
-                // اگر بیشتر رقم است → نرمال موبایل
                 const digits = normalizePhone(raw);
                 const digitRatio = digits.length / Math.max(raw.replace(/\s/g, '').length, 1);
                 setCustSearch(digitRatio >= 0.6 && digits.length >= 3 ? digits : raw);
               }}
             />
+            {lookingUp && <p className="hint convert-hint">در حال جستجو…</p>}
             {customers.length > 0 && (
               <div className="cust-chip-row">
                 {customers.slice(0, 4).map((c) => (
@@ -1207,7 +1882,7 @@ const Sale: React.FC = () => {
               </div>
             )}
 
-            {customerId && (
+            {customerId ? (
               <div className="cust-picked">
                 <div className="ios-row">
                   <div>
@@ -1217,10 +1892,29 @@ const Sale: React.FC = () => {
                       {customerAddress ? ` · ${customerAddress}` : ''}
                     </div>
                   </div>
-                  <IonButton size="small" fill="outline" onClick={() => setHistOpen(true)}>
-                    <IonIcon slot="start" icon={timeOutline} />
-                    قبلی
-                  </IonButton>
+                  <div className="chip-row" style={{ margin: 0 }}>
+                    <IonButton size="small" fill="outline" onClick={() => setHistOpen(true)}>
+                      <IonIcon slot="start" icon={timeOutline} />
+                      قبلی
+                    </IonButton>
+                    <IonButton
+                      size="small"
+                      fill="clear"
+                      onClick={() =>
+                        openAddCustomerModal(
+                          customerPhone,
+                          customerName,
+                          customerAddress,
+                          'edit'
+                        )
+                      }
+                    >
+                      ویرایش
+                    </IonButton>
+                    <IonButton size="small" fill="clear" color="medium" onClick={clearCustomer}>
+                      پاک
+                    </IonButton>
+                  </div>
                 </div>
                 {powerLabel && <p className="hint convert-hint">{powerLabel}</p>}
                 {suggestHint && (
@@ -1269,52 +1963,10 @@ const Sale: React.FC = () => {
                   <p className="hint convert-hint">آفر انتخاب‌شده: {appliedOffer}</p>
                 )}
               </div>
-            )}
-
-            {(needsCustomer || customerId) && (
-              <details className="sale-details">
-                <summary>آدرس و نقشه</summary>
-                <IonItem lines="full">
-                  <IonLabel position="stacked">نام</IonLabel>
-                  <IonInput
-                    value={customerName}
-                    onIonInput={(e) => setCustomerName(e.detail.value || '')}
-                  />
-                </IonItem>
-                <DigitInput
-                  label="موبایل"
-                  mode="phone"
-                  value={customerPhone}
-                  placeholder="09…"
-                  onChange={(v) => {
-                    setCustomerPhone(v);
-                    if (v.length >= 8) setCustSearch(v);
-                  }}
-                />
-                <div className="sale-address-row">
-                  <IonItem lines="none" className="sale-address-input">
-                    <IonLabel position="stacked">آدرس</IonLabel>
-                    <IonInput
-                      value={customerAddress}
-                      onIonInput={(e) => setCustomerAddress(e.detail.value || '')}
-                      placeholder="آدرس ارسال"
-                    />
-                  </IonItem>
-                  <IonButton
-                    className="sale-map-btn"
-                    fill="outline"
-                    onClick={() => setMapOpen(true)}
-                  >
-                    <IonIcon slot="start" icon={mapOutline} />
-                    نقشه
-                  </IonButton>
-                </div>
-                {(customerLat != null && customerLng != null) && (
-                  <p className="hint" style={{ marginTop: 4 }}>
-                    موقعیت انتخاب شده · {customerLat.toFixed(5)}, {customerLng.toFixed(5)}
-                  </p>
-                )}
-              </details>
+            ) : (
+              <p className="hint convert-hint" style={{ marginBottom: 0 }}>
+                شماره را بزنید — اگر نبود، پاپ‌آپ افزودن باز می‌شود
+              </p>
             )}
           </div>
 
@@ -1337,12 +1989,6 @@ const Sale: React.FC = () => {
 
           <div className="sale-products-head">
             <span>محصولات ({filtered.length})</span>
-            <IonChip
-              className={quickQtyOn ? 'ios-chip-active' : 'ios-chip'}
-              onClick={() => setQuickQtyOn((v) => !v)}
-            >
-              {quickQtyOn ? 'تعداد روی کارت ✓' : 'تعداد روی کارت'}
-            </IonChip>
             <IonSearchbar
               value={search}
               placeholder="جستجو…"
@@ -1350,11 +1996,9 @@ const Sale: React.FC = () => {
               onIonInput={(e) => setSearch(e.detail.value || '')}
             />
           </div>
-          {quickQtyOn && (
-            <p className="hint convert-hint" style={{ marginTop: 0 }}>
-              تعداد را همین‌جا با +/− تنظیم کنید — نیازی به ویرایش اقلام نیست
-            </p>
-          )}
+          <p className="hint convert-hint" style={{ marginTop: 0 }}>
+            روی محصول بزنید — تعداد و قیمت در پاپ‌آپ تنظیم می‌شود
+          </p>
           <div className="product-card-grid product-card-grid-dense">
             {filtered.length === 0 && (
               <p className="hint">محصولی نیست — از خرید ثبت کن</p>
@@ -1365,63 +2009,8 @@ const Sale: React.FC = () => {
               const percent = tierPercent(p, priceTier);
               const cost = productCost(p, costBasis);
               const suggested = priceFromPercent(cost, percent);
-              if (quickQtyOn) {
-                return (
-                  <div
-                    key={p._id}
-                    className={`product-card product-card-dense product-card-side product-card-qty ${
-                      inLines ? 'in-cart' : ''
-                    } ${stock <= 0 ? 'out' : ''}`}
-                  >
-                    {p.imageUrl ? (
-                      <img src={resolveMediaUrl(p.imageUrl)} alt="" className="pc-thumb-sm" />
-                    ) : (
-                      <div className="pc-thumb-sm pc-thumb-ph">{p.name.slice(0, 1)}</div>
-                    )}
-                    <div className="pc-side-body">
-                      <div className="pc-top">
-                        <span className="pc-badge">{p.kgPerPackage || 5}kg</span>
-                      </div>
-                      <div className="pc-name">{p.name}</div>
-                      <div className="pc-meta">{formatKg(stock)}</div>
-                      <div className="pc-price">{formatToman(suggested)}</div>
-                      <div className="pc-qty-row">
-                        <button
-                          type="button"
-                          className="pc-qty-btn"
-                          onClick={() => setProductQty(p, inLines - 1)}
-                        >
-                          −
-                        </button>
-                        <input
-                          className="pc-qty-input"
-                          inputMode="numeric"
-                          value={inLines || ''}
-                          placeholder="0"
-                          onChange={(e) => {
-                            const v = sanitizeNumberInput(e.target.value || '');
-                            setProductQty(p, parseInt(v || '0', 10) || 0);
-                          }}
-                        />
-                        <button
-                          type="button"
-                          className="pc-qty-btn"
-                          onClick={() => setProductQty(p, inLines + 1)}
-                        >
-                          +
-                        </button>
-                        <button
-                          type="button"
-                          className="pc-qty-btn pc-qty-plus5"
-                          onClick={() => setProductQty(p, inLines + 5)}
-                        >
-                          +۵
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                );
-              }
+              const avg = p.avgCostPerKg ?? p.purchasePrice ?? 0;
+              const last = p.lastPurchasePricePerKg || p.purchasePrice || 0;
               return (
                 <button
                   type="button"
@@ -1441,7 +2030,13 @@ const Sale: React.FC = () => {
                     </div>
                     <div className="pc-name">{p.name}</div>
                     <div className="pc-meta">{formatKg(stock)}</div>
-                    <div className="pc-price">{formatToman(suggested)}</div>
+                    <div className="pc-meta" style={{ fontSize: 11, opacity: 0.85 }}>
+                      {costBasis === 'weighted' ? 'میانگین' : 'آخر'} {formatToman(cost)}
+                      {avg > 0 && last > 0 && Math.abs(avg - last) > 1
+                        ? ` · ${costBasis === 'weighted' ? `آخر ${formatToman(last)}` : `میانگین ${formatToman(avg)}`}`
+                        : ''}
+                    </div>
+                    <div className="pc-price">{formatToman(suggested)}/کیلو</div>
                   </div>
                 </button>
               );
@@ -1454,15 +2049,39 @@ const Sale: React.FC = () => {
               <span className="ios-caption">{formatToman(totals.net)}</span>
             </div>
             {lines.length === 0 && (
-              <p className="hint">روی محصول بزنید تا قلم اضافه شود — هر قلم قیمت جدا دارد</p>
+              <p className="hint">روی محصول بزنید تا پاپ‌آپ تعداد و قیمت باز شود</p>
             )}
             {lines.map((l, idx) => {
               const qty = parseFloat(l.qtyInput) || 0;
               const price = parseAmount(l.unitPrice) || 0;
-              const { qtyKg, qtyPackages } = resolveQty(l.unit, qty, l.kgPerPackage);
-              const { perKg } = resolvePrices(l.unit, price, l.kgPerPackage);
+              const { qtyKg, qtyPackages, lineAmount } = resolveLineAmount(
+                l.unit,
+                price,
+                qty,
+                l.kgPerPackage
+              );
+              const lineDiscAmt =
+                discountMode === 'product'
+                  ? Math.max(
+                      0,
+                      Math.min(roundToman((parseAmount(l.discount) || 0) * qtyKg), lineAmount)
+                    )
+                  : Math.max(0, Math.min(parseAmount(l.discount) || 0, lineAmount));
+              const lineTotal = Math.max(0, lineAmount - lineDiscAmt);
+              const prod = products.find((x) => x._id === l.productId);
               return (
-                <div key={l.key} className="cart-item-card">
+                <div
+                  key={l.key}
+                  className="cart-item-card cart-item-compact"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => {
+                    if (prod) openProductModal(prod, l);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && prod) openProductModal(prod, l);
+                  }}
+                >
                   <div className="ios-row">
                     <div className="cart-item-title">
                       {l.imageUrl ? (
@@ -1470,121 +2089,49 @@ const Sale: React.FC = () => {
                       ) : (
                         <div className="cart-thumb cart-thumb-ph">{l.productName.slice(0, 1)}</div>
                       )}
-                      <strong>
-                        {idx + 1}. {l.productName}
-                      </strong>
+                      <div>
+                        <strong>
+                          {idx + 1}. {l.productName}
+                        </strong>
+                        <div className="ios-caption">
+                          {qty.toLocaleString('fa-IR')} {l.unit === 'kg' ? 'کیلو' : 'بسته'} · فی{' '}
+                          {formatToman(price)}
+                        </div>
+                        <div className="ios-caption">
+                          {formatKg(qtyKg)} · {Math.round(qtyPackages).toLocaleString('fa-IR')} بسته
+                          {lineDiscAmt > 0 ? ` · تخفیف ${formatToman(lineDiscAmt)}` : ''}
+                        </div>
+                      </div>
                     </div>
-                    <IonButton
-                      fill="clear"
-                      color="danger"
-                      size="small"
-                      onClick={() => setLines(lines.filter((_, i) => i !== idx))}
-                    >
-                      <IonIcon icon={trashOutline} />
-                    </IonButton>
+                    <div className="cart-item-actions" onClick={(e) => e.stopPropagation()}>
+                      <strong className="cart-line-total">{formatToman(lineTotal)}</strong>
+                      <IonButton
+                        fill="clear"
+                        color="danger"
+                        size="small"
+                        onClick={() => setLines(lines.filter((_, i) => i !== idx))}
+                      >
+                        <IonIcon icon={trashOutline} />
+                      </IonButton>
+                    </div>
                   </div>
-                  <div className="chip-row">
-                    <IonChip
-                      className={l.unit === 'kg' ? 'ios-chip-active' : 'ios-chip'}
-                      onClick={() =>
-                        setLines(
-                          lines.map((x, i) =>
-                            i === idx
-                              ? {
-                                  ...x,
-                                  unit: 'kg',
-                                  unitPrice: formatMoneyInput(String(x.suggestedPerKg)),
-                                }
-                              : x
-                          )
-                        )
-                      }
-                    >
-                      کیلو
-                    </IonChip>
-                    <IonChip
-                      className={l.unit === 'package' ? 'ios-chip-active' : 'ios-chip'}
-                      onClick={() =>
-                        setLines(
-                          lines.map((x, i) =>
-                            i === idx
-                              ? {
-                                  ...x,
-                                  unit: 'package',
-                                  unitPrice: formatMoneyInput(
-                                    String(Math.round(x.suggestedPerKg * (x.kgPerPackage || 5)))
-                                  ),
-                                }
-                              : x
-                          )
-                        )
-                      }
-                    >
-                      بسته
-                    </IonChip>
-                  </div>
-                  <div className="qty-stepper">
-                    <IonButton fill="outline" size="small" onClick={() => bumpQty(idx, -1)}>
-                      <IonIcon icon={removeOutline} />
-                    </IonButton>
-                    <IonInput
-                      type="text"
-                      inputMode="decimal"
-                      className="qty-input"
-                      value={l.qtyInput}
-                      onIonInput={(e) =>
-                        setLines(
-                          lines.map((x, i) =>
-                            i === idx
-                              ? {
-                                  ...x,
-                                  qtyInput: sanitizeNumberInput(e.detail.value || '', {
-                                    decimal: true,
-                                  }),
-                                }
-                              : x
-                          )
-                        )
-                      }
-                    />
-                    <IonButton fill="outline" size="small" onClick={() => bumpQty(idx, 1)}>
-                      <IonIcon icon={addOutline} />
-                    </IonButton>
-                    <IonButton fill="solid" size="small" className="qty-plus5" onClick={() => bumpQty(idx, 5)}>
-                      +۵
-                    </IonButton>
-                  </div>
-                  <IonItem lines="none">
-                    <IonLabel position="stacked">فی تومان (قابل تغییر)</IonLabel>
-                    <IonInput
-                      type="text"
-                      inputMode="numeric"
-                      pattern="[0-9]*"
-                      value={l.unitPrice}
-                      onIonInput={(e) =>
-                        setLines(
-                          lines.map((x, i) =>
-                            i === idx
-                              ? { ...x, unitPrice: formatMoneyInput(e.detail.value || '') }
-                              : x
-                          )
-                        )
-                      }
-                    />
-                  </IonItem>
                   {discountMode === 'product' && (
-                    <MoneyInput
-                      label="تخفیف این قلم (تومان)"
-                      value={l.discount}
-                      onChange={(v) =>
-                        setLines(lines.map((x, i) => (i === idx ? { ...x, discount: v } : x)))
-                      }
-                    />
+                    <div onClick={(e) => e.stopPropagation()}>
+                      <MoneyInput
+                        label="تخفیف هر کیلو (تومان/کیلو)"
+                        value={l.discount}
+                        onChange={(v) =>
+                          setLines(lines.map((x, i) => (i === idx ? { ...x, discount: v } : x)))
+                        }
+                      />
+                      {(parseAmount(l.discount) || 0) > 0 && (
+                        <p className="hint convert-hint" style={{ margin: '4px 0 0' }}>
+                          جمع تخفیف این قلم: {formatToman(lineDiscAmt)} (= {formatToman(parseAmount(l.discount) || 0)} ×{' '}
+                          {formatKg(qtyKg)})
+                        </p>
+                      )}
+                    </div>
                   )}
-                  <p className="hint convert-hint">
-                    {formatKg(qtyKg)} · {Math.round(qtyPackages).toLocaleString('fa-IR')} بسته ·{' '}
-                    {formatToman(Math.max(0, perKg * qtyKg - (parseAmount(l.discount) || 0)))}
-                  </p>
                 </div>
               );
             })}
@@ -1617,7 +2164,9 @@ const Sale: React.FC = () => {
                 onChange={(v) => setDiscountPerKg(v)}
               />
             ) : discountMode === 'product' ? (
-              <p className="hint">تخفیف هر قلم را در لیست اقلام بالا تنظیم کنید</p>
+              <p className="hint">
+                برای هر محصول در سبد، تخفیف را به تومان/کیلو بزن — جمع تخفیف خودکار حساب می‌شود
+              </p>
             ) : (
               <MoneyInput label="تخفیف کل" value={discount} onChange={(v) => setDiscount(v)} />
             )}
@@ -1665,6 +2214,20 @@ const Sale: React.FC = () => {
 
           <div className="ios-glass-card sale-navy-card sale-settle">
             <div className="sale-settle-title">تسویه · {formatToman(totals.net)}</div>
+            {appliedOffer && (
+              <div
+                className="hint convert-hint"
+                style={{
+                  margin: '0 0 10px',
+                  padding: '8px 10px',
+                  background: 'rgba(251, 146, 60, 0.12)',
+                  borderRadius: 10,
+                  border: '1px solid rgba(251, 146, 60, 0.35)',
+                }}
+              >
+                {appliedOffer}
+              </div>
+            )}
             <div className="chip-row">
               {paymentMethods.map((m) => (
                 <IonChip
@@ -1685,6 +2248,76 @@ const Sale: React.FC = () => {
                 </IonChip>
               ))}
             </div>
+            {paymentMethod === 'card_to_card' && (
+              <div style={{ marginTop: 10 }}>
+                <div className="ios-section-title" style={{ marginTop: 0 }}>
+                  کارت مقصد
+                </div>
+                {bankCards.length === 0 ? (
+                  <p className="hint">
+                    هنوز کارتی ثبت نشده — از تنظیمات اپ کارت اضافه کنید
+                  </p>
+                ) : (
+                  bankCards.map((c, i) => (
+                    <div
+                      key={`${c.cardNumber}-${i}`}
+                      className={`ios-glass-card ${selectedBankCard === i ? 'in-cart' : ''}`}
+                      style={{ marginBottom: 8, padding: 10 }}
+                    >
+                      <div className="ios-row">
+                        <button
+                          type="button"
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            textAlign: 'right',
+                            flex: 1,
+                            color: 'inherit',
+                            padding: 0,
+                          }}
+                          onClick={() => setSelectedBankCard(i)}
+                        >
+                          <strong>{c.label}</strong>
+                          <div className="ios-caption">
+                            {c.bankName ? `${c.bankName} · ` : ''}
+                            {c.accountHolder || ''}
+                          </div>
+                          <div className="ios-caption" dir="ltr" style={{ textAlign: 'right' }}>
+                            {c.cardNumber.replace(/(\d{4})(?=\d)/g, '$1 ')}
+                          </div>
+                        </button>
+                        <IonButton
+                          size="small"
+                          fill="outline"
+                          onClick={() => {
+                            const text = buildCardTransferText({
+                              cardLabel: c.label,
+                              cardNumber: c.cardNumber,
+                              accountHolder: c.accountHolder,
+                              bankName: c.bankName,
+                              amount: totals.net,
+                              customerName: customerName || undefined,
+                            });
+                            void copyText(text).then((ok) =>
+                              setToast({
+                                open: true,
+                                msg: ok
+                                  ? 'متن کارت‌به‌کارت کپی شد — برای مشتری بفرستید'
+                                  : 'کپی نشد',
+                                color: ok ? 'success' : 'danger',
+                              })
+                            );
+                          }}
+                        >
+                          <IonIcon slot="start" icon={copyOutline} />
+                          کپی برای مشتری
+                        </IonButton>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
             {paymentMethod === 'mixed' && (
               <div className="mixed-pay">
                 <MoneyInput
@@ -1780,32 +2413,254 @@ const Sale: React.FC = () => {
           )}
         </div>
 
-        {/* نقشه آدرس — فقط با دکمه باز می‌شود */}
-        <IonModal isOpen={mapOpen} onDidDismiss={() => setMapOpen(false)}>
+        {/* پاپ‌آپ افزودن مشتری */}
+        <IonModal isOpen={custModalOpen} onDidDismiss={() => setCustModalOpen(false)}>
           <IonHeader>
             <IonToolbar>
-              <IonTitle>انتخاب روی نقشه</IonTitle>
+              <IonTitle>{custModalMode === 'edit' ? 'ویرایش مشتری' : 'افزودن مشتری'}</IonTitle>
               <IonButtons slot="end">
-                <IonButton onClick={() => setMapOpen(false)}>تأیید</IonButton>
+                <IonButton onClick={() => setCustModalOpen(false)}>بستن</IonButton>
               </IonButtons>
             </IonToolbar>
           </IonHeader>
           <IonContent className="ion-padding">
-            <LocationPicker
-              lat={customerLat}
-              lng={customerLng}
-              address={customerAddress}
-              height={360}
-              onChange={({ lat, lng, address }) => {
-                setCustomerLat(lat);
-                setCustomerLng(lng);
-                if (address) setCustomerAddress(address);
-              }}
-            />
-            {customerAddress && (
-              <p className="hint convert-hint" style={{ marginTop: 10 }}>
-                {customerAddress}
+            <div className="ios-glass-card">
+              <p className="hint" style={{ marginTop: 0 }}>
+                {custModalMode === 'edit'
+                  ? 'مشخصات مشتری را ویرایش کنید'
+                  : 'این شماره در سیستم نیست — مشتری را ثبت کنید'}
               </p>
+              <IonItem lines="full">
+                <IonLabel position="stacked">نام</IonLabel>
+                <IonInput
+                  value={custModalName}
+                  placeholder="نام مشتری"
+                  onIonInput={(e) => setCustModalName(e.detail.value || '')}
+                />
+              </IonItem>
+              <DigitInput
+                label="موبایل"
+                mode="phone"
+                value={custModalPhone}
+                placeholder="09…"
+                onChange={(v) => setCustModalPhone(v)}
+              />
+              <IonItem lines="full">
+                <IonLabel position="stacked">آدرس (اختیاری)</IonLabel>
+                <IonInput
+                  value={custModalAddress}
+                  placeholder="آدرس ارسال"
+                  onIonInput={(e) => setCustModalAddress(e.detail.value || '')}
+                />
+              </IonItem>
+              <IonButton
+                expand="block"
+                fill="outline"
+                size="small"
+                style={{ marginTop: 10 }}
+                onClick={() => setCustModalShowMap((v) => !v)}
+              >
+                <IonIcon slot="start" icon={mapOutline} />
+                {custModalShowMap
+                  ? 'بستن نقشه'
+                  : custModalLat != null
+                    ? 'ویرایش موقعیت روی نقشه'
+                    : 'انتخاب موقعیت روی نقشه'}
+              </IonButton>
+              {custModalShowMap && (
+                <div style={{ marginTop: 8 }}>
+                  <LocationPicker
+                    lat={custModalLat}
+                    lng={custModalLng}
+                    address={custModalAddress}
+                    height={220}
+                    onChange={({ lat: la, lng: ln, address: street }) => {
+                      setCustModalLat(la);
+                      setCustModalLng(ln);
+                      if (street) setCustModalAddress(street);
+                    }}
+                  />
+                </div>
+              )}
+              {!custModalShowMap && custModalLat != null && custModalLng != null && (
+                <p className="hint convert-hint">
+                  موقعیت ثبت شد: {custModalLat.toFixed(5)}, {custModalLng.toFixed(5)}
+                </p>
+              )}
+              <IonButton
+                expand="block"
+                className="ios-primary-btn"
+                style={{ marginTop: 14 }}
+                disabled={custModalSaving}
+                onClick={() => void saveCustomerFromModal()}
+              >
+                <IonIcon slot="start" icon={personAddOutline} />
+                {custModalSaving ? '…' : custModalMode === 'edit' ? 'ذخیره' : 'ثبت مشتری'}
+              </IonButton>
+            </div>
+          </IonContent>
+        </IonModal>
+
+        {/* پاپ‌آپ افزودن / ویرایش محصول */}
+        <IonModal
+          isOpen={prodModalOpen}
+          onDidDismiss={() => {
+            setProdModalOpen(false);
+            setProdModalProduct(null);
+          }}
+          className="product-pick-modal"
+        >
+          <IonHeader>
+            <IonToolbar>
+              <IonTitle>{prodModalEditKey ? 'ویرایش قلم' : 'افزودن محصول'}</IonTitle>
+              <IonButtons slot="end">
+                <IonButton
+                  onClick={() => {
+                    setProdModalOpen(false);
+                    setProdModalProduct(null);
+                  }}
+                >
+                  بستن
+                </IonButton>
+              </IonButtons>
+            </IonToolbar>
+          </IonHeader>
+          <IonContent className="ion-padding">
+            {prodModalProduct && (
+              <div className="prod-modal-body">
+                <div className="prod-modal-head">
+                  {prodModalProduct.imageUrl ? (
+                    <img
+                      src={resolveMediaUrl(prodModalProduct.imageUrl)}
+                      alt=""
+                      className="prod-modal-thumb"
+                    />
+                  ) : (
+                    <div className="prod-modal-thumb ph">{prodModalProduct.name.slice(0, 1)}</div>
+                  )}
+                  <div>
+                    <strong className="prod-modal-name">{prodModalProduct.name}</strong>
+                    <div className="ios-caption">
+                      موجودی {formatKg(prodModalProduct.stockKg ?? prodModalProduct.stock ?? 0)} ·{' '}
+                      {prodModalProduct.kgPerPackage || 5} کیلو/بسته
+                    </div>
+                    <div className="ios-caption">
+                      هزینه ({costBasis === 'weighted' ? 'میانگین' : 'آخر'}):{' '}
+                      {formatToman(productCost(prodModalProduct, costBasis))}/کیلو
+                    </div>
+                    <div className="ios-caption">
+                      پیشنهادی:{' '}
+                      {formatToman(
+                        priceFromPercent(
+                          productCost(prodModalProduct, costBasis),
+                          tierPercent(prodModalProduct, priceTier)
+                        )
+                      )}
+                      /کیلو
+                    </div>
+                  </div>
+                </div>
+
+                <div className="chip-row" style={{ marginTop: 8 }}>
+                  <IonChip
+                    className={prodModalUnit === 'kg' ? 'ios-chip-active' : 'ios-chip'}
+                    onClick={() => setModalUnit('kg')}
+                  >
+                    کیلو
+                  </IonChip>
+                  <IonChip
+                    className={prodModalUnit === 'package' ? 'ios-chip-active' : 'ios-chip'}
+                    onClick={() => setModalUnit('package')}
+                  >
+                    بسته
+                  </IonChip>
+                </div>
+
+                <div className="qty-stepper" style={{ marginTop: 10 }}>
+                  <IonButton
+                    fill="outline"
+                    size="small"
+                    onClick={() =>
+                      setProdModalQty(String(Math.max(0, (parseFloat(prodModalQty) || 0) - 1)))
+                    }
+                  >
+                    <IonIcon icon={removeOutline} />
+                  </IonButton>
+                  <IonInput
+                    type="text"
+                    inputMode="decimal"
+                    className="qty-input"
+                    value={prodModalQty}
+                    onIonInput={(e) =>
+                      setProdModalQty(
+                        sanitizeNumberInput(e.detail.value || '', { decimal: true })
+                      )
+                    }
+                  />
+                  <IonButton
+                    fill="outline"
+                    size="small"
+                    onClick={() =>
+                      setProdModalQty(String((parseFloat(prodModalQty) || 0) + 1))
+                    }
+                  >
+                    <IonIcon icon={addOutline} />
+                  </IonButton>
+                  <IonButton
+                    fill="solid"
+                    size="small"
+                    className="qty-plus5"
+                    onClick={() =>
+                      setProdModalQty(String((parseFloat(prodModalQty) || 0) + 5))
+                    }
+                  >
+                    +۵
+                  </IonButton>
+                </div>
+
+                <IonItem lines="full" style={{ marginTop: 8 }}>
+                  <IonLabel position="stacked">
+                    فی تومان / {prodModalUnit === 'kg' ? 'کیلو' : 'بسته'}
+                  </IonLabel>
+                  <IonInput
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    value={prodModalPrice}
+                    onIonInput={(e) => setProdModalPrice(formatMoneyInput(e.detail.value || ''))}
+                  />
+                </IonItem>
+
+                {(() => {
+                  const qty = parseFloat(prodModalQty) || 0;
+                  const price = parseAmount(prodModalPrice) || 0;
+                  const { qtyKg, qtyPackages } = resolveQty(
+                    prodModalUnit,
+                    qty,
+                    prodModalProduct.kgPerPackage || 5
+                  );
+                  const { perKg } = resolvePrices(
+                    prodModalUnit,
+                    price,
+                    prodModalProduct.kgPerPackage || 5
+                  );
+                  return (
+                    <p className="hint convert-hint">
+                      {formatKg(qtyKg)} · {Math.round(qtyPackages).toLocaleString('fa-IR')} بسته · جمع{' '}
+                      {formatToman(perKg * qtyKg)}
+                    </p>
+                  );
+                })()}
+
+                <IonButton
+                  expand="block"
+                  className="ios-primary-btn"
+                  style={{ marginTop: 12 }}
+                  onClick={confirmProductModal}
+                >
+                  {prodModalEditKey ? 'ذخیره تغییرات' : 'افزودن به فاکتور'}
+                </IonButton>
+              </div>
             )}
           </IonContent>
         </IonModal>
@@ -1846,42 +2701,83 @@ const Sale: React.FC = () => {
                 {inv.priceTier && (
                   <IonChip outline>{TIER_LABELS[inv.priceTier as PriceTier] || inv.priceTier}</IonChip>
                 )}
-                <IonButton
-                  expand="block"
-                  size="small"
-                  className="ion-margin-top"
-                  onClick={() => {
-                    if (inv.items?.length) applyInvoiceTemplate(inv);
-                    else {
-                      // load suggest.lastInvoice if matching
-                      void wsClient
-                        .request<{
-                          suggest?: { lastInvoice?: PrevInv; recentInvoices?: PrevInv[]; suggestedDiscount?: number; preferredTier?: string };
-                        }>('customer.get', { id: customerId })
-                        .then((res) => {
-                          const match =
-                            res.suggest?.lastInvoice?.invoiceNumber === inv.invoiceNumber
-                              ? res.suggest.lastInvoice
-                              : null;
-                          if (match) applyInvoiceTemplate(match);
-                          else {
-                            if (res.suggest?.preferredTier) setPriceTier(res.suggest.preferredTier as PriceTier);
-                            if (inv.discount) setDiscount(formatMoneyInput(String(inv.discount)));
-                            else if (res.suggest?.suggestedDiscount)
-                              setDiscount(formatMoneyInput(String(res.suggest.suggestedDiscount)));
-                            setToast({
-                              open: true,
-                              msg: 'نوع قیمت و تخفیف از تاریخچه اعمال شد',
-                              color: 'success',
-                            });
-                            setHistOpen(false);
-                          }
-                        });
+                {histDetailId === inv.invoiceNumber && (
+                  <div style={{ marginTop: 8 }}>
+                    {(inv.items?.length || 0) === 0 ? (
+                      <p className="hint">اقلام این فاکتور در دسترس نیست</p>
+                    ) : (
+                      inv.items!.map((it, i) => (
+                        <div key={`${inv.invoiceNumber}-${i}`} className="stat-row">
+                          <span className="stat-label">
+                            {it.productName}
+                            {it.qtyInput
+                              ? ` · ${it.qtyInput} ${it.unit === 'package' ? 'بسته' : 'کیلو'}`
+                              : ''}
+                          </span>
+                          <span className="stat-value">
+                            {formatToman(it.unitPricePerKg)}/کیلو
+                          </span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+                <div className="chip-row" style={{ marginTop: 8 }}>
+                  <IonButton
+                    size="small"
+                    fill="outline"
+                    onClick={() =>
+                      setHistDetailId((cur) =>
+                        cur === inv.invoiceNumber ? null : inv.invoiceNumber
+                      )
                     }
-                  }}
-                >
-                  استفاده به‌عنوان فاکتور پیشنهادی
-                </IonButton>
+                  >
+                    <IonIcon slot="start" icon={eyeOutline} />
+                    {histDetailId === inv.invoiceNumber ? 'بستن جزئیات' : 'جزئیات'}
+                  </IonButton>
+                  <IonButton
+                    size="small"
+                    onClick={() => {
+                      if (inv.items?.length) applyInvoiceTemplate(inv);
+                      else {
+                        void wsClient
+                          .request<{
+                            suggest?: {
+                              lastInvoice?: PrevInv;
+                              recentInvoices?: PrevInv[];
+                              suggestedDiscount?: number;
+                              preferredTier?: string;
+                            };
+                          }>('customer.get', { id: customerId })
+                          .then((res) => {
+                            const match =
+                              res.suggest?.lastInvoice?.invoiceNumber === inv.invoiceNumber
+                                ? res.suggest.lastInvoice
+                                : null;
+                            if (match) applyInvoiceTemplate(match);
+                            else {
+                              if (res.suggest?.preferredTier)
+                                setPriceTier(res.suggest.preferredTier as PriceTier);
+                              if (inv.discount)
+                                setDiscount(formatMoneyInput(String(inv.discount)));
+                              else if (res.suggest?.suggestedDiscount)
+                                setDiscount(
+                                  formatMoneyInput(String(res.suggest.suggestedDiscount))
+                                );
+                              setToast({
+                                open: true,
+                                msg: 'نوع قیمت و تخفیف از تاریخچه اعمال شد',
+                                color: 'success',
+                              });
+                              setHistOpen(false);
+                            }
+                          });
+                      }
+                    }}
+                  >
+                    استفاده به‌عنوان فاکتور پیشنهادی
+                  </IonButton>
+                </div>
               </div>
             ))}
           </IonContent>

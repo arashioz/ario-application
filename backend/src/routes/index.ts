@@ -13,6 +13,7 @@ import {
   getPeriodSummary,
   updateShopSettings,
   listDebtors,
+  getProductAnalytics,
 } from '../services/dashboardService';
 import { localLlm, parseSms } from '../chatbot/engine';
 import { SmsMessage } from '../models';
@@ -123,6 +124,10 @@ router.get('/dashboard/period', asyncHandler(async (req, res) => {
   const from = new Date(req.query.from as string);
   const to = new Date(req.query.to as string);
   res.json(await getPeriodSummary(from, to));
+}));
+
+router.get('/products/:id/analytics', asyncHandler(async (req, res) => {
+  res.json(await getProductAnalytics(String(req.params.id)));
 }));
 
 // ─── Chatbot ───

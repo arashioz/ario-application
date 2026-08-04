@@ -157,10 +157,37 @@ export function resolvePrices(unit: 'kg' | 'package', price: number, kgPerPackag
   if (unit === 'package') {
     return {
       perPackage: price,
-      perKg: kgPerPackage > 0 ? Math.round(price / kgPerPackage) : price,
+      // بدون گرد کردن میانی — جمع قلم از قیمت واردشده محاسبه می‌شود
+      perKg: kgPerPackage > 0 ? price / kgPerPackage : price,
     };
   }
   return { perKg: price, perPackage: Math.round(price * kgPerPackage) };
+}
+
+/**
+ * جمع دقیق یک قلم فاکتور خرید/فروش.
+ * اگر قیمت بر اساس بسته باشد، جمع = قیمت بسته × تعداد بسته (بدون خطای ±۱ از تقسیم/ضرب کیلو).
+ */
+export function resolveLineAmount(
+  unit: 'kg' | 'package',
+  unitPrice: number,
+  qtyInput: number,
+  kgPerPackage: number
+): { qtyKg: number; qtyPackages: number; perKg: number; perPackage: number; lineAmount: number } {
+  const { qtyKg, qtyPackages } = resolveQty(unit, qtyInput, kgPerPackage);
+  if (unit === 'package') {
+    const lineAmount = Math.round(unitPrice * qtyPackages);
+    const perKg = qtyKg > 0 ? lineAmount / qtyKg : 0;
+    return { qtyKg, qtyPackages, perKg, perPackage: unitPrice, lineAmount };
+  }
+  const lineAmount = Math.round(unitPrice * qtyKg);
+  return {
+    qtyKg,
+    qtyPackages,
+    perKg: unitPrice,
+    perPackage: Math.round(unitPrice * (kgPerPackage > 0 ? kgPerPackage : 5)),
+    lineAmount,
+  };
 }
 
 export type InvoicePeriod = 'today' | 'yesterday' | 'week' | 'month' | 'all';

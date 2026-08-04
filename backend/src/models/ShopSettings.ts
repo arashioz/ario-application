@@ -1,5 +1,12 @@
 import mongoose, { Schema, Document } from 'mongoose';
 
+export interface IBankCard {
+  label: string;
+  cardNumber: string;
+  accountHolder?: string;
+  bankName?: string;
+}
+
 export interface IShopSettings extends Document {
   shopName: string;
   openingDate: Date;
@@ -31,9 +38,29 @@ export interface IShopSettings extends Document {
   platformCities?: string;
   /** مبنای محاسبه قیمت فروش: میانگین موزون یا آخرین خرید */
   costBasis: 'weighted' | 'last';
+  /** آدرس MongoDB برای اتصال Compass (فقط ادمین) */
+  mongoCompassUri?: string;
+  /** کارت‌های بانکی برای کارت‌به‌کارت */
+  bankCards: IBankCard[];
+  /** پیشنهاد خودکار فاکتور طلایی */
+  goldenAutoEnabled: boolean;
+  goldenMinKg: number;
+  goldenSuggestGiftName: string;
+  goldenSuggestGiftQty: number;
+  goldenSuggestDiscountPercent: number;
   createdAt: Date;
   updatedAt: Date;
 }
+
+const BankCardSchema = new Schema<IBankCard>(
+  {
+    label: { type: String, required: true, trim: true },
+    cardNumber: { type: String, required: true, trim: true },
+    accountHolder: { type: String, trim: true },
+    bankName: { type: String, trim: true },
+  },
+  { _id: false }
+);
 
 const ShopSettingsSchema = new Schema<IShopSettings>(
   {
@@ -58,8 +85,18 @@ const ShopSettingsSchema = new Schema<IShopSettings>(
     commissionPercentCompany: { type: Number, default: 3 },
     commissionPercentSelf: { type: Number, default: 5 },
     platformMinOrderKg: { type: Number, default: 500 },
-    platformCities: { type: String, default: 'مشهد,نیشابور,سبزوار,تربت حیدریه,قوچان,کاشمر,گناباد' },
+    platformCities: {
+      type: String,
+      default: 'مشهد,نیشابور,سبزوار,تربت حیدریه,قوچان,کاشمر,گناباد',
+    },
     costBasis: { type: String, enum: ['weighted', 'last'], default: 'last' },
+    mongoCompassUri: { type: String },
+    bankCards: { type: [BankCardSchema], default: [] },
+    goldenAutoEnabled: { type: Boolean, default: true },
+    goldenMinKg: { type: Number, default: 500 },
+    goldenSuggestGiftName: { type: String, default: 'کارتن' },
+    goldenSuggestGiftQty: { type: Number, default: 1 },
+    goldenSuggestDiscountPercent: { type: Number, default: 5 },
   },
   { timestamps: true }
 );

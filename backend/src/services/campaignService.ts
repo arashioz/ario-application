@@ -1,5 +1,23 @@
 import { Campaign, ICampaign, ICampaignRule, Product, SaleInvoice } from '../models';
 import { roundToman } from '../utils/persian';
+import type { CustomerLoyaltyTier } from './customerService';
+
+async function getCustomerLoyaltyTier(customerId?: string): Promise<CustomerLoyaltyTier | null> {
+  if (!customerId) return null;
+  const monthStart = new Date();
+  monthStart.setDate(1);
+  monthStart.setHours(0, 0, 0, 0);
+  const sales = await SaleInvoice.find({
+    customerId,
+    date: { $gte: monthStart },
+    status: { $in: ['approved', 'shipped'] },
+  }).select('totalKg');
+  const kg = sales.reduce((s, i) => s + (i.totalKg || 0), 0);
+  if (kg >= 5000) return 'gold';
+  if (kg >= 2000) return 'silver';
+  if (sales.length > 0) return 'bronze';
+  return 'new';
+}
 
 export async function listCampaigns(opts?: { activeOnly?: boolean; forMarketer?: boolean }) {
   const filter: Record<string, unknown> = {};
@@ -22,6 +40,7 @@ export async function createCampaign(data: Partial<ICampaign>) {
     description: data.description,
     active: data.active !== false,
     forMarketers: data.forMarketers !== false,
+    targetLoyaltyTiers: data.targetLoyaltyTiers || [],
     startDate: data.startDate,
     endDate: data.endDate,
     rules: data.rules || [],
@@ -36,6 +55,7 @@ export async function updateCampaign(id: string, data: Partial<ICampaign>) {
   if (data.description !== undefined) c.description = data.description;
   if (data.active !== undefined) c.active = data.active;
   if (data.forMarketers !== undefined) c.forMarketers = data.forMarketers;
+  if (data.targetLoyaltyTiers !== undefined) c.targetLoyaltyTiers = data.targetLoyaltyTiers;
   if (data.startDate !== undefined) c.startDate = data.startDate;
   if (data.endDate !== undefined) c.endDate = data.endDate;
   if (data.rules !== undefined) c.rules = data.rules;
@@ -121,6 +141,17 @@ function ruleMatches(
       if (rule.minMonthKg) return kgOk;
       return (ctx.customerInvoiceCount || 0) >= 3;
     }
+    case 'free_gift': {
+      const triggerName = rule.triggerNameContains?.trim();
+      const need = rule.triggerQty || 0;
+      if (!triggerName || need <= 0) return false;
+      const matched = lineMatchesReq(ctx.lines, triggerName);
+      const sum = matched.reduce(
+        (s, l) => s + qtyInUnit(l, rule.triggerUnit || 'package'),
+        0
+      );
+      return sum + 1e-6 >= need;
+    }
     default:
       return false;
   }
@@ -141,6 +172,11 @@ function ruleLabel(rule: ICampaignRule): string {
       return `پرداخت کارتی · ${rule.discountPercent}٪`;
     case 'loyalty':
       return `مشتری خوب · ${rule.discountPercent}٪`;
+    case 'free_gift':
+      return (
+        rule.label?.trim() ||
+        `اشانتیون: با ${rule.triggerQty || '?'} ${rule.triggerNameContains || 'محصول'} → ${rule.giftQty || 1} ${rule.giftProductName || 'هدیه'}`
+      );
     default:
       return `${rule.discountPercent}٪ تخفیف`;
   }
@@ -163,6 +199,7 @@ export async function evaluateCampaigns(input: {
 
   let customerInvoiceCount = 0;
   let customerMonthKg = 0;
+  let customerTier: CustomerLoyaltyTier | null = null;
   if (input.customerId) {
     const monthStart = new Date();
     monthStart.setDate(1);
@@ -177,6 +214,7 @@ export async function evaluateCampaigns(input: {
     customerMonthKg = invs
       .filter((i) => new Date(i.date) >= monthStart)
       .reduce((s, i) => s + (i.totalKg || 0), 0);
+    customerTier = await getCustomerLoyaltyTier(input.customerId);
   }
 
   const offers: Array<{
@@ -188,6 +226,12 @@ export async function evaluateCampaigns(input: {
     discountAmount: number;
     matched: boolean;
     hint?: string;
+    giftLine?: {
+      productName: string;
+      qty: number;
+      unit: 'kg' | 'package';
+      resolvedProductId?: string;
+    };
   }> = [];
 
   const suggested: Array<{
@@ -206,6 +250,14 @@ export async function evaluateCampaigns(input: {
 
   for (const c of campaigns) {
     if (input.role === 'marketer' && !c.forMarketers) continue;
+
+    const tiers = c.targetLoyaltyTiers || [];
+    if (tiers.length > 0) {
+      if (!customerTier || !tiers.includes(customerTier)) {
+        // طرح فقط برای لایه خاص — برای این مشتری نشان نده
+        continue;
+      }
+    }
 
     for (const rule of c.rules || []) {
       const matched = ruleMatches(rule, {
@@ -231,17 +283,42 @@ export async function evaluateCampaigns(input: {
           hint = 'روش پرداخت را نقد کن';
         } else if (rule.type === 'loyalty') {
           hint = 'این مشتری هنوز شرایط وفاداری را ندارد';
+        } else if (rule.type === 'free_gift') {
+          hint = `حداقل ${rule.triggerQty} ${rule.triggerUnit === 'kg' ? 'کیلو' : 'بسته'} ${rule.triggerNameContains || ''} لازم است`;
         }
       }
+
+      let giftLine:
+        | {
+            productName: string;
+            qty: number;
+            unit: 'kg' | 'package';
+            resolvedProductId?: string;
+          }
+        | undefined;
+      if (matched && rule.type === 'free_gift' && rule.giftProductName?.trim()) {
+        const giftName = rule.giftProductName.trim();
+        const p = await Product.findOne({
+          name: { $regex: giftName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' },
+        });
+        giftLine = {
+          productName: giftName,
+          qty: rule.giftQty || 1,
+          unit: rule.giftUnit || 'package',
+          resolvedProductId: p?._id?.toString(),
+        };
+      }
+
       offers.push({
         campaignId: c._id.toString(),
         campaignName: c.name,
         ruleType: rule.type,
         label: ruleLabel(rule),
-        discountPercent: rule.discountPercent,
+        discountPercent: rule.discountPercent || 0,
         discountAmount,
         matched,
         hint: hint || undefined,
+        giftLine,
       });
     }
 
