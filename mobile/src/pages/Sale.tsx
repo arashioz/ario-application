@@ -43,6 +43,11 @@ import {
   todayIso,
   formatMoneyInput,
   formatDate,
+  normalizePhone,
+  sanitizeNumberInput,
+  roundToman,
+  roundPerKgDiscount,
+  priceFromPercent,
 } from '../utils/format';
 import { paymentMethods } from '../theme/colors';
 import { PersianDateField } from '../components/PersianDateField';
@@ -54,6 +59,7 @@ import { resolveMediaUrl } from '../api/client';
 import { geoErrorMessage, getCurrentPositionAsync, isGeoSecureContext } from '../utils/geo';
 import { reverseGeocode } from '../utils/geocode';
 import { useHistory } from 'react-router-dom';
+import { DigitInput } from '../components/DigitInput';
 
 type PriceTier = 'retail' | 'supermarket' | 'wholesale';
 type CostBasis = 'weighted' | 'last';
@@ -236,13 +242,22 @@ const Sale: React.FC = () => {
   const [dueDate, setDueDate] = useState('');
   const [date, setDate] = useState(todayIso());
   const [notes, setNotes] = useState('');
+  const [appliedOffer, setAppliedOffer] = useState('');
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState({ open: false, msg: '', color: 'success' });
   const [mapOpen, setMapOpen] = useState(false);
   const [histOpen, setHistOpen] = useState(false);
   const [saleTab, setSaleTab] = useState<'single' | 'bulk'>('single');
   const [bulkCount, setBulkCount] = useState(0);
+  /** تعداد مستقیم روی کارت محصول (مناسب عمده/سوپر) */
+  const [quickQtyOn, setQuickQtyOn] = useState(false);
   const needsCustomer = priceTier !== 'retail';
+
+  useEffect(() => {
+    if (priceTier === 'wholesale' || priceTier === 'supermarket') {
+      setQuickQtyOn(true);
+    }
+  }, [priceTier]);
 
   const loadProducts = useCallback(async () => {
     try {
@@ -398,7 +413,7 @@ const Sale: React.FC = () => {
           // موبایل دقیق → خودکار لود
           if (
             res.exactPhone?._id &&
-            /^\d{8,}$/.test(q.replace(/\D/g, '')) &&
+            normalizePhone(q).replace(/\D/g, '').length >= 8 &&
             String(res.exactPhone._id) !== customerId
           ) {
             await pickCustomer(res.exactPhone as Customer);
@@ -454,12 +469,12 @@ const Sale: React.FC = () => {
     const afterLines = Math.max(0, amount - lineDisc);
     let invoiceDisc = 0;
     if (discountMode === 'per_kg') {
-      invoiceDisc = Math.round((parseAmount(discountPerKg) || 0) * kg);
+      invoiceDisc = Math.round((roundPerKgDiscount(parseAmount(discountPerKg) || 0)) * kg);
     } else if (discountMode === 'invoice') {
-      invoiceDisc = parseAmount(discount) || 0;
+      invoiceDisc = roundToman(parseAmount(discount) || 0);
     } else {
       // product: تخفیف فاکتور اختیاری اضافه (معمولاً ۰)
-      invoiceDisc = parseAmount(discount) || 0;
+      invoiceDisc = roundToman(parseAmount(discount) || 0);
     }
     invoiceDisc = Math.min(invoiceDisc, afterLines);
     const disc = lineDisc + invoiceDisc;
@@ -473,6 +488,18 @@ const Sale: React.FC = () => {
       count: lines.length,
     };
   }, [lines, discount, discountPerKg, discountMode]);
+
+  // ترکیبی: با تغییر مبلغ فاکتور، مانده نسیه را دوباره حساب کن
+  useEffect(() => {
+    if (paymentMethod !== 'mixed') return;
+    const cash = parseAmount(payCash) || 0;
+    const pos = parseAmount(payCard) || 0;
+    const c2c = parseAmount(payCardToCard) || 0;
+    const rem = Math.max(0, totals.net - cash - pos - c2c);
+    const next = rem > 0 ? formatMoneyInput(String(rem)) : '';
+    if ((parseAmount(payCredit) || 0) !== rem) setPayCredit(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [totals.net, paymentMethod]);
 
   const applySuggest = (suggest: {
     preferredTier?: string;
@@ -541,9 +568,10 @@ const Sale: React.FC = () => {
   }, [lines, products, totals.amount, costBasis]);
 
   const applyOffer = (amount: number, label: string) => {
-    const capped = Math.min(amount, safeCartCap.maxDiscount || amount);
+    const capped = roundToman(Math.min(amount, safeCartCap.maxDiscount || amount));
+    setAppliedOffer(label);
     if (discountMode === 'per_kg' && totals.kg > 0) {
-      const perKg = Math.round(capped / totals.kg);
+      const perKg = roundPerKgDiscount(capped / totals.kg);
       setDiscountPerKg(formatMoneyInput(String(perKg)));
       setToast({
         open: true,
@@ -634,7 +662,7 @@ const Sale: React.FC = () => {
       }
       const percent = tierPercent(p, priceTier);
       const cost = productCost(p, costBasis);
-      const suggested = Math.round(cost * (1 + percent / 100));
+      const suggested = priceFromPercent(cost, percent);
       const unit = sl.unit || 'package';
       const price = unit === 'package' ? suggested * (p.kgPerPackage || 5) : suggested;
       next.push({
@@ -793,25 +821,74 @@ const Sale: React.FC = () => {
     setHistOpen(false);
   };
 
-  const addProduct = (p: Product) => {
+  const addProduct = (p: Product, qty = 1) => {
     const percent = tierPercent(p, priceTier);
     const cost = productCost(p, costBasis);
-    const suggested = Math.round(cost * (1 + percent / 100));
-    setLines((prev) => [
-      ...prev,
-      {
-        key: newLineKey(),
-        productId: p._id,
-        productName: p.name,
-        imageUrl: p.imageUrl,
-        unit: 'package',
-        qtyInput: '1',
-        unitPrice: formatMoneyInput(String(suggested * (p.kgPerPackage || 5))),
-        kgPerPackage: p.kgPerPackage || 5,
-        suggestedPerKg: suggested,
-        discount: '',
-      },
-    ]);
+    const suggested = priceFromPercent(cost, percent);
+    const unitPrice = formatMoneyInput(String(suggested * (p.kgPerPackage || 5)));
+    setLines((prev) => {
+      if (quickQtyOn) {
+        const idx = prev.findIndex((l) => l.productId === p._id);
+        if (idx >= 0) {
+          const next = [...prev];
+          const cur = parseFloat(next[idx].qtyInput) || 0;
+          const n = Math.max(0, cur + qty);
+          if (n <= 0) return next.filter((_, i) => i !== idx);
+          next[idx] = { ...next[idx], qtyInput: String(n) };
+          return next;
+        }
+        if (qty <= 0) return prev;
+      }
+      return [
+        ...prev,
+        {
+          key: newLineKey(),
+          productId: p._id,
+          productName: p.name,
+          imageUrl: p.imageUrl,
+          unit: 'package',
+          qtyInput: String(Math.max(1, qty)),
+          unitPrice,
+          kgPerPackage: p.kgPerPackage || 5,
+          suggestedPerKg: suggested,
+          discount: '',
+        },
+      ];
+    });
+  };
+
+  const setProductQty = (p: Product, qty: number) => {
+    const n = Math.max(0, qty);
+    const percent = tierPercent(p, priceTier);
+    const cost = productCost(p, costBasis);
+    const suggested = priceFromPercent(cost, percent);
+    const unitPrice = formatMoneyInput(String(suggested * (p.kgPerPackage || 5)));
+    setLines((prev) => {
+      const idx = prev.findIndex((l) => l.productId === p._id);
+      if (n <= 0) {
+        return idx >= 0 ? prev.filter((_, i) => i !== idx) : prev;
+      }
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = { ...next[idx], qtyInput: String(n) };
+        return next;
+      }
+      return [
+        ...prev,
+        {
+          key: newLineKey(),
+          productId: p._id,
+          productName: p.name,
+          imageUrl: p.imageUrl,
+          unit: 'package',
+          qtyInput: String(n),
+          unitPrice,
+          kgPerPackage: p.kgPerPackage || 5,
+          suggestedPerKg: suggested,
+          discount: '',
+        },
+      ];
+    });
   };
 
   useEffect(() => {
@@ -821,7 +898,7 @@ const Sale: React.FC = () => {
         if (!p) return l;
         const percent = tierPercent(p, priceTier);
         const cost = productCost(p, costBasis);
-        const suggested = Math.round(cost * (1 + percent / 100));
+        const suggested = priceFromPercent(cost, percent);
         const price = l.unit === 'package' ? suggested * (l.kgPerPackage || 5) : suggested;
         return { ...l, suggestedPerKg: suggested, unitPrice: formatMoneyInput(String(Math.round(price))) };
       })
@@ -854,6 +931,18 @@ const Sale: React.FC = () => {
       setToast({ open: true, msg: 'اقلامی نیست — اول محصول اضافه کنید', color: 'danger' });
       return;
     }
+    if (
+      (priceTier === 'supermarket' || priceTier === 'wholesale') &&
+      !customerId &&
+      !customerName.trim()
+    ) {
+      setToast({
+        open: true,
+        msg: 'برای سوپرمارکت / عمده باید مشتری انتخاب یا ثبت شود',
+        color: 'danger',
+      });
+      return;
+    }
     setLoading(true);
     try {
       const net = totals.net;
@@ -877,7 +966,7 @@ const Sale: React.FC = () => {
         {
           customerId: customerId || undefined,
           customerName: customerName || undefined,
-          customerPhone: customerPhone || undefined,
+          customerPhone: customerPhone ? normalizePhone(customerPhone) || undefined : undefined,
           customerAddress: customerAddress || undefined,
           customerLat: customerLat ?? undefined,
           customerLng: customerLng ?? undefined,
@@ -895,16 +984,17 @@ const Sale: React.FC = () => {
           discount:
             discountMode === 'per_kg'
               ? totals.invoiceDisc
-              : parseAmount(discount) || 0,
+              : roundToman(parseAmount(discount) || 0),
           discountPerKg:
-            discountMode === 'per_kg' ? parseAmount(discountPerKg) || 0 : undefined,
+            discountMode === 'per_kg' ? roundPerKgDiscount(parseAmount(discountPerKg) || 0) : undefined,
           notes: notes || undefined,
+          appliedOffer: appliedOffer || undefined,
           items: lines.map((l) => ({
             productId: l.productId,
             unit: l.unit,
             qtyInput: parseFloat(l.qtyInput) || 0,
             unitPrice: parseAmount(l.unitPrice) || undefined,
-            discount: parseAmount(l.discount) || 0,
+            discount: roundToman(parseAmount(l.discount) || 0),
           })),
         },
         { clientMutationId: newMutationId(), queueIfOffline: true }
@@ -929,6 +1019,7 @@ const Sale: React.FC = () => {
       setDiscountPerKg('');
       setDiscountMode('invoice');
       setNotes('');
+      setAppliedOffer('');
       setIsGolden(false);
       setPayCash('');
       setPayCard('');
@@ -1091,7 +1182,14 @@ const Sale: React.FC = () => {
               debounce={150}
               placeholder="مشتری: موبایل، نام یا فاکتور…"
               className="ios-search"
-              onIonInput={(e) => setCustSearch(e.detail.value || '')}
+              inputMode="search"
+              onIonInput={(e) => {
+                const raw = e.detail.value || '';
+                // اگر بیشتر رقم است → نرمال موبایل
+                const digits = normalizePhone(raw);
+                const digitRatio = digits.length / Math.max(raw.replace(/\s/g, '').length, 1);
+                setCustSearch(digitRatio >= 0.6 && digits.length >= 3 ? digits : raw);
+              }}
             />
             {customers.length > 0 && (
               <div className="cust-chip-row">
@@ -1143,20 +1241,33 @@ const Sale: React.FC = () => {
                           },
                         ]
                       : []
-                  ).map((o) => (
-                    <IonButton
-                      key={o.key}
-                      size="small"
-                      className={o.key === 'special' ? 'offer-btn special' : 'offer-btn'}
-                      onClick={() => applyOffer(o.amount, o.label)}
-                    >
-                      <IonIcon slot="start" icon={sparklesOutline} />
-                      {o.label}
-                      <br />
-                      <span className="offer-amt">{formatToman(o.amount)}</span>
-                    </IonButton>
-                  ))}
+                  ).map((o) => {
+                    const amt = roundToman(o.amount);
+                    const perKg =
+                      totals.kg > 0 ? roundPerKgDiscount(amt / totals.kg) : 0;
+                    return (
+                      <IonButton
+                        key={o.key}
+                        size="small"
+                        className={`${o.key === 'special' ? 'offer-btn special' : 'offer-btn'}${
+                          appliedOffer === o.label ? ' active' : ''
+                        }`}
+                        onClick={() => applyOffer(amt, o.label)}
+                      >
+                        <IonIcon slot="start" icon={sparklesOutline} />
+                        {o.label}
+                        <br />
+                        <span className="offer-amt">
+                          {formatToman(amt)}
+                          {perKg > 0 ? ` · ${formatToman(perKg)}/کیلو` : ''}
+                        </span>
+                      </IonButton>
+                    );
+                  })}
                 </div>
+                {appliedOffer && (
+                  <p className="hint convert-hint">آفر انتخاب‌شده: {appliedOffer}</p>
+                )}
               </div>
             )}
 
@@ -1170,20 +1281,16 @@ const Sale: React.FC = () => {
                     onIonInput={(e) => setCustomerName(e.detail.value || '')}
                   />
                 </IonItem>
-                <IonItem lines="full">
-                  <IonLabel position="stacked">موبایل</IonLabel>
-                  <IonInput
-                    value={customerPhone}
-                    inputmode="tel"
-                    placeholder="09…"
-                    onIonInput={(e) => {
-                      const v = e.detail.value || '';
-                      setCustomerPhone(v);
-                      const digits = v.replace(/\D/g, '');
-                      if (digits.length >= 8) setCustSearch(v);
-                    }}
-                  />
-                </IonItem>
+                <DigitInput
+                  label="موبایل"
+                  mode="phone"
+                  value={customerPhone}
+                  placeholder="09…"
+                  onChange={(v) => {
+                    setCustomerPhone(v);
+                    if (v.length >= 8) setCustSearch(v);
+                  }}
+                />
                 <div className="sale-address-row">
                   <IonItem lines="none" className="sale-address-input">
                     <IonLabel position="stacked">آدرس</IonLabel>
@@ -1230,6 +1337,12 @@ const Sale: React.FC = () => {
 
           <div className="sale-products-head">
             <span>محصولات ({filtered.length})</span>
+            <IonChip
+              className={quickQtyOn ? 'ios-chip-active' : 'ios-chip'}
+              onClick={() => setQuickQtyOn((v) => !v)}
+            >
+              {quickQtyOn ? 'تعداد روی کارت ✓' : 'تعداد روی کارت'}
+            </IonChip>
             <IonSearchbar
               value={search}
               placeholder="جستجو…"
@@ -1237,6 +1350,11 @@ const Sale: React.FC = () => {
               onIonInput={(e) => setSearch(e.detail.value || '')}
             />
           </div>
+          {quickQtyOn && (
+            <p className="hint convert-hint" style={{ marginTop: 0 }}>
+              تعداد را همین‌جا با +/− تنظیم کنید — نیازی به ویرایش اقلام نیست
+            </p>
+          )}
           <div className="product-card-grid product-card-grid-dense">
             {filtered.length === 0 && (
               <p className="hint">محصولی نیست — از خرید ثبت کن</p>
@@ -1246,7 +1364,64 @@ const Sale: React.FC = () => {
               const inLines = lineQty(p._id);
               const percent = tierPercent(p, priceTier);
               const cost = productCost(p, costBasis);
-              const suggested = Math.round(cost * (1 + percent / 100));
+              const suggested = priceFromPercent(cost, percent);
+              if (quickQtyOn) {
+                return (
+                  <div
+                    key={p._id}
+                    className={`product-card product-card-dense product-card-side product-card-qty ${
+                      inLines ? 'in-cart' : ''
+                    } ${stock <= 0 ? 'out' : ''}`}
+                  >
+                    {p.imageUrl ? (
+                      <img src={resolveMediaUrl(p.imageUrl)} alt="" className="pc-thumb-sm" />
+                    ) : (
+                      <div className="pc-thumb-sm pc-thumb-ph">{p.name.slice(0, 1)}</div>
+                    )}
+                    <div className="pc-side-body">
+                      <div className="pc-top">
+                        <span className="pc-badge">{p.kgPerPackage || 5}kg</span>
+                      </div>
+                      <div className="pc-name">{p.name}</div>
+                      <div className="pc-meta">{formatKg(stock)}</div>
+                      <div className="pc-price">{formatToman(suggested)}</div>
+                      <div className="pc-qty-row">
+                        <button
+                          type="button"
+                          className="pc-qty-btn"
+                          onClick={() => setProductQty(p, inLines - 1)}
+                        >
+                          −
+                        </button>
+                        <input
+                          className="pc-qty-input"
+                          inputMode="numeric"
+                          value={inLines || ''}
+                          placeholder="0"
+                          onChange={(e) => {
+                            const v = sanitizeNumberInput(e.target.value || '');
+                            setProductQty(p, parseInt(v || '0', 10) || 0);
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className="pc-qty-btn"
+                          onClick={() => setProductQty(p, inLines + 1)}
+                        >
+                          +
+                        </button>
+                        <button
+                          type="button"
+                          className="pc-qty-btn pc-qty-plus5"
+                          onClick={() => setProductQty(p, inLines + 5)}
+                        >
+                          +۵
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              }
               return (
                 <button
                   type="button"
@@ -1353,13 +1528,21 @@ const Sale: React.FC = () => {
                       <IonIcon icon={removeOutline} />
                     </IonButton>
                     <IonInput
-                      type="number"
+                      type="text"
+                      inputMode="decimal"
                       className="qty-input"
                       value={l.qtyInput}
                       onIonInput={(e) =>
                         setLines(
                           lines.map((x, i) =>
-                            i === idx ? { ...x, qtyInput: e.detail.value || '' } : x
+                            i === idx
+                              ? {
+                                  ...x,
+                                  qtyInput: sanitizeNumberInput(e.detail.value || '', {
+                                    decimal: true,
+                                  }),
+                                }
+                              : x
                           )
                         )
                       }
@@ -1374,7 +1557,9 @@ const Sale: React.FC = () => {
                   <IonItem lines="none">
                     <IonLabel position="stacked">فی تومان (قابل تغییر)</IonLabel>
                     <IonInput
-                      inputmode="numeric"
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
                       value={l.unitPrice}
                       onIonInput={(e) =>
                         setLines(
@@ -1406,7 +1591,7 @@ const Sale: React.FC = () => {
           </div>
 
           <details className="sale-details ios-glass-card sale-navy-card">
-            <summary>تخفیف و پرداخت · {formatToman(totals.net)}</summary>
+            <summary>تخفیف · {formatToman(totals.net)}</summary>
             <PersianDateField value={date} onChange={setDate} />
             <div className="chip-row">
               {(
@@ -1476,12 +1661,25 @@ const Sale: React.FC = () => {
               <IonLabel position="stacked">یادداشت</IonLabel>
               <IonInput value={notes} onIonInput={(e) => setNotes(e.detail.value || '')} />
             </IonItem>
+          </details>
+
+          <div className="ios-glass-card sale-navy-card sale-settle">
+            <div className="sale-settle-title">تسویه · {formatToman(totals.net)}</div>
             <div className="chip-row">
               {paymentMethods.map((m) => (
                 <IonChip
                   key={m.value}
                   className={paymentMethod === m.value ? 'ios-chip-active' : 'ios-chip'}
-                  onClick={() => setPaymentMethod(m.value)}
+                  onClick={() => {
+                    setPaymentMethod(m.value);
+                    if (m.value === 'mixed') {
+                      const rem = Math.max(0, totals.net);
+                      setPayCash('');
+                      setPayCard('');
+                      setPayCardToCard('');
+                      setPayCredit(rem > 0 ? formatMoneyInput(String(rem)) : '');
+                    }
+                  }}
                 >
                   {m.label}
                 </IonChip>
@@ -1489,21 +1687,56 @@ const Sale: React.FC = () => {
             </div>
             {paymentMethod === 'mixed' && (
               <div className="mixed-pay">
-                <MoneyInput label="نقد" value={payCash} onChange={(v) => setPayCash(v)} />
-                <MoneyInput label="پوز" value={payCard} onChange={(v) => setPayCard(v)} />
+                <MoneyInput
+                  label="پوز / کارتخوان"
+                  value={payCard}
+                  onChange={(v) => {
+                    setPayCard(v);
+                    const cash = parseAmount(payCash) || 0;
+                    const pos = parseAmount(v) || 0;
+                    const c2c = parseAmount(payCardToCard) || 0;
+                    const rem = Math.max(0, totals.net - cash - pos - c2c);
+                    setPayCredit(rem > 0 ? formatMoneyInput(String(rem)) : '');
+                  }}
+                />
+                <MoneyInput
+                  label="نقد"
+                  value={payCash}
+                  onChange={(v) => {
+                    setPayCash(v);
+                    const cash = parseAmount(v) || 0;
+                    const pos = parseAmount(payCard) || 0;
+                    const c2c = parseAmount(payCardToCard) || 0;
+                    const rem = Math.max(0, totals.net - cash - pos - c2c);
+                    setPayCredit(rem > 0 ? formatMoneyInput(String(rem)) : '');
+                  }}
+                />
                 <MoneyInput
                   label="کارت به کارت"
                   value={payCardToCard}
-                  onChange={(v) => setPayCardToCard(v)}
+                  onChange={(v) => {
+                    setPayCardToCard(v);
+                    const cash = parseAmount(payCash) || 0;
+                    const pos = parseAmount(payCard) || 0;
+                    const c2c = parseAmount(v) || 0;
+                    const rem = Math.max(0, totals.net - cash - pos - c2c);
+                    setPayCredit(rem > 0 ? formatMoneyInput(String(rem)) : '');
+                  }}
                 />
-                <MoneyInput label="نسیه" value={payCredit} onChange={(v) => setPayCredit(v)} />
+                <div className="mixed-credit-remain">
+                  <div className="mixed-credit-label">مانده نسیه</div>
+                  <div className="mixed-credit-value">
+                    {formatToman(parseAmount(payCredit) || 0)}
+                  </div>
+                  <p className="hint">خودکار: مبلغ فاکتور − (پوز + نقد + کارت‌به‌کارت)</p>
+                </div>
               </div>
             )}
             {(paymentMethod === 'credit' ||
               (paymentMethod === 'mixed' && (parseAmount(payCredit) || 0) > 0)) && (
               <PersianDateField label="سررسید نسیه" value={dueDate} onChange={setDueDate} />
             )}
-          </details>
+          </div>
 
           <IonButton
             expand="block"

@@ -1,4 +1,5 @@
 import { User, SaleInvoice } from '../models';
+import { persianToEnglishDigits } from '../utils/persian';
 
 export async function listDrivers() {
   return User.find({ role: 'driver', active: true })
@@ -295,7 +296,9 @@ export async function updateDriverProfile(
     throw new Error('دسترسی ندارید');
   }
   if (data.cardNumber !== undefined) {
-    user.cardNumber = String(data.cardNumber).replace(/\s+/g, '').trim();
+    user.cardNumber = persianToEnglishDigits(String(data.cardNumber))
+      .replace(/[^\d]/g, '')
+      .trim();
   }
   if (data.name?.trim()) user.name = data.name.trim();
   await user.save();

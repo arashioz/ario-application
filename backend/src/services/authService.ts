@@ -1,6 +1,7 @@
 import { randomBytes } from 'crypto';
 import { User, hashPassword, UserRole } from '../models';
 import { Session } from '../models/Session';
+import { getOrCreateSettings } from './productService';
 
 const memory = new Map<string, { userId: string; role: UserRole; name: string; username: string; exp: number }>();
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -20,6 +21,13 @@ export async function login(username: string, password: string) {
   }
   if (!user.active) {
     throw new Error('حساب غیرفعال است');
+  }
+  const settings = await getOrCreateSettings();
+  if (user.role === 'driver' && settings.driverPanelEnabled === false) {
+    throw new Error('پنل راننده فعلاً غیرفعال است');
+  }
+  if (user.role === 'marketer' && settings.marketerPanelEnabled === false) {
+    throw new Error('پنل بازاریاب فعلاً غیرفعال است');
   }
   const token = randomBytes(32).toString('hex');
   const exp = Date.now() + SESSION_TTL_MS;

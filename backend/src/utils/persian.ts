@@ -70,6 +70,24 @@ export function endOfDay(date: Date): Date {
   return d;
 }
 
+/** رند مبلغ تومان به پلهٔ تمیز */
+export function roundToman(amount: number, step?: number): number {
+  const n = Math.max(0, Math.round(Number(amount) || 0));
+  if (n === 0) return 0;
+  const s = step ?? (n < 10_000 ? 100 : n < 100_000 ? 1_000 : 10_000);
+  return Math.round(n / s) * s;
+}
+
+/** رند تخفیف کیلویی → ۱۰۰ / ۲۰۰ / ۵۰۰ */
+export function roundPerKgDiscount(amount: number): number {
+  const n = Math.max(0, Number(amount) || 0);
+  if (n <= 0) return 0;
+  if (n < 150) return 100;
+  if (n < 350) return 200;
+  if (n < 750) return 500;
+  return Math.round(n / 100) * 100;
+}
+
 export function isValidBackdate(date: Date, openingDate: Date): boolean {
   const now = new Date();
   return date >= startOfDay(openingDate) && date <= now;

@@ -21,6 +21,7 @@ import {
 import { wsClient, newMutationId } from '../api/ws';
 import { parseAmount, todayIso, formatToman, formatDate } from '../utils/format';
 import { MoneyInput } from '../components/MoneyInput';
+import { DigitInput } from '../components/DigitInput';
 import { PersianDateField } from '../components/PersianDateField';
 
 interface CheckRow {
@@ -109,10 +110,12 @@ const Checks: React.FC = () => {
               />
             </IonItem>
             <MoneyInput value={amount} onChange={(v) => setAmount(v)} />
-            <IonItem>
-              <IonLabel position="stacked">شماره چک</IonLabel>
-              <IonInput value={checkNumber} onIonInput={(e) => setCheckNumber(e.detail.value || '')} />
-            </IonItem>
+            <DigitInput
+              label="شماره چک"
+              mode="int"
+              value={checkNumber}
+              onChange={setCheckNumber}
+            />
             <IonItem>
               <IonLabel position="stacked">بانک</IonLabel>
               <IonInput value={bankName} onIonInput={(e) => setBankName(e.detail.value || '')} />

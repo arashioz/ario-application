@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   IonPage,
   IonHeader,
@@ -28,8 +28,9 @@ import {
 import { createOutline, documentOutline, eyeOutline, trashOutline } from 'ionicons/icons';
 import { wsClient } from '../api/ws';
 import { useAuth } from '../auth/AuthContext';
-import { formatToman, formatKg, formatDate, formatMoneyInput, parseAmount } from '../utils/format';
+import { formatToman, formatKg, formatDate, formatMoneyInput, parseAmount, sanitizeNumberInput, normalizePhone, INVOICE_PERIODS, periodRange, InvoicePeriod } from '../utils/format';
 import { LocationPicker } from '../components/LocationPicker';
+import { DigitInput } from '../components/DigitInput';
 
 interface SaleItem {
   productId?: string;
@@ -115,7 +116,8 @@ type EditPurchaseItem = {
 const STATUS: Record<string, string> = {
   pending: 'منتظر تأیید',
   approved: 'تأیید شده',
-  shipped: 'ارسال شد',
+  shipped: 'ارسال شده',
+  delivered: 'تحویل شد',
   cancelled: 'لغو',
 };
 
@@ -132,6 +134,7 @@ const PAGE = 20;
 const Invoices: React.FC = () => {
   const { isAdmin } = useAuth();
   const [mode, setMode] = useState<'sale' | 'purchase'>('sale');
+  const [period, setPeriod] = useState<InvoicePeriod>('today');
   const [sales, setSales] = useState<SaleRow[]>([]);
   const [purchases, setPurchases] = useState<PurchaseRow[]>([]);
   const [page, setPage] = useState(1);
@@ -238,10 +241,11 @@ const Invoices: React.FC = () => {
 
   const load = useCallback(async () => {
     try {
+      const range = periodRange(period);
       const [s, p] = await Promise.all([
-        wsClient.request<SaleRow[]>('sale.list', {}),
+        wsClient.request<SaleRow[]>('sale.list', range),
         isAdmin
-          ? wsClient.request<PurchaseRow[]>('purchase.list', {})
+          ? wsClient.request<PurchaseRow[]>('purchase.list', range)
           : Promise.resolve([] as PurchaseRow[]),
       ]);
       setSales(Array.isArray(s) ? s : []);
@@ -253,12 +257,17 @@ const Invoices: React.FC = () => {
         color: 'danger',
       });
     }
-  }, [isAdmin]);
+  }, [isAdmin, period]);
 
   useIonViewWillEnter(() => {
     void load();
     setPage(1);
   });
+
+  useEffect(() => {
+    void load();
+    setPage(1);
+  }, [period, load]);
 
   const list = mode === 'sale' ? sales : purchases;
   const pages = Math.max(1, Math.ceil(list.length / PAGE));
@@ -325,7 +334,7 @@ const Invoices: React.FC = () => {
           id: detail._id,
           password: editPw,
           customerName: editCustomerName.trim() || undefined,
-          customerPhone: editCustomerPhone.trim() || undefined,
+          customerPhone: editCustomerPhone ? normalizePhone(editCustomerPhone) || undefined : undefined,
           notes: editNotes.trim() || undefined,
           paymentMethod: editPaymentMethod,
           discount: parseAmount(editDiscount) || 0,
@@ -406,44 +415,72 @@ const Invoices: React.FC = () => {
             )}
           </IonSegment>
 
-          <div className="ios-glass-card" style={{ marginTop: 12 }}>
-            {slice.length === 0 && <p className="hint">فاکتوری ثبت نشده</p>}
+          <div className="chip-row inv-period-row" style={{ marginTop: 10 }}>
+            {INVOICE_PERIODS.map((p) => (
+              <IonChip
+                key={p.value}
+                className={period === p.value ? 'ios-chip-active' : 'ios-chip'}
+                onClick={() => {
+                  setPeriod(p.value);
+                  setPage(1);
+                }}
+              >
+                {p.label}
+              </IonChip>
+            ))}
+          </div>
+
+          <div className="inv-summary-bar">
+            <div>
+              <span className="inv-sum-label">تعداد</span>
+              <strong>{list.length.toLocaleString('fa-IR')}</strong>
+            </div>
+            <div>
+              <span className="inv-sum-label">مبلغ</span>
+              <strong>
+                {formatToman(list.reduce((s, r) => s + (r.totalAmount || 0), 0))}
+              </strong>
+            </div>
+          </div>
+
+          <div className="inv-card-list" style={{ marginTop: 12 }}>
+            {slice.length === 0 && <p className="hint">در این بازه فاکتوری نیست</p>}
 
             {mode === 'sale' &&
               (slice as SaleRow[]).map((inv) => (
-                <div key={inv._id} className="day-row inv-row">
-                  <div className="ios-row">
+                <div key={inv._id} className={`inv-card${inv.isGolden ? ' gold' : ''}`}>
+                  <div className="inv-card-top">
                     <div>
-                      <strong className={inv.isGolden ? 'gold-text' : ''}>
+                      <div className="inv-card-num">
                         {inv.isGolden ? '⭐ ' : ''}
                         {inv.invoiceNumber}
-                      </strong>
-                      <div className="ios-caption">
+                      </div>
+                      <div className="inv-card-meta">
                         {formatDate(inv.date)} · {inv.customerName || 'بدون مشتری'}
                         {inv.customerPhone ? ` · ${inv.customerPhone}` : ''}
                       </div>
                       {inv.customerAddress && (
-                        <div className="ios-caption">📍 {inv.customerAddress}</div>
+                        <div className="inv-card-meta">📍 {inv.customerAddress}</div>
                       )}
-                      <div className="chip-row" style={{ marginTop: 4 }}>
-                        {inv.status && (
-                          <IonChip outline className="tiny-chip">
-                            {STATUS[inv.status] || inv.status}
-                          </IonChip>
-                        )}
-                        {inv.paymentMethod && (
-                          <IonChip outline className="tiny-chip">
-                            {PAY[inv.paymentMethod] || inv.paymentMethod}
-                          </IonChip>
-                        )}
-                      </div>
                     </div>
-                    <div style={{ textAlign: 'left' }}>
-                      <div className="stat-value">{formatToman(inv.totalAmount)}</div>
-                      <div className="ios-caption">{formatKg(inv.totalKg || 0)}</div>
+                    <div className="inv-card-amount">
+                      <div className="inv-card-money">{formatToman(inv.totalAmount)}</div>
+                      <div className="inv-card-kg">{formatKg(inv.totalKg || 0)}</div>
                     </div>
                   </div>
                   <div className="chip-row">
+                    {inv.status && (
+                      <span className={`inv-badge st-${inv.status}`}>
+                        {STATUS[inv.status] || inv.status}
+                      </span>
+                    )}
+                    {inv.paymentMethod && (
+                      <span className="inv-badge pay">
+                        {PAY[inv.paymentMethod] || inv.paymentMethod}
+                      </span>
+                    )}
+                  </div>
+                  <div className="inv-card-actions">
                     <IonButton
                       size="small"
                       fill="clear"
@@ -488,21 +525,21 @@ const Invoices: React.FC = () => {
 
             {mode === 'purchase' &&
               (slice as PurchaseRow[]).map((inv) => (
-                <div key={inv._id} className="day-row inv-row">
-                  <div className="ios-row">
+                <div key={inv._id} className="inv-card">
+                  <div className="inv-card-top">
                     <div>
-                      <strong>{inv.invoiceNumber || 'خرید'}</strong>
-                      <div className="ios-caption">
+                      <div className="inv-card-num">{inv.invoiceNumber || 'خرید'}</div>
+                      <div className="inv-card-meta">
                         {formatDate(inv.date)} · {inv.supplier || 'شرکت'}
                         {inv.paidNow ? ' · پرداخت‌شده' : ' · نسیه شرکت'}
                       </div>
                     </div>
-                    <div style={{ textAlign: 'left' }}>
-                      <div className="stat-value">{formatToman(inv.totalAmount)}</div>
-                      <div className="ios-caption">{formatKg(inv.totalKg || 0)}</div>
+                    <div className="inv-card-amount">
+                      <div className="inv-card-money">{formatToman(inv.totalAmount)}</div>
+                      <div className="inv-card-kg">{formatKg(inv.totalKg || 0)}</div>
                     </div>
                   </div>
-                  <div className="chip-row">
+                  <div className="inv-card-actions">
                     <IonButton
                       size="small"
                       fill="clear"
@@ -523,7 +560,7 @@ const Invoices: React.FC = () => {
                           onClick={() => openEdit('purchase', inv)}
                         >
                           <IonIcon slot="start" icon={createOutline} />
-                          ویرایش با رمز
+                          ویرایش
                         </IonButton>
                         <IonButton
                           size="small"
@@ -768,13 +805,13 @@ const Invoices: React.FC = () => {
                     onIonInput={(e) => setEditCustomerName(e.detail.value || '')}
                   />
                 </IonItem>
-                <IonItem>
-                  <IonLabel position="stacked">تلفن</IonLabel>
-                  <IonInput
-                    value={editCustomerPhone}
-                    onIonInput={(e) => setEditCustomerPhone(e.detail.value || '')}
-                  />
-                </IonItem>
+                <DigitInput
+                  label="تلفن"
+                  mode="phone"
+                  value={editCustomerPhone}
+                  onChange={setEditCustomerPhone}
+                  placeholder="09…"
+                />
                 <IonItem>
                   <IonLabel position="stacked">روش پرداخت</IonLabel>
                   <IonSelect
@@ -807,10 +844,11 @@ const Invoices: React.FC = () => {
                         مقدار ({it.unit === 'package' ? 'بسته' : 'کیلو'})
                       </IonLabel>
                       <IonInput
-                        type="number"
+                        type="text"
+                        inputMode="decimal"
                         value={it.qtyInput}
                         onIonInput={(e) => {
-                          const v = e.detail.value || '';
+                          const v = sanitizeNumberInput(e.detail.value || '', { decimal: true });
                           setEditSaleItems((prev) =>
                             prev.map((row, i) => (i === idx ? { ...row, qtyInput: v } : row))
                           );
@@ -820,6 +858,7 @@ const Invoices: React.FC = () => {
                     <IonItem>
                       <IonLabel position="stacked">قیمت واحد (تومان)</IonLabel>
                       <IonInput
+                        type="text"
                         inputMode="numeric"
                         value={it.unitPrice}
                         onIonInput={(e) => {
@@ -833,6 +872,7 @@ const Invoices: React.FC = () => {
                     <IonItem>
                       <IonLabel position="stacked">تخفیف قلم</IonLabel>
                       <IonInput
+                        type="text"
                         inputMode="numeric"
                         value={it.discount}
                         onIonInput={(e) => {
@@ -872,10 +912,11 @@ const Invoices: React.FC = () => {
                         مقدار ({it.unit === 'package' ? 'بسته' : 'کیلو'})
                       </IonLabel>
                       <IonInput
-                        type="number"
+                        type="text"
+                        inputMode="decimal"
                         value={it.qtyInput}
                         onIonInput={(e) => {
-                          const v = e.detail.value || '';
+                          const v = sanitizeNumberInput(e.detail.value || '', { decimal: true });
                           setEditPurchaseItems((prev) =>
                             prev.map((row, i) => (i === idx ? { ...row, qtyInput: v } : row))
                           );
@@ -885,6 +926,7 @@ const Invoices: React.FC = () => {
                     <IonItem>
                       <IonLabel position="stacked">قیمت واحد (تومان)</IonLabel>
                       <IonInput
+                        type="text"
                         inputMode="numeric"
                         value={it.unitPrice}
                         onIonInput={(e) => {

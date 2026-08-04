@@ -1,4 +1,5 @@
 import { Campaign, ICampaign, ICampaignRule, Product, SaleInvoice } from '../models';
+import { roundToman } from '../utils/persian';
 
 export async function listCampaigns(opts?: { activeOnly?: boolean; forMarketer?: boolean }) {
   const filter: Record<string, unknown> = {};
@@ -216,7 +217,7 @@ export async function evaluateCampaigns(input: {
         customerMonthKg,
       });
       const discountAmount = matched
-        ? Math.round((totalAmount * (rule.discountPercent || 0)) / 100)
+        ? roundToman((totalAmount * (rule.discountPercent || 0)) / 100)
         : 0;
       let hint = '';
       if (!matched) {

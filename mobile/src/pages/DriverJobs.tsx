@@ -20,9 +20,10 @@ import {
 import { checkmarkCircleOutline, cardOutline } from 'ionicons/icons';
 import { IonIcon } from '@ionic/react';
 import { wsClient } from '../api/ws';
-import { formatToman, formatKg, formatDate } from '../utils/format';
+import { formatToman, formatKg, formatDate, digitsOnly } from '../utils/format';
 import { useAuth } from '../auth/AuthContext';
 import { geoErrorMessage, isGeoSecureContext } from '../utils/geo';
+import { DigitInput } from '../components/DigitInput';
 
 interface Job {
   _id: string;
@@ -117,7 +118,7 @@ const DriverJobs: React.FC = () => {
   const saveCard = async () => {
     try {
       const res = await wsClient.request<Profile>('driver.profile.update', {
-        cardNumber: cardDraft,
+        cardNumber: digitsOnly(cardDraft),
       });
       setProfile(res);
       setToast({ open: true, msg: 'شماره کارت ذخیره شد', color: 'success' });
@@ -193,15 +194,15 @@ const DriverJobs: React.FC = () => {
             <div className="ios-section-title" style={{ marginTop: 0 }}>
               <IonIcon icon={cardOutline} /> تنظیمات · شماره کارت
             </div>
-            <IonItem lines="none">
-              <IonLabel position="stacked">شماره کارت (۱۶ رقم)</IonLabel>
-              <IonInput
-                inputmode="numeric"
-                value={cardDraft}
-                placeholder="6037…"
-                onIonInput={(e) => setCardDraft(e.detail.value || '')}
-              />
-            </IonItem>
+            <DigitInput
+              label="شماره کارت (۱۶ رقم)"
+              mode="int"
+              maxLen={16}
+              value={cardDraft}
+              placeholder="6037…"
+              lines="none"
+              onChange={setCardDraft}
+            />
             <IonButton size="small" expand="block" onClick={() => void saveCard()}>
               ذخیره شماره کارت
             </IonButton>

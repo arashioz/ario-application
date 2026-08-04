@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   IonButton,
   IonChip,
@@ -19,8 +19,20 @@ import {
 } from '@ionic/react';
 import { createOutline, eyeOutline, trashOutline, documentOutline } from 'ionicons/icons';
 import { wsClient } from '../api/ws';
-import { formatToman, formatKg, formatDate, formatMoneyInput, parseAmount } from '../utils/format';
+import {
+  formatToman,
+  formatKg,
+  formatDate,
+  formatMoneyInput,
+  parseAmount,
+  sanitizeNumberInput,
+  normalizePhone,
+  INVOICE_PERIODS,
+  periodRange,
+  InvoicePeriod,
+} from '../utils/format';
 import { useAuth } from '../auth/AuthContext';
+import { DigitInput } from './DigitInput';
 
 export interface SaleInvRow {
   _id: string;
@@ -75,7 +87,7 @@ export interface PurchaseInvRow {
 const STATUS: Record<string, string> = {
   pending: 'منتظر تأیید',
   approved: 'تأیید شده',
-  shipped: 'ارسال شد',
+  shipped: 'ارسال شده',
   delivered: 'تحویل شد',
   cancelled: 'لغو',
 };
@@ -116,6 +128,7 @@ type Props = {
 
 export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToast }) => {
   const { isAdmin } = useAuth();
+  const [period, setPeriod] = useState<InvoicePeriod>('today');
   const [sales, setSales] = useState<SaleInvRow[]>([]);
   const [purchases, setPurchases] = useState<PurchaseInvRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -140,11 +153,12 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
   const load = useCallback(async () => {
     setLoading(true);
     try {
+      const range = periodRange(period);
       if (kind === 'sale') {
-        const list = await wsClient.request<SaleInvRow[]>('sale.list', {});
+        const list = await wsClient.request<SaleInvRow[]>('sale.list', range);
         setSales(Array.isArray(list) ? list : []);
       } else {
-        const list = await wsClient.request<PurchaseInvRow[]>('purchase.list', {});
+        const list = await wsClient.request<PurchaseInvRow[]>('purchase.list', range);
         setPurchases(Array.isArray(list) ? list : []);
       }
     } catch (e) {
@@ -153,12 +167,21 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
       setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- onToast is unstable inline
-  }, [kind]);
+  }, [kind, period]);
 
   useEffect(() => {
     void load();
   }, [load, refreshKey]);
 
+  const list = kind === 'sale' ? sales : purchases;
+  const summary = useMemo(() => {
+    const rows = list as Array<{ totalAmount?: number; totalKg?: number }>;
+    return {
+      count: rows.length,
+      amount: rows.reduce((s, r) => s + (r.totalAmount || 0), 0),
+      kg: rows.reduce((s, r) => s + (r.totalKg || 0), 0),
+    };
+  }, [list]);
   useEffect(() => {
     const unsub = wsClient.onEvent('data_changed', (payload: unknown) => {
       const p = payload as { entity?: string };
@@ -168,8 +191,6 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
     });
     return unsub;
   }, [kind, load]);
-
-  const list = kind === 'sale' ? sales : purchases;
 
   const openPdf = async (id: string) => {
     try {
@@ -277,7 +298,7 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
           id: detail._id,
           password: editPw,
           customerName: editCustomerName.trim() || undefined,
-          customerPhone: editCustomerPhone.trim() || undefined,
+          customerPhone: editCustomerPhone ? normalizePhone(editCustomerPhone) || undefined : undefined,
           notes: editNotes.trim() || undefined,
           paymentMethod: editPaymentMethod,
           discount: parseAmount(editDiscount) || 0,
@@ -317,48 +338,74 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
   return (
     <>
       <div className="ios-section-title" style={{ marginTop: 20 }}>
-        همه فاکتورهای {kind === 'sale' ? 'فروش' : 'خرید'}
-        {loading ? ' …' : ` (${list.length})`}
+        فاکتورهای {kind === 'sale' ? 'فروش' : 'خرید'}
+        {loading ? ' …' : ''}
       </div>
-      <div className="ios-glass-card">
+
+      <div className="chip-row inv-period-row">
+        {INVOICE_PERIODS.map((p) => (
+          <IonChip
+            key={p.value}
+            className={period === p.value ? 'ios-chip-active' : 'ios-chip'}
+            onClick={() => setPeriod(p.value)}
+          >
+            {p.label}
+          </IonChip>
+        ))}
+      </div>
+
+      <div className="inv-summary-bar">
+        <div>
+          <span className="inv-sum-label">تعداد</span>
+          <strong>{summary.count.toLocaleString('fa-IR')}</strong>
+        </div>
+        <div>
+          <span className="inv-sum-label">مبلغ</span>
+          <strong>{formatToman(summary.amount)}</strong>
+        </div>
+        <div>
+          <span className="inv-sum-label">تناژ</span>
+          <strong>{formatKg(summary.kg)}</strong>
+        </div>
+      </div>
+
+      <div className="inv-card-list">
         {loading && list.length === 0 && (
           <div style={{ textAlign: 'center', padding: 12 }}>
             <IonSpinner name="crescent" />
           </div>
         )}
-        {!loading && list.length === 0 && <p className="hint">فاکتوری ثبت نشده</p>}
+        {!loading && list.length === 0 && <p className="hint">در این بازه فاکتوری نیست</p>}
 
         {kind === 'sale' &&
-          (list as SaleInvRow[]).slice(0, 50).map((inv) => (
-            <div key={inv._id} className="day-row inv-row">
-              <div className="ios-row">
+          (list as SaleInvRow[]).slice(0, 80).map((inv) => (
+            <div key={inv._id} className={`inv-card${inv.isGolden ? ' gold' : ''}`}>
+              <div className="inv-card-top">
                 <div>
-                  <strong className={inv.isGolden ? 'gold-text' : ''}>
+                  <div className="inv-card-num">
                     {inv.isGolden ? '⭐ ' : ''}
                     {inv.invoiceNumber}
-                  </strong>
-                  <div className="ios-caption">
+                  </div>
+                  <div className="inv-card-meta">
                     {formatDate(inv.date)} · {inv.customerName || 'بدون مشتری'}
                   </div>
-                  <div className="chip-row" style={{ marginTop: 4 }}>
-                    {inv.status && (
-                      <IonChip outline className="tiny-chip">
-                        {STATUS[inv.status] || inv.status}
-                      </IonChip>
-                    )}
-                    {inv.paymentMethod && (
-                      <IonChip outline className="tiny-chip">
-                        {PAY[inv.paymentMethod] || inv.paymentMethod}
-                      </IonChip>
-                    )}
-                  </div>
                 </div>
-                <div style={{ textAlign: 'left' }}>
-                  <div className="stat-value">{formatToman(inv.totalAmount)}</div>
-                  <div className="ios-caption">{formatKg(inv.totalKg || 0)}</div>
+                <div className="inv-card-amount">
+                  <div className="inv-card-money">{formatToman(inv.totalAmount)}</div>
+                  <div className="inv-card-kg">{formatKg(inv.totalKg || 0)}</div>
                 </div>
               </div>
               <div className="chip-row">
+                {inv.status && (
+                  <span className={`inv-badge st-${inv.status}`}>
+                    {STATUS[inv.status] || inv.status}
+                  </span>
+                )}
+                {inv.paymentMethod && (
+                  <span className="inv-badge pay">{PAY[inv.paymentMethod] || inv.paymentMethod}</span>
+                )}
+              </div>
+              <div className="inv-card-actions">
                 <IonButton size="small" fill="clear" onClick={() => setDetail(inv)}>
                   <IonIcon slot="start" icon={eyeOutline} />
                   جزئیات
@@ -369,14 +416,9 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
                 </IonButton>
                 {isAdmin && (
                   <>
-                    <IonButton
-                      size="small"
-                      fill="clear"
-                      color="warning"
-                      onClick={() => openEdit(inv)}
-                    >
+                    <IonButton size="small" fill="clear" color="warning" onClick={() => openEdit(inv)}>
                       <IonIcon slot="start" icon={createOutline} />
-                      ویرایش با رمز
+                      ویرایش
                     </IonButton>
                     <IonButton
                       size="small"
@@ -397,36 +439,31 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
           ))}
 
         {kind === 'purchase' &&
-          (list as PurchaseInvRow[]).slice(0, 50).map((inv) => (
-            <div key={inv._id} className="day-row inv-row">
-              <div className="ios-row">
+          (list as PurchaseInvRow[]).slice(0, 80).map((inv) => (
+            <div key={inv._id} className="inv-card">
+              <div className="inv-card-top">
                 <div>
-                  <strong>{inv.invoiceNumber || 'خرید'}</strong>
-                  <div className="ios-caption">
+                  <div className="inv-card-num">{inv.invoiceNumber || 'خرید'}</div>
+                  <div className="inv-card-meta">
                     {formatDate(inv.date)} · {inv.supplier || 'شرکت'}
                     {inv.paidNow ? ' · پرداخت‌شده' : ' · نسیه شرکت'}
                   </div>
                 </div>
-                <div style={{ textAlign: 'left' }}>
-                  <div className="stat-value">{formatToman(inv.totalAmount)}</div>
-                  <div className="ios-caption">{formatKg(inv.totalKg || 0)}</div>
+                <div className="inv-card-amount">
+                  <div className="inv-card-money">{formatToman(inv.totalAmount)}</div>
+                  <div className="inv-card-kg">{formatKg(inv.totalKg || 0)}</div>
                 </div>
               </div>
-              <div className="chip-row">
+              <div className="inv-card-actions">
                 <IonButton size="small" fill="clear" onClick={() => setDetail(inv)}>
                   <IonIcon slot="start" icon={eyeOutline} />
                   جزئیات
                 </IonButton>
                 {isAdmin && (
                   <>
-                    <IonButton
-                      size="small"
-                      fill="clear"
-                      color="warning"
-                      onClick={() => openEdit(inv)}
-                    >
+                    <IonButton size="small" fill="clear" color="warning" onClick={() => openEdit(inv)}>
                       <IonIcon slot="start" icon={createOutline} />
-                      ویرایش با رمز
+                      ویرایش
                     </IonButton>
                     <IonButton
                       size="small"
@@ -609,13 +646,13 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
                   onIonInput={(e) => setEditCustomerName(e.detail.value || '')}
                 />
               </IonItem>
-              <IonItem>
-                <IonLabel position="stacked">تلفن</IonLabel>
-                <IonInput
-                  value={editCustomerPhone}
-                  onIonInput={(e) => setEditCustomerPhone(e.detail.value || '')}
-                />
-              </IonItem>
+              <DigitInput
+                label="تلفن"
+                mode="phone"
+                value={editCustomerPhone}
+                onChange={setEditCustomerPhone}
+                placeholder="09…"
+              />
               <IonItem>
                 <IonLabel position="stacked">روش پرداخت</IonLabel>
                 <IonSelect
@@ -648,10 +685,11 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
                       مقدار ({it.unit === 'package' ? 'بسته' : 'کیلو'})
                     </IonLabel>
                     <IonInput
-                      type="number"
+                      type="text"
+                      inputMode="decimal"
                       value={it.qtyInput}
                       onIonInput={(e) => {
-                        const v = e.detail.value || '';
+                        const v = sanitizeNumberInput(e.detail.value || '', { decimal: true });
                         setEditSaleItems((prev) =>
                           prev.map((row, i) => (i === idx ? { ...row, qtyInput: v } : row))
                         );
@@ -661,6 +699,7 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
                   <IonItem>
                     <IonLabel position="stacked">قیمت واحد (تومان)</IonLabel>
                     <IonInput
+                      type="text"
                       inputMode="numeric"
                       value={it.unitPrice}
                       onIonInput={(e) => {
@@ -674,6 +713,7 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
                   <IonItem>
                     <IonLabel position="stacked">تخفیف قلم</IonLabel>
                     <IonInput
+                      type="text"
                       inputMode="numeric"
                       value={it.discount}
                       onIonInput={(e) => {
@@ -713,10 +753,11 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
                       مقدار ({it.unit === 'package' ? 'بسته' : 'کیلو'})
                     </IonLabel>
                     <IonInput
-                      type="number"
+                      type="text"
+                      inputMode="decimal"
                       value={it.qtyInput}
                       onIonInput={(e) => {
-                        const v = e.detail.value || '';
+                        const v = sanitizeNumberInput(e.detail.value || '', { decimal: true });
                         setEditPurchaseItems((prev) =>
                           prev.map((row, i) => (i === idx ? { ...row, qtyInput: v } : row))
                         );
@@ -726,6 +767,7 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
                   <IonItem>
                     <IonLabel position="stacked">قیمت واحد (تومان)</IonLabel>
                     <IonInput
+                      type="text"
                       inputMode="numeric"
                       value={it.unitPrice}
                       onIonInput={(e) => {

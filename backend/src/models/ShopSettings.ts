@@ -21,6 +21,10 @@ export interface IShopSettings extends Document {
   brandLogoUrl?: string;
   /** پلتفرم همکاران */
   platformEnabled: boolean;
+  /** پنل/قابلیت‌های راننده (نقشه، پرداخت، اپ راننده) */
+  driverPanelEnabled: boolean;
+  /** پنل/قابلیت‌های بازاریاب (ثبت‌نام، سفارش حجمی، تارگت، …) */
+  marketerPanelEnabled: boolean;
   commissionPercentCompany: number;
   commissionPercentSelf: number;
   platformMinOrderKg: number;
@@ -49,6 +53,8 @@ const ShopSettingsSchema = new Schema<IShopSettings>(
     brandPrimaryColor: { type: String, default: '#0d9488' },
     brandLogoUrl: { type: String },
     platformEnabled: { type: Boolean, default: true },
+    driverPanelEnabled: { type: Boolean, default: true },
+    marketerPanelEnabled: { type: Boolean, default: true },
     commissionPercentCompany: { type: Number, default: 3 },
     commissionPercentSelf: { type: Number, default: 5 },
     platformMinOrderKg: { type: Number, default: 500 },

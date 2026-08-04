@@ -231,8 +231,11 @@ const Dashboard: React.FC = () => {
                 </div>
                 {(inv?.products || []).length > 0 && (
                   <div className="wh-products">
-                    {(inv?.products || []).slice(0, 5).map((p) => (
-                      <div key={p.id} className="wh-prod">
+                    {(inv?.products || []).map((p) => (
+                      <div
+                        key={p.id}
+                        className={`wh-prod${p.stockKg <= 0 ? ' empty' : p.stockKg < 200 ? ' low' : ''}`}
+                      >
                         <span className="wh-prod-name">{p.name}</span>
                         <span className="wh-prod-kg">{formatKg(p.stockKg)}</span>
                       </div>

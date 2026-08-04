@@ -1,6 +1,6 @@
 import { Customer, SaleInvoice } from '../models';
 import { calculateSalePrice } from './productService';
-import { startOfDay, endOfDay } from '../utils/persian';
+import { startOfDay, endOfDay, roundToman } from '../utils/persian';
 
 /** نرمال‌سازی شماره برای جستجو (۰۹۱۲… / +98 / فاصله) */
 export function normalizePhoneDigits(raw?: string): string {
@@ -16,13 +16,60 @@ export function normalizePhoneDigits(raw?: string): string {
   return s;
 }
 
+/** هر رقم انگلیسی یا فارسی/عربی معادل — برای پیدا کردن شماره تکراری */
+export function phoneDigitFlexRegex(englishDigits: string): string {
+  const fa = '۰۱۲۳۴۵۶۷۸۹';
+  const ar = '٠١٢٣٤٥٦٧٨٩';
+  return String(englishDigits)
+    .split('')
+    .map((ch) => {
+      if (!/^\d$/.test(ch)) return ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const n = Number(ch);
+      return `[${ch}${fa[n]}${ar[n]}]`;
+    })
+    .join('');
+}
+
+function toPersianDigits(englishDigits: string): string {
+  const fa = '۰۱۲۳۴۵۶۷۸۹';
+  return englishDigits.replace(/\d/g, (d) => fa[Number(d)] ?? d);
+}
+
 function phoneSearchVariants(q: string): string[] {
   const digits = normalizePhoneDigits(q);
   if (!digits) return [];
-  const variants = new Set<string>([digits]);
-  if (digits.length >= 10) variants.add(digits.slice(-10));
-  if (digits.length >= 11) variants.add(digits.slice(-11));
+  const variants = new Set<string>([digits, toPersianDigits(digits)]);
+  if (digits.length >= 10) {
+    const last10 = digits.slice(-10);
+    variants.add(last10);
+    variants.add(toPersianDigits(last10));
+  }
+  if (digits.length >= 11) {
+    const last11 = digits.slice(-11);
+    variants.add(last11);
+    variants.add(toPersianDigits(last11));
+  }
   return Array.from(variants);
+}
+
+export async function findCustomerByPhone(raw?: string) {
+  const phone = normalizePhoneDigits(raw);
+  if (!phone) return null;
+  const last10 = phone.length >= 10 ? phone.slice(-10) : phone;
+  const flex = phoneDigitFlexRegex(last10);
+  const found = await Customer.findOne({
+    $or: [
+      { phone },
+      { phone: { $regex: flex + '$' } },
+      { phone: { $regex: flex } },
+    ],
+  });
+  // شماره‌های قدیمی با رقم فارسی را به انگلیسی یکدست کن
+  if (found?.phone && normalizePhoneDigits(found.phone) !== found.phone) {
+    found.phone = normalizePhoneDigits(found.phone);
+    await found.save().catch(() => undefined);
+  }
+  return found;
 }
 
 export async function createCustomer(data: {
@@ -35,9 +82,7 @@ export async function createCustomer(data: {
 }) {
   if (data.phone) {
     const phone = normalizePhoneDigits(data.phone) || data.phone.trim();
-    const existing = await Customer.findOne({
-      $or: [{ phone }, { phone: data.phone.trim() }, { phone: { $regex: phone.slice(-10) + '$' } }],
-    });
+    const existing = await findCustomerByPhone(phone);
     if (existing) {
       existing.name = data.name || existing.name;
       existing.phone = phone || existing.phone;
@@ -51,7 +96,7 @@ export async function createCustomer(data: {
   }
   return Customer.create({
     name: data.name.trim(),
-    phone: data.phone ? normalizePhoneDigits(data.phone) || data.phone.trim() : undefined,
+    phone: data.phone ? normalizePhoneDigits(data.phone) || undefined : undefined,
     address: data.address?.trim(),
     lat: data.lat,
     lng: data.lng,
@@ -73,7 +118,9 @@ export async function updateCustomer(
   const c = await Customer.findById(id);
   if (!c) throw new Error('مشتری یافت نشد');
   if (data.name !== undefined) c.name = data.name;
-  if (data.phone !== undefined) c.phone = data.phone;
+  if (data.phone !== undefined) {
+    c.phone = data.phone ? normalizePhoneDigits(data.phone) || undefined : undefined;
+  }
   if (data.address !== undefined) c.address = data.address;
   if (data.lat !== undefined) c.lat = data.lat;
   if (data.lng !== undefined) c.lng = data.lng;
@@ -88,6 +135,7 @@ export async function listCustomers(
 ) {
   const q = search?.trim();
   if (q) {
+    const digits = normalizePhoneDigits(q);
     const phoneVars = phoneSearchVariants(q);
     const or: Record<string, unknown>[] = [
       { name: { $regex: q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' } },
@@ -96,6 +144,10 @@ export async function listCustomers(
     ];
     for (const ph of phoneVars) {
       or.push({ phone: { $regex: ph.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') } });
+    }
+    if (digits.length >= 8) {
+      const last = digits.slice(-10);
+      or.push({ phone: { $regex: phoneDigitFlexRegex(last) + '$' } });
     }
     return Customer.find({ $or: or })
       .sort({ name: 1 })
@@ -129,9 +181,7 @@ export async function quickFindCustomer(query: string) {
       exactPhone =
         customers.find((c) => normalizePhoneDigits(c.phone || '').endsWith(last10)) || null;
       if (!exactPhone) {
-        exactPhone = await Customer.findOne({
-          phone: { $regex: last10 + '$' },
-        });
+        exactPhone = await findCustomerByPhone(q);
       }
     }
   }
@@ -242,10 +292,12 @@ function suggestDiscountAmount(
   // سقف امن تاریخی: حداکثر نیمی از میانگین سود فاکتورهای قبلی
   const maxSafeByHistory = Math.max(0, Math.floor(avgProfit * 0.5));
 
-  const pct = (p: number) => Math.round(avg * p);
+  const pct = (p: number) => roundToman(avg * p);
   const offers: Array<{ key: string; label: string; amount: number; reason: string }> = [];
 
-  const mild = Math.min(Math.max(lastDisc, pct(0.005)), maxSafeByHistory || pct(0.01));
+  const mild = roundToman(
+    Math.min(Math.max(lastDisc, pct(0.005)), maxSafeByHistory || pct(0.01))
+  );
   const goodBase =
     power === 'vip'
       ? 0.025
@@ -256,10 +308,14 @@ function suggestDiscountAmount(
           : 0.008;
   const timingBoost =
     timing === 'followup' ? 0.005 : timing === 'dormant' ? 0.008 : timing === 'hot' ? -0.003 : 0;
-  const good = Math.min(Math.max(lastDisc, pct(goodBase + timingBoost)), maxSafeByHistory || pct(0.02));
-  const maxSafe = Math.min(
-    Math.max(good, pct(goodBase + timingBoost + 0.005)),
-    maxSafeByHistory || pct(0.025)
+  const good = roundToman(
+    Math.min(Math.max(lastDisc, pct(goodBase + timingBoost)), maxSafeByHistory || pct(0.02))
+  );
+  const maxSafe = roundToman(
+    Math.min(
+      Math.max(good, pct(goodBase + timingBoost + 0.005)),
+      maxSafeByHistory || pct(0.025)
+    )
   );
 
   offers.push({
@@ -302,7 +358,7 @@ function suggestDiscountAmount(
   }
 
   return {
-    suggestedDiscount: suggested,
+    suggestedDiscount: roundToman(suggested),
     reason,
     avgOrder: Math.round(avg),
     count30,

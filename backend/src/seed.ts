@@ -4,7 +4,6 @@ import {
   Category,
   ShopSettings,
   User,
-  Product,
   hashPassword,
 } from './models';
 import { Session } from './models/Session';
@@ -101,35 +100,7 @@ async function seed() {
     await Category.findOneAndUpdate({ name: cat.name }, cat, { upsert: true, new: true });
   }
 
-  const sugarCat = await Category.findOne({ name: 'قند' });
-  const cat3 = await Category.findOne({ name: 'قند ۳ کیلویی' });
-  const cat5 = await Category.findOne({ name: 'قند ۵ کیلویی' });
-  const cat10 = await Category.findOne({ name: 'قند ۱۰ کیلویی' });
-
-  const samples = [
-    { name: 'قند ۳ کیلویی', kgPerPackage: 3, categoryId: cat3?._id || sugarCat?._id, avg: 45000 },
-    { name: 'قند ۵ کیلویی', kgPerPackage: 5, categoryId: cat5?._id || sugarCat?._id, avg: 44000 },
-    { name: 'قند ۱۰ کیلویی', kgPerPackage: 10, categoryId: cat10?._id || sugarCat?._id, avg: 43000 },
-  ];
-
-  for (const s of samples) {
-    if (!s.categoryId) continue;
-    const normalizedName = s.name.replace(/\s+/g, ' ').trim().toLowerCase();
-    await Product.findOneAndUpdate(
-      { normalizedName },
-      {
-        name: s.name,
-        normalizedName,
-        categoryId: s.categoryId,
-        kgPerPackage: s.kgPerPackage,
-        avgCostPerKg: s.avg,
-        purchasePrice: s.avg,
-        stockKg: 0,
-        stock: 0,
-      },
-      { upsert: true }
-    );
-  }
+  // محصولات نمونه seed عمداً ساخته نمی‌شوند — فقط دسته‌ها و کاربران دمو
 
   const existing = await ShopSettings.findOne();
   if (!existing) {

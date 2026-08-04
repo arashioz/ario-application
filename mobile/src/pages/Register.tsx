@@ -16,6 +16,8 @@ import {
   IonSelectOption,
 } from '@ionic/react';
 import { wsClient } from '../api/ws';
+import { DigitInput } from '../components/DigitInput';
+import { normalizePhone } from '../utils/format';
 
 const CITIES = [
   'مشهد',
@@ -53,7 +55,7 @@ const Register: React.FC = () => {
         name,
         username,
         password,
-        phone,
+        phone: phone ? normalizePhone(phone) || undefined : undefined,
         city,
       });
       setDone(res.message || 'ثبت شد — منتظر تأیید مدیر');
@@ -91,10 +93,7 @@ const Register: React.FC = () => {
                   onIonInput={(e) => setPassword(e.detail.value || '')}
                 />
               </IonItem>
-              <IonItem>
-                <IonLabel position="stacked">موبایل</IonLabel>
-                <IonInput value={phone} onIonInput={(e) => setPhone(e.detail.value || '')} />
-              </IonItem>
+              <DigitInput label="موبایل" mode="phone" value={phone} onChange={setPhone} />
               <IonItem>
                 <IonLabel position="stacked">شهر فعالیت</IonLabel>
                 <IonSelect

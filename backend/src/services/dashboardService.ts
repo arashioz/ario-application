@@ -4,7 +4,7 @@ import { getOrCreateSettings } from './productService';
 import { getCompanyDebtSummary } from './companyService';
 import { getTargetProgress } from './targetService';
 import { getDueChecksSummary } from './checkService';
-import { getCustomerCrmInsights } from './customerService';
+import { getCustomerCrmInsights, normalizePhoneDigits } from './customerService';
 
 /** این‌ها روی صندوق اثر دارند ولی هزینهٔ عملیاتی نیستند — نباید از سود کم شوند */
 const NON_OPERATING_EXPENSE_TYPES = new Set(['loan_received', 'loan_given', 'withdrawal']);
@@ -55,7 +55,7 @@ async function getInventorySnapshot() {
     .sort((a, b) => a.stockKg - b.stockKg)
     .slice(0, 6);
   const empty = merged.filter((p) => p.stockKg <= 0).length;
-  const top = [...merged].sort((a, b) => b.stockKg - a.stockKg).slice(0, 8);
+  const allProducts = [...merged].sort((a, b) => b.stockKg - a.stockKg);
 
   return {
     totalKg: Math.round(totalKg * 100) / 100,
@@ -65,7 +65,7 @@ async function getInventorySnapshot() {
     productCount: merged.length,
     emptyCount: empty,
     lowStock,
-    products: top,
+    products: allProducts,
   };
 }
 
@@ -86,8 +86,8 @@ export async function getDashboard(date?: Date, marketerId?: string) {
 
   const [sales, monthSales, expenses, settings, debtors, cardDeposits, company, checks, crm, readyShip, pendingCount, inventory] =
     await Promise.all([
-      SaleInvoice.find({ ...saleFilterDay, status: { $in: ['approved', 'shipped'] } }),
-      SaleInvoice.find({ ...saleFilterMonth, status: { $in: ['approved', 'shipped'] } }),
+      SaleInvoice.find({ ...saleFilterDay, status: { $in: ['approved', 'shipped', 'delivered'] } }),
+      SaleInvoice.find({ ...saleFilterMonth, status: { $in: ['approved', 'shipped', 'delivered'] } }),
       Expense.find({ date: { $gte: dayStart, $lte: dayEnd } }),
       getOrCreateSettings(),
       Debtor.find({ isSettled: false }).sort({ dueDate: 1 }),
@@ -295,15 +295,15 @@ export async function getPeriodSummary(from: Date, to: Date, marketerId?: string
     0
   );
 
-  const products = await Product.find().sort({ stockKg: -1 }).limit(30);
+  const products = await Product.find().sort({ stockKg: -1 });
   const inventory = {
     totalKg: products.reduce((s, p) => s + (p.stockKg || 0), 0),
     totalValue: products.reduce(
       (s, p) => s + (p.stockKg || 0) * (p.avgCostPerKg || p.purchasePrice || 0),
       0
     ),
-    productCount: await Product.countDocuments(),
-    items: products.slice(0, 12).map((p) => ({
+    productCount: products.length,
+    items: products.map((p) => ({
       id: p._id.toString(),
       name: p.name,
       stockKg: p.stockKg || 0,
@@ -350,6 +350,8 @@ export async function updateShopSettings(data: {
   brandPrimaryColor?: string;
   brandLogoUrl?: string;
   platformEnabled?: boolean;
+  driverPanelEnabled?: boolean;
+  marketerPanelEnabled?: boolean;
   commissionPercentCompany?: number;
   commissionPercentSelf?: number;
   platformMinOrderKg?: number;
@@ -363,7 +365,10 @@ export async function updateShopSettings(data: {
   if (data.cardBalance !== undefined) settings.cardBalance = data.cardBalance;
   if (data.catalogEnabled !== undefined) settings.catalogEnabled = data.catalogEnabled;
   if (data.catalogTitle !== undefined) settings.catalogTitle = data.catalogTitle;
-  if (data.catalogPhone !== undefined) settings.catalogPhone = data.catalogPhone;
+  if (data.catalogPhone !== undefined)
+    settings.catalogPhone = data.catalogPhone
+      ? normalizePhoneDigits(data.catalogPhone) || data.catalogPhone
+      : data.catalogPhone;
   if (data.catalogNote !== undefined) settings.catalogNote = data.catalogNote;
   if (data.catalogSupermarketMinKg !== undefined)
     settings.catalogSupermarketMinKg = Math.max(0, data.catalogSupermarketMinKg);
@@ -374,6 +379,9 @@ export async function updateShopSettings(data: {
   if (data.brandPrimaryColor !== undefined) settings.brandPrimaryColor = data.brandPrimaryColor;
   if (data.brandLogoUrl !== undefined) settings.brandLogoUrl = data.brandLogoUrl;
   if (data.platformEnabled !== undefined) settings.platformEnabled = data.platformEnabled;
+  if (data.driverPanelEnabled !== undefined) settings.driverPanelEnabled = data.driverPanelEnabled;
+  if (data.marketerPanelEnabled !== undefined)
+    settings.marketerPanelEnabled = data.marketerPanelEnabled;
   if (data.commissionPercentCompany !== undefined)
     settings.commissionPercentCompany = data.commissionPercentCompany;
   if (data.commissionPercentSelf !== undefined)

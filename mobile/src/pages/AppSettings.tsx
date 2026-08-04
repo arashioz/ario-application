@@ -12,6 +12,7 @@ import {
   IonInput,
   IonButton,
   IonToast,
+  IonToggle,
   IonRefresher,
   IonRefresherContent,
   useIonViewWillEnter,
@@ -24,11 +25,19 @@ import { useAuth } from '../auth/AuthContext';
 const AppSettings: React.FC = () => {
   const { isAdmin } = useAuth();
   const [shopName, setShopName] = useState('');
+  const [driverPanelEnabled, setDriverPanelEnabled] = useState(true);
+  const [marketerPanelEnabled, setMarketerPanelEnabled] = useState(true);
   const [toast, setToast] = useState({ open: false, msg: '', color: 'success' });
 
   const load = useCallback(async () => {
-    const s = await wsClient.request<{ shopName?: string }>('settings.get');
+    const s = await wsClient.request<{
+      shopName?: string;
+      driverPanelEnabled?: boolean;
+      marketerPanelEnabled?: boolean;
+    }>('settings.get');
     setShopName(s.shopName || '');
+    setDriverPanelEnabled(s.driverPanelEnabled !== false);
+    setMarketerPanelEnabled(s.marketerPanelEnabled !== false);
   }, []);
 
   useIonViewWillEnter(() => {
@@ -70,13 +79,44 @@ const AppSettings: React.FC = () => {
                 onIonInput={(e) => setShopName(e.detail.value || '')}
               />
             </IonItem>
-            {isAdmin && (
+          </div>
+
+          {isAdmin && (
+            <div className="ios-glass-card" style={{ marginTop: 12 }}>
+              <div className="ios-section-title" style={{ marginTop: 0 }}>
+                پنل‌ها
+              </div>
+              <p className="hint">با خاموش کردن، منو و قابلیت‌های مربوطه در اپ مخفی می‌شود</p>
+              <IonItem lines="full">
+                <IonLabel>
+                  <h3>پنل راننده</h3>
+                  <p>نقشه راننده‌ها، پرداخت راننده، اپ ارسال</p>
+                </IonLabel>
+                <IonToggle
+                  checked={driverPanelEnabled}
+                  onIonChange={(e) => setDriverPanelEnabled(e.detail.checked)}
+                />
+              </IonItem>
+              <IonItem lines="none">
+                <IonLabel>
+                  <h3>پنل بازاریاب</h3>
+                  <p>ثبت‌نام همکار، سفارش حجمی، تارگت، جشنواره</p>
+                </IonLabel>
+                <IonToggle
+                  checked={marketerPanelEnabled}
+                  onIonChange={(e) => setMarketerPanelEnabled(e.detail.checked)}
+                />
+              </IonItem>
               <IonButton
                 expand="block"
                 className="ios-primary-btn"
                 onClick={async () => {
                   try {
-                    await wsClient.request('settings.update', { shopName });
+                    await wsClient.request('settings.update', {
+                      shopName,
+                      driverPanelEnabled,
+                      marketerPanelEnabled,
+                    });
                     setToast({ open: true, msg: 'ذخیره شد', color: 'success' });
                   } catch (e) {
                     setToast({
@@ -87,10 +127,16 @@ const AppSettings: React.FC = () => {
                   }
                 }}
               >
-                ذخیره
+                ذخیره تنظیمات
               </IonButton>
-            )}
-          </div>
+            </div>
+          )}
+
+          {!isAdmin && (
+            <div className="ios-glass-card" style={{ marginTop: 12 }}>
+              <p className="hint">فقط مدیر می‌تواند تنظیمات را تغییر دهد</p>
+            </div>
+          )}
         </div>
 
         <IonToast

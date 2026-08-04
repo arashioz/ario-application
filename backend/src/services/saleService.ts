@@ -14,6 +14,7 @@ import {
   CostBasis,
 } from './productService';
 import { PaymentMethod, PriceTier, SaleStatus } from '../models/SaleInvoice';
+import { createCustomer, normalizePhoneDigits, findCustomerByPhone } from './customerService';
 
 interface SaleItemInput {
   productId?: string;
@@ -185,6 +186,7 @@ export async function createSaleInvoice(data: {
   discountMode?: 'invoice' | 'per_kg' | 'product';
   discountPerKg?: number;
   notes?: string;
+  appliedOffer?: string;
   date?: Date;
   dueDate?: Date;
   priceTier?: PriceTier;
@@ -195,15 +197,24 @@ export async function createSaleInvoice(data: {
   deliveryMode?: 'company' | 'self';
   createdByRole?: string;
 }) {
+  const priceTier: PriceTier = data.priceTier || 'retail';
+  if (
+    (priceTier === 'supermarket' || priceTier === 'wholesale') &&
+    !data.customerId &&
+    !data.customerName?.trim()
+  ) {
+    throw new Error('برای فروش سوپرمارکت یا عمده، انتخاب / ثبت مشتری الزامی است');
+  }
+
   const date = data.date ? new Date(data.date) : new Date();
   validateTransactionDate(date);
-  const priceTier: PriceTier = data.priceTier || 'retail';
   const isGolden = data.isGolden === true;
   const requiresApproval =
     data.requiresApproval === true || data.createdByRole === 'marketer';
 
   let customerName = data.customerName;
-  let customerPhone = data.customerPhone;
+  let customerPhone = data.customerPhone ? normalizePhoneDigits(data.customerPhone) : data.customerPhone;
+  if (customerPhone === '') customerPhone = undefined;
   let customerAddress = data.customerAddress;
   let customerId = data.customerId;
 
@@ -233,11 +244,15 @@ export async function createSaleInvoice(data: {
       await applyGeo(c);
     }
   } else if (customerName || customerPhone) {
-    let customer = customerPhone
-      ? await Customer.findOne({ phone: customerPhone })
-      : await Customer.findOne({ name: customerName });
+    let customer: InstanceType<typeof Customer> | null = null;
+    if (customerPhone) {
+      customer = await findCustomerByPhone(customerPhone);
+    }
     if (!customer && customerName) {
-      customer = await Customer.create({
+      customer = await Customer.findOne({ name: customerName });
+    }
+    if (!customer && customerName) {
+      customer = await createCustomer({
         name: customerName,
         phone: customerPhone,
         address: customerAddress,
@@ -246,7 +261,9 @@ export async function createSaleInvoice(data: {
       });
     } else if (customer) {
       if (customerName) customer.name = customerName;
+      if (customerPhone) customer.phone = customerPhone;
       await applyGeo(customer);
+      await customer.save();
     }
     if (customer) customerId = customer._id.toString();
   }
@@ -333,6 +350,7 @@ export async function createSaleInvoice(data: {
         discountMode,
         discountPerKg: discountMode === 'per_kg' ? discountPerKg : 0,
         notes: data.notes,
+        appliedOffer: data.appliedOffer,
         date,
         dueDate: data.dueDate,
         isPaid: payment.credit === 0,
@@ -674,7 +692,11 @@ export async function updateSaleInvoice(
   }
 
   if (data.customerName !== undefined) invoice.customerName = data.customerName;
-  if (data.customerPhone !== undefined) invoice.customerPhone = data.customerPhone;
+  if (data.customerPhone !== undefined) {
+    invoice.customerPhone = data.customerPhone
+      ? normalizePhoneDigits(data.customerPhone) || data.customerPhone
+      : data.customerPhone;
+  }
   if (data.customerAddress !== undefined) invoice.customerAddress = data.customerAddress;
   if (data.notes !== undefined) invoice.notes = data.notes;
 
@@ -795,6 +817,11 @@ ${
 </table>
 <div>تخفیف اقلام: ${itemsDisc.toLocaleString('fa-IR')} تومان</div>
 <div>تخفیف فاکتور (${modeLabel}): ${(invoice.discount || 0).toLocaleString('fa-IR')} تومان</div>
+${
+  invoice.appliedOffer
+    ? `<div class="ship" style="background:#fff7ed;border:1px solid #fdba74"><b>آفر تخفیف:</b> در ${invoice.appliedOffer} برده</div>`
+    : ''
+}
 <div class="total">مبلغ نهایی: ${invoice.totalAmount.toLocaleString('fa-IR')} تومان</div>
 <div>تناژ: ${invoice.totalKg.toLocaleString('fa-IR')} کیلو</div>
 ${invoice.shippingNotes ? `<div class="ship"><b>ارسال بار:</b><br/>${invoice.shippingNotes}</div>` : ''}

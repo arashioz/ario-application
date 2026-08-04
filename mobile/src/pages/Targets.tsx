@@ -18,6 +18,8 @@ import {
 import { wsClient } from '../api/ws';
 import { useAuth } from '../auth/AuthContext';
 import { formatRial, formatKg, parseAmount } from '../utils/format';
+import { MoneyInput } from '../components/MoneyInput';
+import { DigitInput } from '../components/DigitInput';
 
 interface Marketer {
   _id: string;
@@ -80,22 +82,19 @@ const Targets: React.FC = () => {
                   ))}
                 </IonSelect>
               </IonItem>
-              <IonItem>
-                <IonLabel position="stacked">سال</IonLabel>
-                <IonInput type="number" value={year} onIonInput={(e) => setYear(e.detail.value || '')} />
-              </IonItem>
-              <IonItem>
-                <IonLabel position="stacked">ماه</IonLabel>
-                <IonInput type="number" value={month} onIonInput={(e) => setMonth(e.detail.value || '')} />
-              </IonItem>
-              <IonItem>
-                <IonLabel position="stacked">تارگت مبلغ (تومان)</IonLabel>
-                <IonInput value={targetAmount} onIonInput={(e) => setTargetAmount(e.detail.value || '')} />
-              </IonItem>
-              <IonItem>
-                <IonLabel position="stacked">تارگت کیلو</IonLabel>
-                <IonInput value={targetKg} onIonInput={(e) => setTargetKg(e.detail.value || '')} />
-              </IonItem>
+              <DigitInput label="سال" mode="int" maxLen={4} value={year} onChange={setYear} />
+              <DigitInput label="ماه" mode="int" maxLen={2} value={month} onChange={setMonth} />
+              <MoneyInput
+                label="تارگت مبلغ (تومان)"
+                value={targetAmount}
+                onChange={(v) => setTargetAmount(v)}
+              />
+              <DigitInput
+                label="تارگت کیلو"
+                mode="decimal"
+                value={targetKg}
+                onChange={setTargetKg}
+              />
               <IonButton
                 expand="block"
                 size="small"

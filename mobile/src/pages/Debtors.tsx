@@ -19,7 +19,7 @@ import {
   RefresherEventDetail,
 } from '@ionic/react';
 import { wsClient, newMutationId } from '../api/ws';
-import { formatRial, formatDate, parseAmount, formatMoneyInput } from '../utils/format';
+import { formatRial, formatDate, parseAmount, formatMoneyInput, sanitizeNumberInput } from '../utils/format';
 
 interface Debtor {
   _id: string;
@@ -104,7 +104,9 @@ const Debtors: React.FC = () => {
                   <IonItem>
                     <IonLabel position="stacked">مبلغ دریافت (تومان)</IonLabel>
                     <IonInput
-                      inputmode="numeric"
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
                       value={payAmounts[d._id] || ''}
                       onIonInput={(e) =>
                         setPayAmounts({ ...payAmounts, [d._id]: formatMoneyInput(e.detail.value || '') })

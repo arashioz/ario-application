@@ -286,7 +286,8 @@ export async function calculateSalePrice(
     tierPercent(category, product, priceTier);
 
   const cost = resolveProductCost(product, costBasis);
-  const salePricePerKg = Math.round(cost * (1 + percent / 100));
+  // رند به نزدیک‌ترین ۱۰۰ تومان — عدد خرد نداشته باشیم
+  const salePricePerKg = Math.round((cost * (1 + percent / 100)) / 100) * 100;
   return {
     salePrice: salePricePerKg,
     salePricePerKg,
@@ -390,8 +391,14 @@ export async function updateProduct(
   if (data.profitWholesale === null) p.profitWholesale = undefined;
   else if (data.profitWholesale !== undefined) p.profitWholesale = data.profitWholesale;
   if (data.name?.trim()) {
+    const normalizedName = normalizeProductName(data.name);
+    const clash = await Product.findOne({
+      normalizedName,
+      _id: { $ne: id },
+    }).select('_id');
+    if (clash) throw new Error('محصولی با این نام از قبل وجود دارد');
     p.name = data.name.trim();
-    p.normalizedName = normalizeProductName(data.name);
+    p.normalizedName = normalizedName;
   }
   await p.save();
   return Product.findById(id).populate('categoryId');

@@ -4,26 +4,31 @@ import { formatMoneyInput, parseAmount } from '../utils/format';
 interface Props {
   label?: string;
   value: string;
-  onChange: (formatted: string, numeric: number | null) => void;
+  /** formatted همیشه آرگومان اول است */
+  onChange: (formatted: string, numeric?: number | null) => void;
   placeholder?: string;
   lines?: 'full' | 'none' | 'inset';
 }
 
-/** فیلد مبلغ تومان با جداکننده سه‌رقمی */
+/** فیلد مبلغ تومان با جداکننده سه‌رقمی + کیبورد عددی + تبدیل فارسی→انگلیسی */
 export const MoneyInput: React.FC<Props> = ({
   label = 'مبلغ (تومان)',
   value,
   onChange,
-  placeholder = 'مثلاً ۱٬۵۰۰٬۰۰۰',
+  placeholder = 'مثلاً ۱۵۰۰۰۰۰',
   lines = 'full',
 }) => {
   const numeric = parseAmount(value);
 
   return (
     <IonItem lines={lines}>
-      <IonLabel position="stacked">{label}</IonLabel>
+      {label ? <IonLabel position="stacked">{label}</IonLabel> : null}
       <IonInput
-        inputmode="numeric"
+        type="text"
+        inputMode="numeric"
+        pattern="[0-9]*"
+        enterkeyhint="done"
+        autocomplete="off"
         value={value}
         placeholder={placeholder}
         onIonInput={(e) => {

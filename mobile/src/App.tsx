@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Redirect, Route, Switch } from 'react-router-dom';
 import {
   IonApp,
@@ -64,7 +64,18 @@ import './theme/variables.css';
 
 setupIonicReact({ mode: 'ios' });
 
-const DriverApp: React.FC = () => (
+const DriverApp: React.FC<{ enabled: boolean }> = ({ enabled }) => {
+  if (!enabled) {
+    return (
+      <IonApp>
+        <div className="ion-padding" style={{ marginTop: 80, textAlign: 'center' }}>
+          <h2>پنل راننده خاموش است</h2>
+          <p>مدیر از تنظیمات اپ این بخش را غیرفعال کرده.</p>
+        </div>
+      </IonApp>
+    );
+  }
+  return (
   <IonTabs>
     <IonRouterOutlet>
       <Route exact path="/driver" component={DriverJobs} />
@@ -82,17 +93,41 @@ const DriverApp: React.FC = () => (
       </IonTabButton>
     </IonTabBar>
   </IonTabs>
-);
+  );
+};
 
 const AuthedApp: React.FC = () => {
   const { user, isAdmin } = useAuth();
+  const [driverPanelEnabled, setDriverPanelEnabled] = useState(true);
+  const [marketerPanelEnabled, setMarketerPanelEnabled] = useState(true);
 
   useEffect(() => {
     if (user) wsClient.connect();
   }, [user]);
 
+  useEffect(() => {
+    if (!user) return;
+    void wsClient
+      .request<{ driverPanelEnabled?: boolean; marketerPanelEnabled?: boolean }>('settings.get')
+      .then((s) => {
+        setDriverPanelEnabled(s.driverPanelEnabled !== false);
+        setMarketerPanelEnabled(s.marketerPanelEnabled !== false);
+      })
+      .catch(() => undefined);
+  }, [user]);
+
   if (!user) return <Login />;
-  if (user.role === 'driver') return <DriverApp />;
+  if (user.role === 'driver') return <DriverApp enabled={driverPanelEnabled} />;
+  if (user.role === 'marketer' && !marketerPanelEnabled) {
+    return (
+      <IonApp>
+        <div className="ion-padding" style={{ marginTop: 80, textAlign: 'center' }}>
+          <h2>پنل بازاریاب خاموش است</h2>
+          <p>مدیر از تنظیمات اپ این بخش را غیرفعال کرده.</p>
+        </div>
+      </IonApp>
+    );
+  }
 
   return (
     <IonTabs>

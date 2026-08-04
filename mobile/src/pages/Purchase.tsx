@@ -22,7 +22,7 @@ import { addOutline, checkmarkCircleOutline, imageOutline, trashOutline, walletO
 import { useHistory } from 'react-router-dom';
 import { wsClient, newMutationId } from '../api/ws';
 import { resolveMediaUrl } from '../api/client';
-import { parseAmount, formatRial, formatKg, resolveQty, resolvePrices, todayIso, formatMoneyInput, formatToman } from '../utils/format';
+import { parseAmount, formatRial, formatKg, resolveQty, resolvePrices, todayIso, formatMoneyInput, formatToman, sanitizeNumberInput } from '../utils/format';
 import { PersianDateField } from '../components/PersianDateField';
 import { InvoiceListPanel } from '../components/InvoiceListPanel';
 import { useAuth } from '../auth/AuthContext';
@@ -372,25 +372,31 @@ const Purchase: React.FC = () => {
                         <IonItem>
                           <IonLabel position="stacked">تکی %</IonLabel>
                           <IonInput
-                            type="number"
+                            type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
                             value={item.profitRetail}
-                            onIonInput={(e) => update(index, 'profitRetail', e.detail.value || '')}
+                            onIonInput={(e) => update(index, 'profitRetail', sanitizeNumberInput(e.detail.value || '', { decimal: true }))}
                           />
                         </IonItem>
                         <IonItem>
                           <IonLabel position="stacked">سوپر %</IonLabel>
                           <IonInput
-                            type="number"
+                            type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
                             value={item.profitSupermarket}
-                            onIonInput={(e) => update(index, 'profitSupermarket', e.detail.value || '')}
+                            onIonInput={(e) => update(index, 'profitSupermarket', sanitizeNumberInput(e.detail.value || '', { decimal: true }))}
                           />
                         </IonItem>
                         <IonItem>
                           <IonLabel position="stacked">عمده %</IonLabel>
                           <IonInput
-                            type="number"
+                            type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
                             value={item.profitWholesale}
-                            onIonInput={(e) => update(index, 'profitWholesale', e.detail.value || '')}
+                            onIonInput={(e) => update(index, 'profitWholesale', sanitizeNumberInput(e.detail.value || '', { decimal: true }))}
                           />
                         </IonItem>
                       </div>
@@ -400,9 +406,11 @@ const Purchase: React.FC = () => {
                   <IonItem>
                     <IonLabel position="stacked">کیلو هر بسته</IonLabel>
                     <IonInput
-                      type="number"
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
                       value={item.kgPerPackage}
-                      onIonInput={(e) => update(index, 'kgPerPackage', e.detail.value || '')}
+                      onIonInput={(e) => update(index, 'kgPerPackage', sanitizeNumberInput(e.detail.value || '', { decimal: true }))}
                     />
                   </IonItem>
 
@@ -413,10 +421,12 @@ const Purchase: React.FC = () => {
                     <IonItem>
                       <IonLabel position="stacked">کیلوگرم</IonLabel>
                       <IonInput
-                        type="number"
+                        type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
                         value={item.unit === 'kg' ? item.qtyInput : String(Math.round(qtyKg * 100) / 100 || '')}
                         onIonInput={(e) => {
-                          const v = e.detail.value || '';
+                        const v = sanitizeNumberInput(e.detail.value || '', { decimal: true });
                           setItems((prev) => {
                             const next = [...prev];
                             const kpp = parseFloat(next[index].kgPerPackage) || 5;
@@ -433,7 +443,9 @@ const Purchase: React.FC = () => {
                     <IonItem>
                       <IonLabel position="stacked">بسته (گرد)</IonLabel>
                       <IonInput
-                        type="number"
+                        type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
                         value={
                           item.unit === 'package'
                             ? item.qtyInput
@@ -442,7 +454,7 @@ const Purchase: React.FC = () => {
                               : ''
                         }
                         onIonInput={(e) => {
-                          const v = e.detail.value || '';
+                        const v = sanitizeNumberInput(e.detail.value || '', { decimal: true });
                           setItems((prev) => {
                             const next = [...prev];
                             next[index] = {
@@ -594,12 +606,17 @@ const Purchase: React.FC = () => {
                             <IonItem>
                               <IonLabel position="stacked">تکی %</IonLabel>
                               <IonInput
-                                type="number"
+                                type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
                                 value={edit.retail}
                                 onIonInput={(e) =>
                                   setSnapEdits((prev) => ({
                                     ...prev,
-                                    [s.productId]: { ...edit, retail: e.detail.value || '' },
+                                    [s.productId]: {
+                                      ...edit,
+                                      retail: sanitizeNumberInput(e.detail.value || '', { decimal: true }),
+                                    },
                                   }))
                                 }
                               />
@@ -607,12 +624,17 @@ const Purchase: React.FC = () => {
                             <IonItem>
                               <IonLabel position="stacked">سوپر %</IonLabel>
                               <IonInput
-                                type="number"
+                                type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
                                 value={edit.supermarket}
                                 onIonInput={(e) =>
                                   setSnapEdits((prev) => ({
                                     ...prev,
-                                    [s.productId]: { ...edit, supermarket: e.detail.value || '' },
+                                    [s.productId]: {
+                                      ...edit,
+                                      supermarket: sanitizeNumberInput(e.detail.value || '', { decimal: true }),
+                                    },
                                   }))
                                 }
                               />
@@ -620,12 +642,17 @@ const Purchase: React.FC = () => {
                             <IonItem>
                               <IonLabel position="stacked">عمده %</IonLabel>
                               <IonInput
-                                type="number"
+                                type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
                                 value={edit.wholesale}
                                 onIonInput={(e) =>
                                   setSnapEdits((prev) => ({
                                     ...prev,
-                                    [s.productId]: { ...edit, wholesale: e.detail.value || '' },
+                                    [s.productId]: {
+                                      ...edit,
+                                      wholesale: sanitizeNumberInput(e.detail.value || '', { decimal: true }),
+                                    },
                                   }))
                                 }
                               />

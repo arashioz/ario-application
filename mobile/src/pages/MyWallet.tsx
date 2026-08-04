@@ -18,8 +18,9 @@ import {
   RefresherEventDetail,
 } from '@ionic/react';
 import { wsClient, newMutationId } from '../api/ws';
-import { formatToman, formatMoneyInput, parseAmount, formatDate } from '../utils/format';
+import { formatToman, formatMoneyInput, parseAmount, formatDate, digitsOnly } from '../utils/format';
 import { MoneyInput } from '../components/MoneyInput';
+import { DigitInput } from '../components/DigitInput';
 import { useAuth } from '../auth/AuthContext';
 
 interface Tx {
@@ -95,22 +96,30 @@ const MyWallet: React.FC = () => {
           </div>
 
           <div className="ios-glass-card">
-            <IonItem>
-              <IonLabel position="stacked">شماره کارت برای تسویه</IonLabel>
-              <IonInput
-                value={cardNumber}
-                onIonBlur={(e) => {
-                  const v = String((e.target as HTMLIonInputElement).value ?? '');
-                  void wsClient
-                    .request('driver.profile.update', { cardNumber: v })
-                    .then(() => {
-                      setCardNumber(v);
-                      setToast({ open: true, msg: 'کارت ذخیره شد', color: 'success' });
-                    })
-                    .catch(console.warn);
-                }}
-              />
-            </IonItem>
+            <DigitInput
+              label="شماره کارت برای تسویه"
+              mode="int"
+              maxLen={16}
+              value={cardNumber}
+              placeholder="6037…"
+              onChange={(v) => {
+                setCardNumber(v);
+              }}
+            />
+            <IonButton
+              size="small"
+              expand="block"
+              onClick={() => {
+                void wsClient
+                  .request('driver.profile.update', { cardNumber: digitsOnly(cardNumber) })
+                  .then(() => {
+                    setToast({ open: true, msg: 'کارت ذخیره شد', color: 'success' });
+                  })
+                  .catch(console.warn);
+              }}
+            >
+              ذخیره شماره کارت
+            </IonButton>
             <p className="hint">با روشن بودن کار و فروش، پورسانت اینجا می‌آید</p>
           </div>
 

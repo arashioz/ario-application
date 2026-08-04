@@ -23,7 +23,7 @@ import { addOutline, trashOutline, checkmarkCircleOutline } from 'ionicons/icons
 import { IonIcon } from '@ionic/react';
 import { wsClient } from '../api/ws';
 import { MoneyInput } from '../components/MoneyInput';
-import { parseAmount, formatMoneyInput } from '../utils/format';
+import { parseAmount, formatMoneyInput, sanitizeNumberInput } from '../utils/format';
 
 type RuleType = 'bundle' | 'volume_kg' | 'volume_amount' | 'payment_cash' | 'payment_card' | 'loyalty';
 
@@ -243,9 +243,16 @@ const Campaigns: React.FC = () => {
             <IonItem>
               <IonLabel position="stacked">درصد تخفیف</IonLabel>
               <IonInput
-                type="number"
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
                 value={rule.discountPercent}
-                onIonInput={(e) => setRule({ ...rule, discountPercent: e.detail.value || '' })}
+                onIonInput={(e) =>
+                  setRule({
+                    ...rule,
+                    discountPercent: sanitizeNumberInput(e.detail.value || '', { decimal: true }),
+                  })
+                }
               />
             </IonItem>
 
@@ -261,9 +268,13 @@ const Campaigns: React.FC = () => {
                 <IonItem>
                   <IonLabel position="stacked">تعداد بسته محصول ۱</IonLabel>
                   <IonInput
-                    type="number"
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
                     value={rule.bundleAQty}
-                    onIonInput={(e) => setRule({ ...rule, bundleAQty: e.detail.value || '' })}
+                    onIonInput={(e) =>
+                      setRule({ ...rule, bundleAQty: sanitizeNumberInput(e.detail.value || '') })
+                    }
                   />
                 </IonItem>
                 <IonItem>
@@ -276,9 +287,13 @@ const Campaigns: React.FC = () => {
                 <IonItem>
                   <IonLabel position="stacked">تعداد بسته محصول ۲</IonLabel>
                   <IonInput
-                    type="number"
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
                     value={rule.bundleBQty}
-                    onIonInput={(e) => setRule({ ...rule, bundleBQty: e.detail.value || '' })}
+                    onIonInput={(e) =>
+                      setRule({ ...rule, bundleBQty: sanitizeNumberInput(e.detail.value || '') })
+                    }
                   />
                 </IonItem>
               </>
@@ -287,9 +302,13 @@ const Campaigns: React.FC = () => {
               <IonItem>
                 <IonLabel position="stacked">حداقل کیلو</IonLabel>
                 <IonInput
-                  type="number"
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
                   value={rule.minKg}
-                  onIonInput={(e) => setRule({ ...rule, minKg: e.detail.value || '' })}
+                  onIonInput={(e) =>
+                    setRule({ ...rule, minKg: sanitizeNumberInput(e.detail.value || '', { decimal: true }) })
+                  }
                 />
               </IonItem>
             )}
@@ -305,17 +324,31 @@ const Campaigns: React.FC = () => {
                 <IonItem>
                   <IonLabel position="stacked">حداقل تعداد فاکتور قبلی</IonLabel>
                   <IonInput
-                    type="number"
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
                     value={rule.minInvoiceCount}
-                    onIonInput={(e) => setRule({ ...rule, minInvoiceCount: e.detail.value || '' })}
+                    onIonInput={(e) =>
+                      setRule({
+                        ...rule,
+                        minInvoiceCount: sanitizeNumberInput(e.detail.value || ''),
+                      })
+                    }
                   />
                 </IonItem>
                 <IonItem>
                   <IonLabel position="stacked">حداقل کیلو در ماه</IonLabel>
                   <IonInput
-                    type="number"
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
                     value={rule.minMonthKg}
-                    onIonInput={(e) => setRule({ ...rule, minMonthKg: e.detail.value || '' })}
+                    onIonInput={(e) =>
+                      setRule({
+                        ...rule,
+                        minMonthKg: sanitizeNumberInput(e.detail.value || '', { decimal: true }),
+                      })
+                    }
                   />
                 </IonItem>
               </>
@@ -346,11 +379,13 @@ const Campaigns: React.FC = () => {
                 <IonItem lines="none">
                   <IonLabel position="stacked">تعداد</IonLabel>
                   <IonInput
-                    type="number"
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
                     value={l.qty}
                     onIonInput={(e) => {
                       const next = [...suggestLines];
-                      next[i] = { ...l, qty: e.detail.value || '' };
+                      next[i] = { ...l, qty: sanitizeNumberInput(e.detail.value || '', { decimal: true }) };
                       setSuggestLines(next);
                     }}
                   />

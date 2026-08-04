@@ -27,8 +27,9 @@ import { copyOutline, openOutline, imageOutline, trashOutline, createOutline } f
 import { IonIcon } from '@ionic/react';
 import { wsClient } from '../api/ws';
 import { resolveMediaUrl } from '../api/client';
-import { formatToman, formatMoneyInput, parseAmount } from '../utils/format';
+import { formatToman, formatMoneyInput, parseAmount, sanitizeNumberInput, priceFromPercent, roundToman } from '../utils/format';
 import { useAuth } from '../auth/AuthContext';
+import { DigitInput } from '../components/DigitInput';
 
 type PriceTier = 'retail' | 'supermarket' | 'wholesale';
 type AdminTab = 'products' | 'categories' | 'catalog';
@@ -84,10 +85,10 @@ function tierPercent(p: Product, tier: PriceTier): number {
 
 function tierPricePerKg(p: Product, tier: PriceTier): number {
   if (tier === 'retail' && p.catalogPricePerKg && p.catalogPricePerKg > 0) {
-    return Math.round(p.catalogPricePerKg);
+    return roundToman(p.catalogPricePerKg, 100);
   }
   const cost = productCost(p);
-  return Math.round(cost * (1 + tierPercent(p, tier) / 100));
+  return priceFromPercent(cost, tierPercent(p, tier));
 }
 
 function pctFromPrice(cost: number, price: number): number {
@@ -131,6 +132,7 @@ const CatalogAdmin: React.FC = () => {
 
   const [editOpen, setEditOpen] = useState(false);
   const [editProduct, setEditProduct] = useState<Product | null>(null);
+  const [editName, setEditName] = useState('');
   const [editRetailPct, setEditRetailPct] = useState('');
   const [editSuperPct, setEditSuperPct] = useState('');
   const [editWholePct, setEditWholePct] = useState('');
@@ -202,6 +204,7 @@ const CatalogAdmin: React.FC = () => {
 
   const openEdit = (p: Product) => {
     setEditProduct(p);
+    setEditName(p.name || '');
     const cost = productCost(p);
     const rPct = tierPercent(p, 'retail');
     const sPct = tierPercent(p, 'supermarket');
@@ -224,7 +227,7 @@ const CatalogAdmin: React.FC = () => {
     if (!editProduct) return;
     const cost = productCost(editProduct);
     const pct = parseFloat(pctStr) || 0;
-    const price = Math.round(cost * (1 + pct / 100));
+    const price = priceFromPercent(cost, pct);
     const formatted = formatMoneyInput(String(price));
     if (tier === 'retail') {
       setEditRetailPct(pctStr);
@@ -258,6 +261,11 @@ const CatalogAdmin: React.FC = () => {
 
   const saveEdit = async () => {
     if (!editProduct) return;
+    const name = editName.trim();
+    if (!name) {
+      setToast({ open: true, msg: 'نام محصول الزامی است', color: 'warning' });
+      return;
+    }
     setEditSaving(true);
     try {
       const retailPct = parseFloat(editRetailPct) || 0;
@@ -265,9 +273,10 @@ const CatalogAdmin: React.FC = () => {
       const wholePct = parseFloat(editWholePct) || 0;
       const retailPrice = parseAmount(editRetailPrice) || 0;
       const cost = productCost(editProduct);
-      const computedRetail = Math.round(cost * (1 + retailPct / 100));
+      const computedRetail = priceFromPercent(cost, retailPct);
       await wsClient.request('product.update', {
         id: editProduct._id,
+        name,
         profitRetail: retailPct,
         profitSupermarket: superPct,
         profitWholesale: wholePct,
@@ -462,25 +471,28 @@ const CatalogAdmin: React.FC = () => {
                   <IonItem>
                     <IonLabel position="stacked">تکی %</IonLabel>
                     <IonInput
-                      type="number"
+                      type="text"
+                      inputMode="decimal"
                       value={bulkRetail}
-                      onIonInput={(e) => setBulkRetail(e.detail.value || '')}
+                      onIonInput={(e) => setBulkRetail(sanitizeNumberInput(e.detail.value || '', { decimal: true }))}
                     />
                   </IonItem>
                   <IonItem>
                     <IonLabel position="stacked">سوپر %</IonLabel>
                     <IonInput
-                      type="number"
+                      type="text"
+                      inputMode="decimal"
                       value={bulkSuper}
-                      onIonInput={(e) => setBulkSuper(e.detail.value || '')}
+                      onIonInput={(e) => setBulkSuper(sanitizeNumberInput(e.detail.value || '', { decimal: true }))}
                     />
                   </IonItem>
                   <IonItem>
                     <IonLabel position="stacked">عمده %</IonLabel>
                     <IonInput
-                      type="number"
+                      type="text"
+                      inputMode="decimal"
                       value={bulkWholesale}
-                      onIonInput={(e) => setBulkWholesale(e.detail.value || '')}
+                      onIonInput={(e) => setBulkWholesale(sanitizeNumberInput(e.detail.value || '', { decimal: true }))}
                     />
                   </IonItem>
                 </div>
@@ -601,25 +613,28 @@ const CatalogAdmin: React.FC = () => {
                   <IonItem>
                     <IonLabel position="stacked">تکی %</IonLabel>
                     <IonInput
-                      type="number"
+                      type="text"
+                      inputMode="decimal"
                       value={catRetail}
-                      onIonInput={(e) => setCatRetail(e.detail.value || '')}
+                      onIonInput={(e) => setCatRetail(sanitizeNumberInput(e.detail.value || '', { decimal: true }))}
                     />
                   </IonItem>
                   <IonItem>
                     <IonLabel position="stacked">سوپر %</IonLabel>
                     <IonInput
-                      type="number"
+                      type="text"
+                      inputMode="decimal"
                       value={catSuper}
-                      onIonInput={(e) => setCatSuper(e.detail.value || '')}
+                      onIonInput={(e) => setCatSuper(sanitizeNumberInput(e.detail.value || '', { decimal: true }))}
                     />
                   </IonItem>
                   <IonItem>
                     <IonLabel position="stacked">عمده %</IonLabel>
                     <IonInput
-                      type="number"
+                      type="text"
+                      inputMode="decimal"
                       value={catWholesale}
-                      onIonInput={(e) => setCatWholesale(e.detail.value || '')}
+                      onIonInput={(e) => setCatWholesale(sanitizeNumberInput(e.detail.value || '', { decimal: true }))}
                     />
                   </IonItem>
                 </div>
@@ -681,12 +696,13 @@ const CatalogAdmin: React.FC = () => {
                     <IonItem>
                       <IonLabel position="stacked">تکی %</IonLabel>
                       <IonInput
-                        type="number"
+                        type="text"
+                      inputMode="decimal"
                         value={catEdits[c._id]?.retail ?? ''}
                         onIonInput={(e) =>
                           setCatEdits({
                             ...catEdits,
-                            [c._id]: { ...catEdits[c._id], retail: e.detail.value || '' },
+                            [c._id]: { ...catEdits[c._id], retail: sanitizeNumberInput(e.detail.value || '', { decimal: true }) },
                           })
                         }
                       />
@@ -694,12 +710,13 @@ const CatalogAdmin: React.FC = () => {
                     <IonItem>
                       <IonLabel position="stacked">سوپر %</IonLabel>
                       <IonInput
-                        type="number"
+                        type="text"
+                      inputMode="decimal"
                         value={catEdits[c._id]?.supermarket ?? ''}
                         onIonInput={(e) =>
                           setCatEdits({
                             ...catEdits,
-                            [c._id]: { ...catEdits[c._id], supermarket: e.detail.value || '' },
+                            [c._id]: { ...catEdits[c._id], supermarket: sanitizeNumberInput(e.detail.value || '', { decimal: true }) },
                           })
                         }
                       />
@@ -707,12 +724,13 @@ const CatalogAdmin: React.FC = () => {
                     <IonItem>
                       <IonLabel position="stacked">عمده %</IonLabel>
                       <IonInput
-                        type="number"
+                        type="text"
+                      inputMode="decimal"
                         value={catEdits[c._id]?.wholesale ?? ''}
                         onIonInput={(e) =>
                           setCatEdits({
                             ...catEdits,
-                            [c._id]: { ...catEdits[c._id], wholesale: e.detail.value || '' },
+                            [c._id]: { ...catEdits[c._id], wholesale: sanitizeNumberInput(e.detail.value || '', { decimal: true }) },
                           })
                         }
                       />
@@ -844,14 +862,14 @@ const CatalogAdmin: React.FC = () => {
                     onIonInput={(e) => setCatalogTitle(e.detail.value || '')}
                   />
                 </IonItem>
-                <IonItem>
-                  <IonLabel position="stacked">شماره تماس</IonLabel>
-                  <IonInput
-                    value={catalogPhone}
-                    disabled={!isAdmin}
-                    onIonInput={(e) => setCatalogPhone(e.detail.value || '')}
-                  />
-                </IonItem>
+                <DigitInput
+                  label="شماره تماس"
+                  mode="phone"
+                  value={catalogPhone}
+                  disabled={!isAdmin}
+                  onChange={setCatalogPhone}
+                  placeholder="09…"
+                />
                 <IonItem>
                   <IonLabel position="stacked">یادداشت بالای صفحه</IonLabel>
                   <IonInput
@@ -863,19 +881,23 @@ const CatalogAdmin: React.FC = () => {
                 <IonItem>
                   <IonLabel position="stacked">حداقل کیلو · سوپرمارکت</IonLabel>
                   <IonInput
-                    type="number"
+                    type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
                     value={supermarketMinKg}
                     disabled={!isAdmin}
-                    onIonInput={(e) => setSupermarketMinKg(e.detail.value || '500')}
+                    onIonInput={(e) => setSupermarketMinKg(sanitizeNumberInput(e.detail.value || '') || '500')}
                   />
                 </IonItem>
                 <IonItem>
                   <IonLabel position="stacked">حداقل کیلو · عمده</IonLabel>
                   <IonInput
-                    type="number"
+                    type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
                     value={wholesaleMinKg}
                     disabled={!isAdmin}
-                    onIonInput={(e) => setWholesaleMinKg(e.detail.value || '2000')}
+                    onIonInput={(e) => setWholesaleMinKg(sanitizeNumberInput(e.detail.value || '') || '2000')}
                   />
                 </IonItem>
                 {isAdmin && (
@@ -944,6 +966,15 @@ const CatalogAdmin: React.FC = () => {
                   </div>
                 </div>
 
+                <IonItem>
+                  <IonLabel position="stacked">نام محصول</IonLabel>
+                  <IonInput
+                    value={editName}
+                    placeholder="مثلاً قند شکسته ۱۰ نایلونی"
+                    onIonInput={(e) => setEditName(e.detail.value || '')}
+                  />
+                </IonItem>
+
                 {(
                   [
                     {
@@ -972,15 +1003,19 @@ const CatalogAdmin: React.FC = () => {
                       <IonItem>
                         <IonLabel position="stacked">درصد %</IonLabel>
                         <IonInput
-                          type="number"
+                          type="text"
+                          inputMode="decimal"
                           value={row.pct}
-                          onIonInput={(e) => syncPriceFromPct(row.key, e.detail.value || '')}
+                          placeholder="مثلاً 2.5"
+                          onIonInput={(e) => syncPriceFromPct(row.key, sanitizeNumberInput(e.detail.value || '', { decimal: true }))}
                         />
                       </IonItem>
                       <IonItem>
                         <IonLabel position="stacked">قیمت / کیلو</IonLabel>
                         <IonInput
-                          inputmode="numeric"
+                          type="text"
+                          inputMode="numeric"
+                          pattern="[0-9]*"
                           value={row.price}
                           onIonInput={(e) => syncPctFromPrice(row.key, e.detail.value || '')}
                         />

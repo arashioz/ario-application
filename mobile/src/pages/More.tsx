@@ -1,11 +1,22 @@
-import { IonPage, IonHeader, IonToolbar, IonTitle, IonContent, IonList, IonItem, IonLabel, IonIcon } from '@ionic/react';
+import { useCallback, useState } from 'react';
+import {
+  IonPage,
+  IonHeader,
+  IonToolbar,
+  IonTitle,
+  IonContent,
+  IonList,
+  IonItem,
+  IonLabel,
+  IonIcon,
+  useIonViewWillEnter,
+} from '@ionic/react';
 import {
   personOutline,
   peopleOutline,
   walletOutline,
   calendarOutline,
   flagOutline,
-  chevronBackOutline,
   fileTrayFullOutline,
   documentTextOutline,
   navigateOutline,
@@ -19,9 +30,29 @@ import {
   storefrontOutline,
 } from 'ionicons/icons';
 import { useAuth } from '../auth/AuthContext';
+import { wsClient } from '../api/ws';
 
 const More: React.FC = () => {
   const { isAdmin, user, online, queueLen, logout } = useAuth();
+  const [driverPanelEnabled, setDriverPanelEnabled] = useState(true);
+  const [marketerPanelEnabled, setMarketerPanelEnabled] = useState(true);
+
+  const loadFlags = useCallback(async () => {
+    try {
+      const s = await wsClient.request<{
+        driverPanelEnabled?: boolean;
+        marketerPanelEnabled?: boolean;
+      }>('settings.get');
+      setDriverPanelEnabled(s.driverPanelEnabled !== false);
+      setMarketerPanelEnabled(s.marketerPanelEnabled !== false);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useIonViewWillEnter(() => {
+    void loadFlags();
+  });
 
   const links = [
     {
@@ -30,7 +61,7 @@ const More: React.FC = () => {
       label: 'مدیریت محصولات',
       desc: 'دسته، درصد سود، عکس، قیمت تکی/سوپر/عمده',
     },
-    ...(isAdmin
+    ...(isAdmin && marketerPanelEnabled
       ? [
           {
             href: '/partner-approvals',
@@ -46,23 +77,36 @@ const More: React.FC = () => {
           },
         ]
       : []),
-    {
-      href: '/my-wallet',
-      icon: walletOutline,
-      label: 'کیف پول من',
-      desc: 'پورسانت، موجودی، درخواست تسویه',
-    },
-    {
-      href: '/volume-orders',
-      icon: storefrontOutline,
-      label: 'سفارش حجمی',
-      desc: 'سفارش سوپر/عمده برای شهر خودت',
-    },
+    ...(marketerPanelEnabled
+      ? [
+          {
+            href: '/my-wallet',
+            icon: walletOutline,
+            label: 'کیف پول من',
+            desc: 'پورسانت، موجودی، درخواست تسویه',
+          },
+          {
+            href: '/volume-orders',
+            icon: storefrontOutline,
+            label: 'سفارش حجمی',
+            desc: 'سفارش سوپر/عمده برای شهر خودت',
+          },
+        ]
+      : isAdmin
+        ? []
+        : [
+            {
+              href: '/my-wallet',
+              icon: walletOutline,
+              label: 'کیف پول من',
+              desc: 'پورسانت، موجودی، درخواست تسویه',
+            },
+          ]),
     {
       href: '/app-settings',
       icon: settingsOutline,
       label: 'تنظیمات اپ',
-      desc: 'نام مغازه و تنظیمات عمومی',
+      desc: isAdmin ? 'نام مغازه · خاموش/روشن پنل راننده و بازاریاب' : 'نام مغازه و تنظیمات عمومی',
     },
     {
       href: '/invoices',
@@ -76,9 +120,9 @@ const More: React.FC = () => {
       label: 'نقشه مشتریان',
       desc: 'موقعیت، آخرین ویزیت، فاکتورها',
     },
-    { href: '/orders', icon: fileTrayFullOutline, label: 'سفارش‌ها', desc: 'تأیید، ارسال، PDF' },
+    { href: '/orders', icon: fileTrayFullOutline, label: 'سفارش‌ها', desc: 'تأیید، ارسال شده، PDF' },
     { href: '/checks', icon: documentTextOutline, label: 'یادآور چک', desc: 'پیگیری سررسید چک' },
-    ...(isAdmin
+    ...(isAdmin && driverPanelEnabled
       ? [
           { href: '/drivers-map', icon: navigateOutline, label: 'نقشه راننده‌ها', desc: 'موقعیت زنده' },
           {
@@ -94,13 +138,17 @@ const More: React.FC = () => {
     ...(isAdmin
       ? [
           { href: '/expense', icon: walletOutline, label: 'هزینه و شرکت', desc: 'لیست هزینه، واریز، پرداخت' },
-          {
-            href: '/campaigns',
-            icon: giftOutline,
-            label: 'جشنواره / تخفیف فروش',
-            desc: 'پکیج، حجمی، نقدی — برای بازاریاب',
-          },
-          { href: '/targets', icon: flagOutline, label: 'تارگت بازاریاب', desc: 'هدف ماهانه' },
+          ...(marketerPanelEnabled
+            ? [
+                {
+                  href: '/campaigns',
+                  icon: giftOutline,
+                  label: 'جشنواره / تخفیف فروش',
+                  desc: 'پکیج، حجمی، نقدی — برای بازاریاب',
+                },
+                { href: '/targets', icon: flagOutline, label: 'تارگت بازاریاب', desc: 'هدف ماهانه' },
+              ]
+            : []),
         ]
       : []),
     {
@@ -133,15 +181,21 @@ const More: React.FC = () => {
             </button>
           </div>
 
+          {isAdmin && (
+            <p className="hint convert-hint">
+              پنل راننده: {driverPanelEnabled ? 'روشن' : 'خاموش'} · پنل بازاریاب:{' '}
+              {marketerPanelEnabled ? 'روشن' : 'خاموش'} — از تنظیمات اپ عوض کنید
+            </p>
+          )}
+
           <IonList className="more-list">
             {links.map((l) => (
               <IonItem key={l.href} routerLink={l.href} detail={false} className="more-item">
                 <IonIcon slot="start" icon={l.icon} color="primary" />
                 <IonLabel>
-                  <h3>{l.label}</h3>
+                  <h2>{l.label}</h2>
                   <p>{l.desc}</p>
                 </IonLabel>
-                <IonIcon slot="end" icon={chevronBackOutline} color="medium" />
               </IonItem>
             ))}
           </IonList>

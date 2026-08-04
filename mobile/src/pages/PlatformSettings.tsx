@@ -1,3 +1,4 @@
+import { sanitizeNumberInput } from '../utils/format';
 import { useCallback, useState } from 'react';
 import {
   IonPage,
@@ -67,25 +68,29 @@ const PlatformSettings: React.FC = () => {
             <IonItem>
               <IonLabel position="stacked">درصد پورسانت · پخش با ماشین شرکت</IonLabel>
               <IonInput
-                type="number"
+                type="text" inputMode="numeric" pattern="[0-9]*"
                 value={commissionCompany}
-                onIonInput={(e) => setCommissionCompany(e.detail.value || '3')}
+                onIonInput={(e) =>
+                  setCommissionCompany(sanitizeNumberInput(e.detail.value || '', { decimal: true }) || '3')
+                }
               />
             </IonItem>
             <IonItem>
               <IonLabel position="stacked">درصد پورسانت · پخش شخصی همکار</IonLabel>
               <IonInput
-                type="number"
+                type="text" inputMode="numeric" pattern="[0-9]*"
                 value={commissionSelf}
-                onIonInput={(e) => setCommissionSelf(e.detail.value || '5')}
+                onIonInput={(e) =>
+                  setCommissionSelf(sanitizeNumberInput(e.detail.value || '', { decimal: true }) || '5')
+                }
               />
             </IonItem>
             <IonItem>
               <IonLabel position="stacked">حداقل کیلو سفارش حجمی</IonLabel>
               <IonInput
-                type="number"
+                type="text" inputMode="numeric" pattern="[0-9]*"
                 value={minKg}
-                onIonInput={(e) => setMinKg(e.detail.value || '500')}
+                onIonInput={(e) => setMinKg(sanitizeNumberInput(e.detail.value || '') || '500')}
               />
             </IonItem>
             <IonItem>

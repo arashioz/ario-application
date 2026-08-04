@@ -57,6 +57,8 @@ export interface ISaleInvoice extends Document {
   /** اگر کیلویی: تومان به ازای هر کیلو */
   discountPerKg?: number;
   notes?: string;
+  /** نام آفر تخفیفی اعمال‌شده (ملایم / ویژه / …) */
+  appliedOffer?: string;
   shippingNotes?: string;
   /** ارسال با ما | مشتری | بدون ارسال */
   shippingBy?: 'us' | 'customer' | 'none';
@@ -150,6 +152,7 @@ const SaleInvoiceSchema = new Schema<ISaleInvoice>(
     },
     discountPerKg: { type: Number, default: 0 },
     notes: { type: String },
+    appliedOffer: { type: String },
     shippingNotes: { type: String },
     shippingBy: {
       type: String,

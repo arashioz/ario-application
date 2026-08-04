@@ -59,8 +59,8 @@ type ShippingBy = 'us' | 'customer' | 'none';
 
 const STATUS: Record<string, string> = {
   pending: 'منتظر تأیید',
-  approved: 'تأیید شده',
-  shipped: 'ارسال شد',
+  approved: 'آماده ارسال',
+  shipped: 'ارسال شده',
   delivered: 'تحویل شد',
   cancelled: 'لغو',
 };
@@ -125,53 +125,64 @@ const Orders: React.FC = () => {
   const resolveBy = (inv: SaleInv): ShippingBy =>
     shipBy[inv._id] || inv.shippingBy || 'none';
 
-  const shippingControls = (inv: SaleInv) => (
-    <div className="ship-controls" style={{ width: '100%', marginTop: 8 }}>
-      <p className="hint convert-hint">ارسال بار</p>
-      <div className="chip-row">
-        {(['us', 'customer', 'none'] as ShippingBy[]).map((v) => (
-          <IonChip
-            key={v}
-            className={resolveBy(inv) === v ? 'ios-chip-active' : 'ios-chip'}
-            onClick={() => setShipBy({ ...shipBy, [inv._id]: v })}
-          >
-            {SHIP_BY_LABEL[v]}
-          </IonChip>
-        ))}
-      </div>
-      {resolveBy(inv) === 'us' && (
-        <MoneyInput
-          label="هزینه ارسال (تومان) — اختیاری · ثبت در هزینه‌ها"
-          value={shipCost[inv._id] ?? (inv.shippingCost ? formatMoneyInput(String(inv.shippingCost)) : '')}
-          onChange={(v) => setShipCost({ ...shipCost, [inv._id]: v })}
-        />
-      )}
-      <IonItem className="ship-input">
-        <IonSelect
-          interface="popover"
-          placeholder="راننده"
-          value={shipDriver[inv._id] ?? inv.driverId ?? ''}
-          onIonChange={(e) =>
-            setShipDriver({ ...shipDriver, [inv._id]: String(e.detail.value || '') })
-          }
-        >
-          <IonSelectOption value="">بدون راننده</IonSelectOption>
-          {drivers.map((d) => (
-            <IonSelectOption key={d._id} value={d._id}>
-              {d.name}
-            </IonSelectOption>
+  const shippingControls = (inv: SaleInv) => {
+    const by = resolveBy(inv);
+    return (
+      <div className="ship-controls" style={{ width: '100%', marginTop: 8 }}>
+        <p className="hint convert-hint">نوع ارسال</p>
+        <div className="chip-row">
+          {(['us', 'customer', 'none'] as ShippingBy[]).map((v) => (
+            <IonChip
+              key={v}
+              className={by === v ? 'ios-chip-active' : 'ios-chip'}
+              onClick={() => setShipBy({ ...shipBy, [inv._id]: v })}
+            >
+              {SHIP_BY_LABEL[v]}
+            </IonChip>
           ))}
-        </IonSelect>
-      </IonItem>
-      <IonItem className="ship-input">
-        <IonInput
-          placeholder="توضیح ارسال…"
-          value={shipNotes[inv._id] || inv.shippingNotes || ''}
-          onIonInput={(e) => setShipNotes({ ...shipNotes, [inv._id]: e.detail.value || '' })}
-        />
-      </IonItem>
-    </div>
-  );
+        </div>
+        {by === 'us' && (
+          <>
+            <MoneyInput
+              label="هزینه ارسال (تومان) — اختیاری"
+              value={
+                shipCost[inv._id] ??
+                (inv.shippingCost ? formatMoneyInput(String(inv.shippingCost)) : '')
+              }
+              onChange={(v) => setShipCost({ ...shipCost, [inv._id]: v })}
+            />
+            <IonItem className="ship-input">
+              <IonSelect
+                interface="popover"
+                placeholder="راننده (اختیاری)"
+                value={shipDriver[inv._id] ?? inv.driverId ?? ''}
+                onIonChange={(e) =>
+                  setShipDriver({ ...shipDriver, [inv._id]: String(e.detail.value || '') })
+                }
+              >
+                <IonSelectOption value="">بدون راننده — فقط ارسال شده</IonSelectOption>
+                {drivers.map((d) => (
+                  <IonSelectOption key={d._id} value={d._id}>
+                    {d.name}
+                  </IonSelectOption>
+                ))}
+              </IonSelect>
+            </IonItem>
+          </>
+        )}
+        {by !== 'us' && (
+          <p className="hint">بدون راننده ثبت می‌شود و وضعیت «ارسال شده» می‌خورد</p>
+        )}
+        <IonItem className="ship-input">
+          <IonInput
+            placeholder="توضیح ارسال…"
+            value={shipNotes[inv._id] || inv.shippingNotes || ''}
+            onIonInput={(e) => setShipNotes({ ...shipNotes, [inv._id]: e.detail.value || '' })}
+          />
+        </IonItem>
+      </div>
+    );
+  };
 
   return (
     <IonPage>
@@ -349,7 +360,9 @@ const Orders: React.FC = () => {
                           );
                           setToast({
                             open: true,
-                            msg: dId ? 'ارسال شد · در لیست راننده است' : 'ارسال شد',
+                            msg: dId
+                              ? 'ارسال شده · در لیست راننده است'
+                              : 'ارسال شده · بدون راننده',
                             color: 'success',
                           });
                           await load();
@@ -362,7 +375,7 @@ const Orders: React.FC = () => {
                         }
                       }}
                     >
-                      ارسال شد
+                      ارسال شده
                     </IonButton>
                   </>
                 )}

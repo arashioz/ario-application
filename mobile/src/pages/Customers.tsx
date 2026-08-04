@@ -22,8 +22,9 @@ import {
 } from '@ionic/react';
 import { mapOutline, saveOutline } from 'ionicons/icons';
 import { wsClient, newMutationId } from '../api/ws';
-import { formatToman, formatKg, formatDate } from '../utils/format';
+import { formatToman, formatKg, formatDate, normalizePhone } from '../utils/format';
 import { LocationPicker } from '../components/LocationPicker';
+import { DigitInput } from '../components/DigitInput';
 
 interface CustomerRow {
   _id: string;
@@ -80,7 +81,7 @@ const Customers: React.FC = () => {
         'customer.create',
         {
           name: name.trim(),
-          phone: phone.trim() || undefined,
+          phone: phone.trim() ? normalizePhone(phone) || undefined : undefined,
           address: address.trim() || undefined,
           lat: lat ?? undefined,
           lng: lng ?? undefined,
@@ -201,10 +202,13 @@ const Customers: React.FC = () => {
               <IonLabel position="stacked">نام</IonLabel>
               <IonInput value={name} onIonInput={(e) => setName(e.detail.value || '')} />
             </IonItem>
-            <IonItem lines="full">
-              <IonLabel position="stacked">موبایل</IonLabel>
-              <IonInput value={phone} onIonInput={(e) => setPhone(e.detail.value || '')} />
-            </IonItem>
+            <DigitInput
+              label="موبایل"
+              mode="phone"
+              value={phone}
+              onChange={setPhone}
+              placeholder="09…"
+            />
             <IonItem lines="none">
               <IonLabel position="stacked">آدرس</IonLabel>
               <IonInput value={address} onIonInput={(e) => setAddress(e.detail.value || '')} />

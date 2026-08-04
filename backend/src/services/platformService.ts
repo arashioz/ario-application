@@ -7,6 +7,7 @@ import {
 } from '../models';
 import { getOrCreateSettings, calculateSalePrice, resolveQty } from './productService';
 import { createExpense } from './expenseService';
+import { normalizePhoneDigits } from './customerService';
 
 export async function registerPartner(data: {
   username: string;
@@ -16,7 +17,7 @@ export async function registerPartner(data: {
   city: string;
 }) {
   const settings = await getOrCreateSettings();
-  if (settings.platformEnabled === false) {
+  if (settings.platformEnabled === false || settings.marketerPanelEnabled === false) {
     throw new Error('ثبت‌نام پلتفرم فعلاً غیرفعال است');
   }
   const username = data.username.trim().toLowerCase();
@@ -35,7 +36,7 @@ export async function registerPartner(data: {
     role: 'marketer',
     active: false,
     approvalStatus: 'pending',
-    phone: data.phone?.trim(),
+    phone: data.phone ? normalizePhoneDigits(data.phone) || data.phone.trim() : undefined,
     city: data.city.trim(),
     canSelfDeliver: true,
     walletBalance: 0,

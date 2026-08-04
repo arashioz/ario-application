@@ -20,7 +20,7 @@ import {
   IonBadge,
 } from '@ionic/react';
 import { wsClient, newMutationId } from '../api/ws';
-import { formatToman, formatKg } from '../utils/format';
+import { formatToman, formatKg, sanitizeNumberInput } from '../utils/format';
 import { useAuth } from '../auth/AuthContext';
 
 interface Product {
@@ -204,9 +204,11 @@ const VolumeOrders: React.FC = () => {
               <IonItem>
                 <IonLabel position="stacked">تعداد بسته</IonLabel>
                 <IonInput
-                  type="number"
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
                   value={qty}
-                  onIonInput={(e) => setQty(e.detail.value || '')}
+                  onIonInput={(e) => setQty(sanitizeNumberInput(e.detail.value || ''))}
                 />
               </IonItem>
               <IonButton expand="block" className="ios-primary-btn" onClick={() => void create()}>
