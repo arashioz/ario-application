@@ -1985,6 +1985,32 @@ body {
 .dash-money-summary {
   margin-top: 10px;
 }
+.dash-privacy-hint {
+  margin-top: 10px;
+  text-align: center;
+  opacity: 0.85;
+}
+.dash-kpi-locked .k-value {
+  letter-spacing: 0.2em;
+  opacity: 0.55;
+}
+.wh-value-hidden {
+  opacity: 0.55;
+  font-size: 12px;
+}
+.dash-privacy-bar {
+  position: sticky;
+  bottom: 8px;
+  z-index: 20;
+  padding: 8px 0 20px;
+  margin-top: 16px;
+  background: linear-gradient(180deg, transparent, rgba(248, 250, 252, 0.92) 28%);
+}
+.dash-privacy-btn {
+  --border-radius: 14px;
+  --border-width: 2px;
+  font-weight: 800;
+}
 
 .cart-item-title {
   display: flex;

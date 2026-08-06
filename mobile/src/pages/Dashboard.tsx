@@ -29,11 +29,23 @@ import {
   alertCircleOutline,
   checkmarkDoneOutline,
   bicycleOutline,
+  eyeOutline,
+  eyeOffOutline,
 } from 'ionicons/icons';
 import { wsClient } from '../api/ws';
 import { useAuth } from '../auth/AuthContext';
 import { formatKg, formatToman, formatRial, formatDate } from '../utils/format';
 import { useHistory } from 'react-router-dom';
+
+const PROFIT_KEY = 'ario_dash_show_profit';
+
+function loadShowProfit(): boolean {
+  try {
+    return localStorage.getItem(PROFIT_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
 
 interface InvProduct {
   id: string;
@@ -146,6 +158,8 @@ const Dashboard: React.FC = () => {
   const [data, setData] = useState<Dash | null>(null);
   const [error, setError] = useState('');
   const [kpiPeriod, setKpiPeriod] = useState<'today' | 'week' | 'month'>('today');
+  /** پیش‌فرض مخفی — برای نشان‌دادن به مشتری؛ با دکمه پایین روشن می‌شود */
+  const [showProfit, setShowProfit] = useState(loadShowProfit);
 
   const load = useCallback(async (period: 'today' | 'week' | 'month' = kpiPeriod) => {
     try {
@@ -250,8 +264,11 @@ const Dashboard: React.FC = () => {
                     {(inv?.emptyCount || 0) > 0 && (
                       <div className="wh-pill danger">{inv?.emptyCount} تمام‌شده</div>
                     )}
-                    {isAdmin && (
+                    {isAdmin && showProfit && (
                       <div className="wh-value">ارزش ≈ {formatToman(inv?.totalValue || 0)}</div>
+                    )}
+                    {isAdmin && !showProfit && (
+                      <div className="wh-value wh-value-hidden">ارزش · مخفی</div>
                     )}
                   </div>
                 </div>
@@ -353,46 +370,61 @@ const Dashboard: React.FC = () => {
                   <div className="k-label">تناژ فروخته</div>
                   <div className="k-value">{formatKg(data.soldKg)}</div>
                 </div>
-                <div className="ios-kpi green">
-                  <div className="k-label">سود فروش</div>
-                  <div className="k-value">{formatToman(data.totalProfit || 0)}</div>
-                </div>
+                {showProfit ? (
+                  <div className="ios-kpi green">
+                    <div className="k-label">سود فروش</div>
+                    <div className="k-value">{formatToman(data.totalProfit || 0)}</div>
+                  </div>
+                ) : (
+                  <div className="ios-kpi green dash-kpi-locked">
+                    <div className="k-label">سود فروش</div>
+                    <div className="k-value">••••</div>
+                  </div>
+                )}
                 <div className="ios-kpi gray">
                   <div className="k-label">فاکتور</div>
                   <div className="k-value">{data.salesCount}</div>
                 </div>
               </div>
 
-              <div className="ios-glass-card dash-money-summary">
-                <div className="ios-section-title" style={{ marginTop: 0 }}>
-                  خلاصه مالی — {data.periodLabel || 'امروز'}
+              {showProfit ? (
+                <div className="ios-glass-card dash-money-summary">
+                  <div className="ios-section-title" style={{ marginTop: 0 }}>
+                    خلاصه مالی — {data.periodLabel || 'امروز'}
+                  </div>
+                  <p className="hint" style={{ marginTop: 0 }}>
+                    سود فروش از هزینه خرید و تخفیف می‌آید؛ هزینه مغازه و بدهی شرکت جدا حساب می‌شوند.
+                  </p>
+                  <div className="stat-row">
+                    <span className="stat-label">اینقدر سود کردی (فروش)</span>
+                    <span className="stat-value success">{formatToman(data.totalProfit || 0)}</span>
+                  </div>
+                  <div className="stat-row">
+                    <span className="stat-label">اینقدر هزینه کردی</span>
+                    <span className="stat-value danger">{formatToman(data.totalExpenses || 0)}</span>
+                  </div>
+                  <div className="stat-row">
+                    <span className="stat-label">بدهکاری به شرکت</span>
+                    <span className="stat-value warning">
+                      {formatToman(data.companyDebt?.total || 0)}
+                    </span>
+                  </div>
+                  <div className="stat-row">
+                    <span className="stat-label">سود خالص (سود − هزینه)</span>
+                    <span
+                      className={`stat-value ${(data.netProfit || 0) >= 0 ? 'success' : 'danger'}`}
+                    >
+                      {formatToman(data.netProfit || 0)}
+                    </span>
+                  </div>
                 </div>
-                <p className="hint" style={{ marginTop: 0 }}>
-                  سود فروش از هزینه خرید و تخفیف می‌آید؛ هزینه مغازه و بدهی شرکت جدا حساب می‌شوند.
-                </p>
-                <div className="stat-row">
-                  <span className="stat-label">اینقدر سود کردی (فروش)</span>
-                  <span className="stat-value success">{formatToman(data.totalProfit || 0)}</span>
+              ) : (
+                <div className="ios-glass-card dash-privacy-hint">
+                  <div className="ios-caption">
+                    سود، هزینه و بدهی شرکت مخفی است — برای مشتری مناسب. پایین صفحه «نمایش سود» را بزن.
+                  </div>
                 </div>
-                <div className="stat-row">
-                  <span className="stat-label">اینقدر هزینه کردی</span>
-                  <span className="stat-value danger">{formatToman(data.totalExpenses || 0)}</span>
-                </div>
-                <div className="stat-row">
-                  <span className="stat-label">بدهکاری به شرکت</span>
-                  <span className="stat-value warning">
-                    {formatToman(data.companyDebt?.total || 0)}
-                  </span>
-                </div>
-                <div className="stat-row">
-                  <span className="stat-label">سود خالص (سود − هزینه)</span>
-                  <span
-                    className={`stat-value ${(data.netProfit || 0) >= 0 ? 'success' : 'danger'}`}
-                  >
-                    {formatToman(data.netProfit || 0)}
-                  </span>
-                </div>
-              </div>
+              )}
 
               {(data.cashSales != null || data.cardSales != null || data.creditSales != null) && (
                 <div className="ios-glass-card">
@@ -512,10 +544,12 @@ const Dashboard: React.FC = () => {
                     <span className="stat-label">تناژ</span>
                     <span className="stat-value">{formatKg(data.month.soldKg)}</span>
                   </div>
-                  <div className="stat-row">
-                    <span className="stat-label">سود</span>
-                    <span className="stat-value success">{formatToman(data.month.totalProfit)}</span>
-                  </div>
+                  {showProfit && (
+                    <div className="stat-row">
+                      <span className="stat-label">سود</span>
+                      <span className="stat-value success">{formatToman(data.month.totalProfit)}</span>
+                    </div>
+                  )}
                   <div className="stat-row">
                     <span className="stat-label">تعداد فاکتور</span>
                     <span className="stat-value">{data.month.salesCount}</span>
@@ -523,7 +557,7 @@ const Dashboard: React.FC = () => {
                 </div>
               )}
 
-              {isAdmin && (
+              {isAdmin && showProfit && (
                 <div className="ios-glass-card">
                   <div className="ios-section-title" style={{ marginTop: 0 }}>
                     صندوق و شرکت
@@ -562,6 +596,26 @@ const Dashboard: React.FC = () => {
               )}
             </>
           )}
+
+          <div className="dash-privacy-bar">
+            <IonButton
+              expand="block"
+              className={showProfit ? 'ios-primary-btn' : 'dash-privacy-btn'}
+              fill={showProfit ? 'solid' : 'outline'}
+              onClick={() => {
+                const next = !showProfit;
+                setShowProfit(next);
+                try {
+                  localStorage.setItem(PROFIT_KEY, next ? '1' : '0');
+                } catch {
+                  /* ignore */
+                }
+              }}
+            >
+              <IonIcon slot="start" icon={showProfit ? eyeOffOutline : eyeOutline} />
+              {showProfit ? 'مخفی کردن سود' : 'نمایش سود و زیان'}
+            </IonButton>
+          </div>
         </div>
       </IonContent>
     </IonPage>
