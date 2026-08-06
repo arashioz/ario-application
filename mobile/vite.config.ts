@@ -11,7 +11,11 @@ export default defineConfig({
   plugins: [
     react(),
     legacy(),
-    basicSsl(),
+    // فقط برای vite dev — در Docker production build نباید اجرا شود
+    {
+      ...basicSsl(),
+      apply: 'serve' as const,
+    },
     VitePWA({
       // روی HTTPS با گواهی نامعتبر (IP سرور) ثبت SW خطا می‌دهد و گاهی اپ را می‌شکند
       injectRegister: null,

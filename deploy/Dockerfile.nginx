@@ -15,12 +15,24 @@ ENV CYPRESS_INSTALL_BINARY=0 \
 COPY mobile/.npmrc mobile/package.json mobile/package-lock.json ./
 
 # optional deps لازم است (باینری native رول‌آپ روی Alpine/musl)
+# معماری سرور ممکن است x64 یا arm64 باشد
 RUN npm ci --legacy-peer-deps --no-audit --no-fund \
-  && npm install --no-save @rollup/rollup-linux-x64-musl \
+  && ARCH="$(uname -m)" \
+  && case "$ARCH" in \
+       x86_64|amd64) ROLLUP_PKG=@rollup/rollup-linux-x64-musl ;; \
+       aarch64|arm64) ROLLUP_PKG=@rollup/rollup-linux-arm64-musl ;; \
+       *) echo "unsupported arch: $ARCH" >&2; exit 1 ;; \
+     esac \
+  && echo "Installing $ROLLUP_PKG for $ARCH" \
+  && npm install --no-save "$ROLLUP_PKG" \
   && npm cache clean --force
 
 COPY mobile/ ./
-ENV NODE_ENV=production
+
+# جلوگیری از OOM روی سرورهای کوچک هنگام vite build
+ENV NODE_ENV=production \
+    NODE_OPTIONS=--max-old-space-size=3072
+
 RUN npx vite build
 
 # ---- Nginx (SPA + reverse proxy + SSL) ----
