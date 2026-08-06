@@ -421,7 +421,7 @@ const Dashboard: React.FC = () => {
               ) : (
                 <div className="ios-glass-card dash-privacy-hint">
                   <div className="ios-caption">
-                    سود، هزینه و بدهی شرکت مخفی است — برای مشتری مناسب. پایین صفحه «نمایش سود» را بزن.
+                    سود، هزینه و بدهی شرکت مخفی است — آخر صفحه «نمایش سود» را بزن.
                   </div>
                 </div>
               )}
@@ -599,9 +599,10 @@ const Dashboard: React.FC = () => {
 
           <div className="dash-privacy-bar">
             <IonButton
-              expand="block"
-              className={showProfit ? 'ios-primary-btn' : 'dash-privacy-btn'}
-              fill={showProfit ? 'solid' : 'outline'}
+              size="small"
+              className="dash-privacy-btn"
+              fill="clear"
+              color={showProfit ? 'medium' : 'primary'}
               onClick={() => {
                 const next = !showProfit;
                 setShowProfit(next);

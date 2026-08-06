@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   IonPage,
   IonHeader,
@@ -77,6 +77,39 @@ interface Period {
   }>;
 }
 
+type CompanyDebt = {
+  remainingDebt: number;
+  totalPaidToCompany: number;
+  totalPaidOnDebts: number;
+  totalDebtAmount: number;
+  openCount: number;
+  debts: Array<{
+    id: string;
+    supplier: string;
+    remaining: number;
+    amount: number;
+    paidAmount: number;
+    date: string;
+  }>;
+  recentPayments: Array<{
+    _id: string;
+    supplier: string;
+    amount: number;
+    method: string;
+    date: string;
+  }>;
+};
+
+type CashTx = {
+  _id: string;
+  type: string;
+  amount: number;
+  direction: 'in' | 'out';
+  description: string;
+  date: string;
+  paymentMethod?: 'cash' | 'card' | 'card_to_card';
+};
+
 const History: React.FC = () => {
   const { isAdmin } = useAuth();
   const [from, setFrom] = useState('');
@@ -90,90 +123,25 @@ const History: React.FC = () => {
   const [period, setPeriod] = useState<Period | null>(null);
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState({ open: false, msg: '', color: 'success' });
-  const [companyDebt, setCompanyDebt] = useState<{
-    remainingDebt: number;
-    totalPaidToCompany: number;
-    totalPaidOnDebts: number;
-    totalDebtAmount: number;
-    openCount: number;
-    debts: Array<{
-      id: string;
-      supplier: string;
-      remaining: number;
-      amount: number;
-      paidAmount: number;
-      date: string;
-    }>;
-    recentPayments: Array<{
-      _id: string;
-      supplier: string;
-      amount: number;
-      method: string;
-      date: string;
-    }>;
-  } | null>(null);
-  const [cashTxs, setCashTxs] = useState<
-    Array<{
-      _id: string;
-      type: string;
-      amount: number;
-      direction: 'in' | 'out';
-      description: string;
-      date: string;
-      paymentMethod?: 'cash' | 'card' | 'card_to_card';
-    }>
-  >([]);
-  const [cashDetail, setCashDetail] = useState<(typeof cashTxs)[0] | null>(null);
+  const [companyDebt, setCompanyDebt] = useState<CompanyDebt | null>(null);
+  const [cashTxs, setCashTxs] = useState<CashTx[]>([]);
+  const [cashDetail, setCashDetail] = useState<CashTx | null>(null);
   const [cashMethod, setCashMethod] = useState<'cash' | 'card' | 'card_to_card'>('cash');
   const [cashPw, setCashPw] = useState('');
   const [cashSaving, setCashSaving] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [showReportExtras, setShowReportExtras] = useState(false);
 
-  const loadSettings = async () => {
-    const s = await wsClient.request<{
-      openingDate: string;
-      cashBalance: number;
-      cardBalance: number;
-      shopName: string;
-    }>('settings.get');
-    setOpeningDate(s.openingDate.split('T')[0]);
-    if (!from) setFrom(s.openingDate.split('T')[0]);
-    setShopName(s.shopName || '');
-    setCashBalance(formatMoneyInput(String(s.cashBalance || 0)));
-    setCardBalance(formatMoneyInput(String(s.cardBalance || 0)));
-    setLiveCash(s.cashBalance || 0);
-    setLiveCard(s.cardBalance || 0);
-  };
-
-  const loadCashTxs = async () => {
-    if (!isAdmin) return;
-    try {
-      const list = await wsClient.request<typeof cashTxs>('cash.list', { limit: 40 });
-      setCashTxs(Array.isArray(list) ? list : []);
-    } catch {
-      setCashTxs([]);
-    }
-  };
-
-  const loadCompanyDebt = async () => {
-    if (!isAdmin) return;
-    try {
-      const s = await wsClient.request<NonNullable<typeof companyDebt>>('companyDebt.summary', {});
-      setCompanyDebt(s);
-    } catch {
-      setCompanyDebt(null);
-    }
-  };
-
-  useEffect(() => {
-    void loadSettings().catch(console.warn);
-    void loadCashTxs();
-    void loadCompanyDebt();
-  }, []);
-
-  const runReport = async () => {
+  const runReport = useCallback(async (f?: string, t?: string) => {
+    const fromDate = f || from;
+    const toDate = t || to;
+    if (!fromDate || !toDate) return;
     setLoading(true);
     try {
-      const data = await wsClient.request<Period>('dashboard.period', { from, to });
+      const data = await wsClient.request<Period>('dashboard.period', {
+        from: fromDate,
+        to: toDate,
+      });
       setPeriod(data);
       if (data.balances) {
         setLiveCash(data.balances.cashBalance);
@@ -184,7 +152,66 @@ const History: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [from, to]);
+
+  const loadSettings = useCallback(async () => {
+    const s = await wsClient.request<{
+      openingDate: string;
+      cashBalance: number;
+      cardBalance: number;
+      shopName: string;
+    }>('settings.get');
+    const openDay = s.openingDate.split('T')[0];
+    setOpeningDate(openDay);
+    setShopName(s.shopName || '');
+    setCashBalance(formatMoneyInput(String(s.cashBalance || 0)));
+    setCardBalance(formatMoneyInput(String(s.cardBalance || 0)));
+    setLiveCash(s.cashBalance || 0);
+    setLiveCard(s.cardBalance || 0);
+    const nextFrom = from || openDay;
+    const nextTo = to || todayIso();
+    if (!from) setFrom(nextFrom);
+    if (!to) setTo(nextTo);
+    return { from: nextFrom, to: nextTo };
+  }, [from, to]);
+
+  const loadCashTxs = useCallback(async () => {
+    if (!isAdmin) return;
+    try {
+      const list = await wsClient.request<CashTx[]>('cash.list', { limit: 40 });
+      setCashTxs(Array.isArray(list) ? list : []);
+    } catch {
+      setCashTxs([]);
+    }
+  }, [isAdmin]);
+
+  const loadCompanyDebt = useCallback(async () => {
+    if (!isAdmin) return;
+    try {
+      const s = await wsClient.request<CompanyDebt>('companyDebt.summary', {});
+      setCompanyDebt(s);
+    } catch {
+      setCompanyDebt(null);
+    }
+  }, [isAdmin]);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const range = await loadSettings();
+        await Promise.all([loadCashTxs(), loadCompanyDebt()]);
+        await runReport(range.from, range.to);
+      } catch (e) {
+        console.warn(e);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const profit = period?.totalProfit ?? 0;
+  const expenses = period?.totalExpenses ?? 0;
+  const net = period?.netProfit ?? profit - expenses;
+  const inLoss = net < 0;
 
   return (
     <IonPage>
@@ -197,77 +224,107 @@ const History: React.FC = () => {
         <IonRefresher
           slot="fixed"
           onIonRefresh={async (e: CustomEvent<RefresherEventDetail>) => {
-            await loadSettings();
+            const range = await loadSettings().catch(() => ({ from, to }));
             await loadCashTxs();
             await loadCompanyDebt();
-            if (from && to) await runReport();
+            await runReport(range.from, range.to);
             e.detail.complete();
           }}
         >
           <IonRefresherContent />
         </IonRefresher>
 
-        <div className="ion-padding compact">
-          <div className="ios-section-title" style={{ marginTop: 0 }}>
-            صندوق شرکت (زنده)
-          </div>
-          <div className="ios-kpi-grid">
-            <div className="ios-kpi blue">
-              <div className="k-label">نقد</div>
-              <div className="k-value">{formatToman(liveCash)}</div>
-            </div>
-            <div className="ios-kpi orange">
-              <div className="k-label">کارتخوان / کارت</div>
-              <div className="k-value">{formatToman(liveCard)}</div>
+        <div className="ion-padding cashbox-page">
+          {/* موجودی زنده */}
+          <div className="cash-hero">
+            <div className="cash-hero-label">موجودی صندوق</div>
+            <div className="cash-hero-grid">
+              <div>
+                <div className="cash-hero-k">نقد</div>
+                <div className="cash-hero-v">{formatToman(liveCash)}</div>
+              </div>
+              <div>
+                <div className="cash-hero-k">کارت</div>
+                <div className="cash-hero-v">{formatToman(liveCard)}</div>
+              </div>
             </div>
           </div>
 
+          {/* سود واقعی فروش */}
+          <div className="cash-section-title">سود واقعی فروش</div>
+          <div className={`cash-profit-card ${profit >= 0 ? 'ok' : 'bad'}`}>
+            <div className="cash-profit-label">سود فروش (بازه انتخابی)</div>
+            <div className="cash-profit-value">{formatToman(profit)}</div>
+            <div className="cash-profit-meta">
+              {from && to
+                ? `${formatDate(from)} تا ${formatDate(to)}`
+                : 'بازه را انتخاب کنید'}
+              {period?.invoiceCount != null ? ` · ${period.invoiceCount} فاکتور` : ''}
+              {period ? ` · فروش ${formatToman(period.totalSales)}` : ''}
+            </div>
+          </div>
+
+          <div className="cash-summary-card">
+            <div className="cash-sum-row good">
+              <span>اینقدر سود کردی</span>
+              <strong>{formatToman(profit)}</strong>
+            </div>
+            <div className="cash-sum-row cost">
+              <span>اینقدر هزینه کردی</span>
+              <strong>{formatToman(expenses)}</strong>
+            </div>
+            <div className={`cash-sum-row result ${inLoss ? 'loss' : 'win'}`}>
+              <span>{inLoss ? 'الان اینقدر تو ضرری' : 'الان اینقدر سود خالص داری'}</span>
+              <strong>{formatToman(Math.abs(net))}</strong>
+            </div>
+            <p className="hint" style={{ margin: '10px 0 0' }}>
+              سود فروش = فروش بعد از تخفیف − هزینه خرید کالا. هزینه مغازه جدا کم می‌شود.
+            </p>
+          </div>
+
+          {/* بدهی شرکت */}
           {isAdmin && companyDebt && (
             <>
-              <div className="ios-section-title">بدهی و پرداخت به شرکت</div>
-              <div className="ios-kpi-grid">
-                <div className="ios-kpi rose">
-                  <div className="k-label">هنوز بدهکارم</div>
-                  <div className="k-value">{formatToman(companyDebt.remainingDebt || 0)}</div>
-                </div>
-                <div className="ios-kpi green">
-                  <div className="k-label">پرداخت‌شده به شرکت</div>
-                  <div className="k-value">{formatToman(companyDebt.totalPaidToCompany || 0)}</div>
-                </div>
-              </div>
-              <div className="ios-glass-card">
-                <div className="stat-row">
-                  <span className="stat-label">کل بدهی ثبت‌شده</span>
-                  <span className="stat-value">{formatToman(companyDebt.totalDebtAmount || 0)}</span>
-                </div>
-                <div className="stat-row">
-                  <span className="stat-label">پرداخت روی بدهی‌ها</span>
-                  <span className="stat-value">{formatToman(companyDebt.totalPaidOnDebts || 0)}</span>
-                </div>
-                <div className="stat-row">
-                  <span className="stat-label">فاکتور بدهی باز</span>
-                  <span className="stat-value">{companyDebt.openCount}</span>
-                </div>
-                {(companyDebt.debts || []).slice(0, 8).map((d) => (
-                  <div key={String(d.id)} className="day-row" style={{ marginTop: 6 }}>
-                    <div className="ios-row">
-                      <div>
-                        <strong>{d.supplier}</strong>
-                        <div className="ios-caption">{formatDate(d.date)}</div>
-                      </div>
-                      <div className="inv-card-amount">
-                        <div className="stat-value danger">{formatToman(d.remaining)}</div>
-                        <div className="ios-caption">
-                          از {formatToman(d.amount)} · پرداختی {formatToman(d.paidAmount)}
-                        </div>
-                      </div>
-                    </div>
+              <div className="cash-section-title">بدهی به شرکت</div>
+              <div className="cash-company-card">
+                <div className="cash-company-main">
+                  <div className="cash-company-k">مانده بدهی</div>
+                  <div className="cash-company-v">
+                    {formatToman(companyDebt.remainingDebt || 0)}
                   </div>
-                ))}
+                  <div className="cash-company-formula">
+                    کل بدهی {formatToman(companyDebt.totalDebtAmount || 0)}
+                    {' − '}
+                    پرداخت‌شده {formatToman(companyDebt.totalPaidToCompany || 0)}
+                  </div>
+                </div>
+                <div className="cash-company-stats">
+                  <div className="stat-row">
+                    <span className="stat-label">کل بدهی خرید نسیه</span>
+                    <span className="stat-value">
+                      {formatToman(companyDebt.totalDebtAmount || 0)}
+                    </span>
+                  </div>
+                  <div className="stat-row">
+                    <span className="stat-label">پرداخت‌شده به شرکت</span>
+                    <span className="stat-value success">
+                      {formatToman(companyDebt.totalPaidToCompany || 0)}
+                    </span>
+                  </div>
+                  <div className="stat-row">
+                    <span className="stat-label">مانده (= کل − پرداخت)</span>
+                    <span className="stat-value danger">
+                      {formatToman(companyDebt.remainingDebt || 0)}
+                    </span>
+                  </div>
+                </div>
+
                 {(companyDebt.recentPayments || []).length > 0 && (
-                  <>
-                    <div className="ios-section-title">آخرین پرداخت‌ها به شرکت</div>
-                    {companyDebt.recentPayments.slice(0, 8).map((p) => (
+                  <div className="cash-mini-list">
+                    <div className="ios-caption" style={{ fontWeight: 800, marginBottom: 6 }}>
+                      آخرین پرداخت‌ها
+                    </div>
+                    {companyDebt.recentPayments.slice(0, 5).map((p) => (
                       <div key={p._id} className="stat-row">
                         <span className="stat-label">
                           {formatDate(p.date)} · {p.supplier} ·{' '}
@@ -280,67 +337,49 @@ const History: React.FC = () => {
                         <span className="stat-value">{formatToman(p.amount)}</span>
                       </div>
                     ))}
-                  </>
+                  </div>
                 )}
+
+                {(companyDebt.debts || []).length > 0 && (
+                  <div className="cash-mini-list">
+                    <div className="ios-caption" style={{ fontWeight: 800, marginBottom: 6 }}>
+                      فاکتورهای بدهی باز
+                    </div>
+                    {companyDebt.debts.slice(0, 6).map((d) => (
+                      <div key={String(d.id)} className="cash-debt-line">
+                        <div>
+                          <strong>{d.supplier}</strong>
+                          <div className="ios-caption">
+                            {formatDate(d.date)} · اصل {formatToman(d.amount)}
+                            {(d.paidAmount || 0) > 0
+                              ? ` · پرداختی ${formatToman(d.paidAmount)}`
+                              : ''}
+                          </div>
+                        </div>
+                        <div className="stat-value danger">{formatToman(d.remaining)}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
                 <IonButton expand="block" fill="outline" size="small" routerLink="/expense">
-                  ثبت پرداخت / هزینه
+                  ثبت پرداخت به شرکت / هزینه
                 </IonButton>
               </div>
             </>
           )}
 
-          {isAdmin && (
-            <div className="ios-glass-card">
-              <div className="ios-section-title" style={{ marginTop: 0 }}>
-                مدیریت مغازه
-              </div>
-              <IonItem>
-                <IonLabel position="stacked">نام مغازه</IonLabel>
-                <IonInput value={shopName} onIonInput={(e) => setShopName(e.detail.value || '')} />
-              </IonItem>
-              <PersianDateField label="تاریخ باز شدن مغازه" value={openingDate} onChange={setOpeningDate} />
-              <MoneyInput label="موجودی نقد (تومان)" value={cashBalance} onChange={setCashBalance} />
-              <MoneyInput label="موجودی کارتخوان (تومان)" value={cardBalance} onChange={setCardBalance} />
-              <IonButton
-                expand="block"
-                className="ios-primary-btn"
-                size="small"
-                onClick={async () => {
-                  try {
-                    await wsClient.request('settings.update', {
-                      shopName,
-                      openingDate,
-                      cashBalance: parseAmount(cashBalance) || 0,
-                      cardBalance: parseAmount(cardBalance) || 0,
-                    });
-                    setLiveCash(parseAmount(cashBalance) || 0);
-                    setLiveCard(parseAmount(cardBalance) || 0);
-                    setToast({ open: true, msg: 'تنظیمات مغازه ذخیره شد', color: 'success' });
-                  } catch (e) {
-                    setToast({
-                      open: true,
-                      msg: e instanceof Error ? e.message : 'خطا',
-                      color: 'danger',
-                    });
-                  }
-                }}
-              >
-                ذخیره تنظیمات مغازه
-              </IonButton>
-            </div>
-          )}
-
+          {/* گردش */}
           {isAdmin && (
             <>
-              <div className="ios-section-title">گردش صندوق</div>
-              <div className="ios-glass-card">
+              <div className="cash-section-title">گردش صندوق</div>
+              <div className="cash-ledger">
                 {cashTxs.length === 0 && <p className="hint">تراکنشی ثبت نشده</p>}
-                {cashTxs.map((tx) => (
-                  <div
+                {cashTxs.slice(0, 12).map((tx) => (
+                  <button
+                    type="button"
                     key={tx._id}
-                    className="day-row tap"
-                    role="button"
-                    tabIndex={0}
+                    className="cash-tx-row"
                     onClick={() => {
                       setCashDetail(tx);
                       const inferred =
@@ -354,266 +393,174 @@ const History: React.FC = () => {
                       setCashPw('');
                     }}
                   >
-                    <div className="ios-row">
-                      <div>
-                        <strong>{tx.description}</strong>
-                        <div className="ios-caption">
-                          {formatDate(tx.date)} · {tx.direction === 'in' ? 'ورود' : 'خروج'}
-                          {tx.paymentMethod
-                            ? ` · ${
-                                tx.paymentMethod === 'cash'
-                                  ? 'نقد'
-                                  : tx.paymentMethod === 'card_to_card'
-                                    ? 'کارت‌به‌کارت'
-                                    : 'کارت'
-                              }`
-                            : ''}
-                        </div>
-                      </div>
-                      <div
-                        className="stat-value"
-                        style={{
-                          color:
-                            tx.direction === 'in'
-                              ? 'var(--ion-color-success)'
-                              : 'var(--ion-color-danger)',
-                        }}
-                      >
-                        {tx.direction === 'in' ? '+' : '−'}
-                        {formatToman(tx.amount)}
-                      </div>
+                    <div className="cash-tx-main">
+                      <strong>{tx.description}</strong>
+                      <span className="ios-caption">
+                        {formatDate(tx.date)} · {tx.direction === 'in' ? 'ورود' : 'خروج'}
+                      </span>
                     </div>
-                  </div>
+                    <span className={tx.direction === 'in' ? 'cash-tx-in' : 'cash-tx-out'}>
+                      {tx.direction === 'in' ? '+' : '−'}
+                      {formatToman(tx.amount)}
+                    </span>
+                  </button>
                 ))}
               </div>
             </>
           )}
 
-          <div className="ios-section-title">گزارش بازه</div>
-          <div className="ios-glass-card">
+          {/* گزارش بازه */}
+          <div className="cash-section-title">بازه گزارش</div>
+          <div className="cash-range-card">
             <PersianDateField label="از تاریخ" value={from} onChange={setFrom} />
             <PersianDateField label="تا تاریخ" value={to} onChange={setTo} />
             <IonButton
               expand="block"
               className="ios-primary-btn"
               size="small"
-              disabled={loading}
+              disabled={loading || !from || !to}
               onClick={() => void runReport()}
             >
-              {loading ? <IonSpinner name="crescent" /> : 'نمایش گزارش'}
+              {loading ? <IonSpinner name="crescent" /> : 'به‌روز کردن گزارش'}
             </IonButton>
 
             {period && (
               <>
-                <div className="ios-kpi-grid ion-margin-top">
-                  <div className="ios-kpi blue">
-                    <div className="k-label">فروش مبلغی</div>
-                    <div className="k-value">{formatToman(period.totalSales)}</div>
+                <div className="cash-kpi-row">
+                  <div>
+                    <div className="ios-caption">فروش</div>
+                    <strong>{formatToman(period.totalSales)}</strong>
                   </div>
-                  <div className="ios-kpi orange">
-                    <div className="k-label">فروش تناژ</div>
-                    <div className="k-value">{formatKg(period.soldKg)}</div>
-                    {period.soldTons != null && (
-                      <div className="ios-caption">{period.soldTons.toLocaleString('fa-IR')} تن</div>
-                    )}
+                  <div>
+                    <div className="ios-caption">تناژ</div>
+                    <strong>{formatKg(period.soldKg)}</strong>
                   </div>
-                  <div className="ios-kpi green">
-                    <div className="k-label">سود فروش</div>
-                    <div className="k-value">{formatToman(period.totalProfit)}</div>
-                  </div>
-                  {period.totalProfit < 0 && (
-                    <p className="hint" style={{ gridColumn: '1 / -1', margin: 0 }}>
-                      سود منفی یعنی قیمت فروش (بعد از تخفیف) کمتر از هزینه خرید بوده — تخفیف سنگین، قیمت دستی پایین، یا هزینه خرید اشتباه/بالا.
-                    </p>
-                  )}
-                  <div className="ios-kpi">
-                    <div className="k-label">هزینه</div>
-                    <div className="k-value">{formatToman(period.totalExpenses)}</div>
-                  </div>
-                  <div className="ios-kpi teal">
-                    <div className="k-label">سود خالص</div>
-                    <div className="k-value">
-                      {formatToman(period.netProfit ?? period.totalProfit - period.totalExpenses)}
-                    </div>
-                  </div>
-                  <div className="ios-kpi">
-                    <div className="k-label">تعداد فاکتور</div>
-                    <div className="k-value">{period.invoiceCount ?? '—'}</div>
+                  <div>
+                    <div className="ios-caption">فاکتور</div>
+                    <strong>{period.invoiceCount ?? '—'}</strong>
                   </div>
                 </div>
 
-                {period.payment && (
-                  <>
-                    <div className="ios-section-title">ترکیب پرداخت</div>
-                    <div className="stat-row">
-                      <span className="stat-label">نقد</span>
-                      <span className="stat-value">{formatToman(period.payment.cash)}</span>
-                    </div>
-                    <div className="stat-row">
-                      <span className="stat-label">کارتخوان / کارت</span>
-                      <span className="stat-value">{formatToman(period.payment.card)}</span>
-                    </div>
-                    <div className="stat-row">
-                      <span className="stat-label">نسیه</span>
-                      <span className="stat-value">{formatToman(period.payment.credit)}</span>
-                    </div>
-                  </>
-                )}
+                <IonButton
+                  size="small"
+                  fill="clear"
+                  onClick={() => setShowReportExtras((v) => !v)}
+                >
+                  {showReportExtras ? 'بستن جزئیات' : 'جزئیات بیشتر'}
+                </IonButton>
 
-                {period.debtors && (
-                  <>
-                    <div className="ios-section-title">بدهکاران (به تفکیک نفر)</div>
-                    <div className="ios-kpi-grid">
-                      <div className="ios-kpi rose">
-                        <div className="k-label">جمع بدهی باز</div>
-                        <div className="k-value">{formatToman(period.debtors.total)}</div>
-                      </div>
-                      <div className="ios-kpi">
-                        <div className="k-label">تعداد نفر</div>
-                        <div className="k-value">{period.debtors.count}</div>
-                      </div>
-                    </div>
-                    {period.debtors.byPerson.length === 0 && (
-                      <p className="hint">بدهکار بازی نیست</p>
+                {showReportExtras && (
+                  <div className="cash-extras">
+                    {period.payment && (
+                      <>
+                        <div className="stat-row">
+                          <span>نقد</span>
+                          <span>{formatToman(period.payment.cash)}</span>
+                        </div>
+                        <div className="stat-row">
+                          <span>کارت</span>
+                          <span>{formatToman(period.payment.card)}</span>
+                        </div>
+                        <div className="stat-row">
+                          <span>نسیه</span>
+                          <span>{formatToman(period.payment.credit)}</span>
+                        </div>
+                      </>
                     )}
-                    {period.debtors.byPerson.map((d, i) => (
-                      <div key={`${d.name}-${i}`} className="ios-glass-card" style={{ marginTop: 8 }}>
-                        <div className="ios-row">
-                          <div>
-                            <strong>{d.name}</strong>
-                            {d.overdue && (
-                              <span className="overdue-badge" style={{ marginRight: 8 }}>
-                                معوق
-                              </span>
-                            )}
-                            <div className="ios-caption">
-                              {d.phone || '—'}
-                              {d.invoiceCount > 1 ? ` · ${d.invoiceCount} فاکتور` : ''}
-                              {' · سررسید '}
-                              {formatDate(d.dueDate)}
-                            </div>
-                          </div>
-                          <span className="stat-value danger">{formatToman(d.remaining)}</span>
-                        </div>
+                    {period.daily.slice(-7).map((d) => (
+                      <div key={d.date} className="cash-day-line">
+                        <span>{formatDate(d.date)}</span>
+                        <span>{formatToman(d.sales)}</span>
+                        <span className={(d.profit ?? d.netProfit) >= 0 ? 'success' : 'danger'}>
+                          {formatToman(d.profit ?? d.netProfit)}
+                        </span>
                       </div>
                     ))}
-                  </>
-                )}
-
-                {period.creditByCustomer && period.creditByCustomer.length > 0 && (
-                  <>
-                    <div className="ios-section-title">نسیه همین بازه (به تفکیک مشتری)</div>
-                    {period.creditByCustomer.map((c, i) => (
-                      <div key={`${c.name}-c-${i}`} className="ios-glass-card" style={{ marginTop: 8 }}>
-                        <div className="ios-row">
-                          <div>
-                            <strong>{c.name}</strong>
-                            <div className="ios-caption">
-                              {c.phone || '—'} · {c.invoices} فاکتور · {formatKg(c.kg)}
-                            </div>
-                          </div>
-                          <span className="stat-value warning">{formatToman(c.credit)}</span>
-                        </div>
+                    {(period.soldByProduct || []).slice(0, 6).map((it) => (
+                      <div key={it.productId} className="stat-row">
+                        <span className="stat-label">
+                          {it.name} · {formatKg(it.soldKg)}
+                        </span>
+                        <span className="stat-value">{formatToman(it.revenue)}</span>
                       </div>
                     ))}
-                  </>
-                )}
-
-                {period.golden && (
-                  <>
-                    <div className="ios-section-title">فاکتورهای طلایی</div>
-                    <div className="stat-row">
-                      <span className="stat-label">تعداد</span>
-                      <span className="stat-value">{period.golden.count}</span>
-                    </div>
-                    <div className="stat-row">
-                      <span className="stat-label">مبلغ</span>
-                      <span className="stat-value">{formatToman(period.golden.amount)}</span>
-                    </div>
-                    <div className="stat-row">
-                      <span className="stat-label">تناژ</span>
-                      <span className="stat-value">{formatKg(period.golden.kg)}</span>
-                    </div>
-                  </>
-                )}
-
-                {period.soldByProduct && period.soldByProduct.length > 0 && (
-                  <>
-                    <div className="ios-section-title">فروش انبار در بازه (به تفکیک محصول)</div>
-                    {period.soldByProduct.map((it) => (
-                      <div key={it.productId} className="ios-glass-card" style={{ marginTop: 8 }}>
-                        <div className="ios-row">
-                          <strong>{it.name}</strong>
-                          <span className="stat-value">{formatToman(it.revenue)}</span>
-                        </div>
-                        <div className="stat-row">
-                          <span className="stat-label">تناژ فروخته</span>
-                          <span className="stat-value">{formatKg(it.soldKg)}</span>
-                        </div>
-                        <div className="stat-row">
-                          <span className="stat-label">بسته</span>
-                          <span className="stat-value">
-                            {Math.round(it.soldPackages || 0).toLocaleString('fa-IR')}
-                          </span>
-                        </div>
-                      </div>
-                    ))}
-                  </>
-                )}
-
-                {period.inventory && (
-                  <>
-                    <div className="ios-section-title">موجودی فعلی انبار</div>
-                    <div className="stat-row">
-                      <span className="stat-label">تعداد محصول</span>
-                      <span className="stat-value">{period.inventory.productCount}</span>
-                    </div>
-                    <div className="stat-row">
-                      <span className="stat-label">موجودی کل</span>
-                      <span className="stat-value">{formatKg(period.inventory.totalKg)}</span>
-                    </div>
-                    <div className="stat-row">
-                      <span className="stat-label">ارزش موجودی (هزینه)</span>
-                      <span className="stat-value">{formatToman(period.inventory.totalValue)}</span>
-                    </div>
-                    {period.inventory.items.map((it) => (
-                      <div key={it.id} className="stat-row">
-                        <span className="stat-label">{it.name}</span>
-                        <span className="stat-value">{formatKg(it.stockKg)}</span>
-                      </div>
-                    ))}
-                  </>
-                )}
-
-                <div className="ios-section-title">روزبه‌روز — فروش و تناژ</div>
-                {period.daily.map((d) => (
-                  <div key={d.date} className="ios-glass-card" style={{ marginTop: 8 }}>
-                    <strong>{formatDate(d.date)}</strong>
-                    <div className="stat-row">
-                      <span className="stat-label">فروش مبلغی</span>
-                      <span className="stat-value">{formatToman(d.sales)}</span>
-                    </div>
-                    <div className="stat-row">
-                      <span className="stat-label">تناژ فروخته‌شده انبار</span>
-                      <span className="stat-value">{formatKg(d.soldKg)}</span>
-                    </div>
-                    <div className="stat-row">
-                      <span className="stat-label">سود فروش روز</span>
-                      <span className="stat-value success">
-                        {formatToman(d.profit ?? d.netProfit)}
-                      </span>
-                    </div>
                   </div>
-                ))}
+                )}
               </>
             )}
           </div>
+
+          {/* تنظیمات */}
+          {isAdmin && (
+            <>
+              <IonButton
+                expand="block"
+                fill="clear"
+                size="small"
+                onClick={() => setShowSettings((v) => !v)}
+              >
+                {showSettings ? 'بستن تنظیمات مغازه' : 'تنظیمات مغازه'}
+              </IonButton>
+              {showSettings && (
+                <div className="cash-settings-card">
+                  <IonItem>
+                    <IonLabel position="stacked">نام مغازه</IonLabel>
+                    <IonInput
+                      value={shopName}
+                      onIonInput={(e) => setShopName(e.detail.value || '')}
+                    />
+                  </IonItem>
+                  <PersianDateField
+                    label="تاریخ باز شدن مغازه"
+                    value={openingDate}
+                    onChange={setOpeningDate}
+                  />
+                  <MoneyInput
+                    label="موجودی نقد (تومان)"
+                    value={cashBalance}
+                    onChange={setCashBalance}
+                  />
+                  <MoneyInput
+                    label="موجودی کارتخوان (تومان)"
+                    value={cardBalance}
+                    onChange={setCardBalance}
+                  />
+                  <IonButton
+                    expand="block"
+                    className="ios-primary-btn"
+                    size="small"
+                    onClick={async () => {
+                      try {
+                        await wsClient.request('settings.update', {
+                          shopName,
+                          openingDate,
+                          cashBalance: parseAmount(cashBalance) || 0,
+                          cardBalance: parseAmount(cardBalance) || 0,
+                        });
+                        setLiveCash(parseAmount(cashBalance) || 0);
+                        setLiveCard(parseAmount(cardBalance) || 0);
+                        setToast({ open: true, msg: 'ذخیره شد', color: 'success' });
+                      } catch (e) {
+                        setToast({
+                          open: true,
+                          msg: e instanceof Error ? e.message : 'خطا',
+                          color: 'danger',
+                        });
+                      }
+                    }}
+                  >
+                    ذخیره
+                  </IonButton>
+                </div>
+              )}
+            </>
+          )}
         </div>
 
         <IonModal isOpen={!!cashDetail} onDidDismiss={() => setCashDetail(null)}>
           <IonHeader>
             <IonToolbar>
-              <IonTitle>ویرایش گردش صندوق</IonTitle>
+              <IonTitle>ویرایش گردش</IonTitle>
               <IonButtons slot="end">
                 <IonButton onClick={() => setCashDetail(null)}>بستن</IonButton>
               </IonButtons>
@@ -631,7 +578,6 @@ const History: React.FC = () => {
                 <p>
                   <b>تاریخ:</b> {formatDate(cashDetail.date)}
                 </p>
-                <p className="hint">روش پرداخت را عوض کنید تا موجودی نقد / کارت اصلاح شود</p>
                 <div className="chip-row">
                   <IonChip
                     className={cashMethod === 'cash' ? 'ios-chip-active' : 'ios-chip'}
@@ -673,7 +619,7 @@ const History: React.FC = () => {
                         password: cashPw,
                         paymentMethod: cashMethod,
                       });
-                      setToast({ open: true, msg: 'روش پرداخت ذخیره شد', color: 'success' });
+                      setToast({ open: true, msg: 'ذخیره شد', color: 'success' });
                       setCashDetail(null);
                       await loadCashTxs();
                       await loadSettings();
