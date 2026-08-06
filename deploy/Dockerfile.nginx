@@ -29,9 +29,11 @@ RUN npm ci --legacy-peer-deps --no-audit --no-fund \
 
 COPY mobile/ ./
 
-# جلوگیری از OOM روی سرورهای کوچک هنگام vite build
+# SIGKILL = OOM. درخواست ۳GB heap روی VPS کوچک بدتر می‌کند.
+# VITE_LOW_MEM: بدون @vitejs/plugin-legacy و بدون workbox (نصف رم مصرفی)
 ENV NODE_ENV=production \
-    NODE_OPTIONS=--max-old-space-size=3072
+    VITE_LOW_MEM=1 \
+    NODE_OPTIONS=--max-old-space-size=1536
 
 RUN npx vite build
 
