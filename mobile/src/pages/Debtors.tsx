@@ -209,17 +209,25 @@ const Debtors: React.FC = () => {
           <IonRefresherContent />
         </IonRefresher>
 
-        <div className="ion-padding compact">
-          <div className="ios-kpi-grid">
-            <div className="ios-kpi rose">
-              <div className="k-label">جمع بدهی</div>
-              <div className="k-value">
+        <div className="ion-padding debtors-page">
+          <div className="debtors-hero">
+            <div className="debtors-hero-main">
+              <div className="debtors-hero-label">جمع بدهی باز</div>
+              <div className="debtors-hero-value">
                 {formatToman(groups.reduce((s, g) => s + g.totalRemaining, 0))}
               </div>
             </div>
-            <div className="ios-kpi">
-              <div className="k-label">تعداد مشتری</div>
-              <div className="k-value">{groups.length}</div>
+            <div className="debtors-hero-side">
+              <div className="debtors-pill">
+                <span>{groups.length.toLocaleString('fa-IR')}</span>
+                <small>مشتری</small>
+              </div>
+              <div className="debtors-pill warn">
+                <span>
+                  {groups.reduce((s, g) => s + g.overdueCount, 0).toLocaleString('fa-IR')}
+                </span>
+                <small>معوق</small>
+              </div>
             </div>
           </div>
 
@@ -235,32 +243,31 @@ const Debtors: React.FC = () => {
           {filtered.map((g) => (
             <div
               key={g.key}
-              className={`ios-glass-card tap${active?.key === g.key ? ' selected-card' : ''}`}
+              className={`debtor-card tap${active?.key === g.key ? ' selected' : ''}${
+                g.overdueCount > 0 ? ' overdue' : ''
+              }`}
               onClick={() => openGroup(g)}
               role="button"
               tabIndex={0}
             >
-              <div className="ios-row">
+              <div className="debtor-card-top">
                 <div>
-                  <strong>
-                    {g.overdueCount > 0 ? '⚠ ' : ''}
+                  <div className="debtor-name">
+                    {g.overdueCount > 0 && <span className="debtor-badge">معوق</span>}
                     {g.name}
-                  </strong>
+                  </div>
                   <div className="ios-caption">
-                    {g.phone || '—'}
-                    {g.invoiceCount > 1 ? ` · ${g.invoiceCount} فاکتور بدهی` : ' · ۱ فاکتور'}
-                    {' · سررسید '}
-                    {formatDate(g.nearestDue)}
+                    {g.phone || 'بدون تلفن'}
+                    {g.invoiceCount > 1
+                      ? ` · ${g.invoiceCount.toLocaleString('fa-IR')} فاکتور`
+                      : ' · ۱ فاکتور'}
                   </div>
+                  <div className="ios-caption">سررسید نزدیک: {formatDate(g.nearestDue)}</div>
                 </div>
-                <div className="inv-card-amount">
-                  <div className="inv-card-money" style={{ color: 'var(--ion-color-danger)' }}>
-                    {formatToman(g.totalRemaining)}
-                  </div>
-                  {g.overdueCount > 0 && (
-                    <div className="ios-caption" style={{ color: 'var(--ion-color-danger)' }}>
-                      {g.overdueCount} معوق
-                    </div>
+                <div className="debtor-amount">
+                  <div className="debtor-money">{formatToman(g.totalRemaining)}</div>
+                  {(g.totalPaid || 0) > 0 && (
+                    <div className="ios-caption">پرداختی {formatToman(g.totalPaid)}</div>
                   )}
                 </div>
               </div>

@@ -21,7 +21,7 @@ import {
   useIonViewWillEnter,
   RefresherEventDetail,
 } from '@ionic/react';
-import { checkmarkCircleOutline, cardOutline, trashOutline, eyeOutline, chevronBackOutline, chevronForwardOutline } from 'ionicons/icons';
+import { checkmarkCircleOutline, cardOutline, trashOutline, eyeOutline, chevronBackOutline, chevronForwardOutline, createOutline } from 'ionicons/icons';
 import { wsClient, newMutationId } from '../api/ws';
 import { parseAmount, todayIso, formatToman, formatDate } from '../utils/format';
 import { expenseTypes } from '../theme/colors';
@@ -36,6 +36,7 @@ interface ExpenseRow {
   description: string;
   date: string;
   notes?: string;
+  paymentMethod?: 'cash' | 'card' | 'card_to_card';
   createdAt?: string;
 }
 interface DepositRow {
@@ -87,7 +88,16 @@ const Expense: React.FC = () => {
   const [custHits, setCustHits] = useState<CustomerHit[]>([]);
   const [companyAmount, setCompanyAmount] = useState('');
   const [supplier, setSupplier] = useState('شرکت');
-  const [method, setMethod] = useState<'cash' | 'card'>('cash');
+  const [method, setMethod] = useState<'cash' | 'card' | 'card_to_card'>('cash');
+  const [companyPaidTotal, setCompanyPaidTotal] = useState(0);
+  const [companyRemaining, setCompanyRemaining] = useState(0);
+  const [expensePayMethod, setExpensePayMethod] = useState<'cash' | 'card_to_card'>('cash');
+  const [editOpen, setEditOpen] = useState(false);
+  const [editPw, setEditPw] = useState('');
+  const [editAmount, setEditAmount] = useState('');
+  const [editDesc, setEditDesc] = useState('');
+  const [editDate, setEditDate] = useState(todayIso());
+  const [editPayMethod, setEditPayMethod] = useState<'cash' | 'card_to_card'>('cash');
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState({ open: false, msg: '', color: 'success' });
   const [expenses, setExpenses] = useState<ExpenseRow[]>([]);
@@ -101,7 +111,7 @@ const Expense: React.FC = () => {
   const [deleteOpen, setDeleteOpen] = useState(false);
 
   const loadLists = useCallback(async (p = page) => {
-    const [ex, dep, pay, cats] = await Promise.all([
+    const [ex, dep, pay, cats, companySum] = await Promise.all([
       wsClient.request<{ items: ExpenseRow[]; total: number; pages: number; page: number }>(
         'expense.list',
         { page: p, pageSize: PAGE_SIZE }
@@ -115,11 +125,16 @@ const Expense: React.FC = () => {
         'expenseCategory.list',
         {}
       ),
+      wsClient
+        .request<{ totalPaidToCompany?: number; remainingDebt?: number }>('companyDebt.summary', {})
+        .catch(() => ({ totalPaidToCompany: 0, remainingDebt: 0 })),
     ]);
     setExpenses(ex.items || []);
     setDeposits(dep.items || []);
     setPayments((pay || []).slice(0, PAGE_SIZE * p).slice(-PAGE_SIZE));
     setCategories(cats);
+    setCompanyPaidTotal(companySum?.totalPaidToCompany || 0);
+    setCompanyRemaining(companySum?.remainingDebt || 0);
     if (mode === 'expense') {
       setTotal(ex.total || 0);
       setPages(ex.pages || 1);
@@ -313,6 +328,22 @@ const Expense: React.FC = () => {
                 افزودن دسته
               </IonButton>
               <MoneyInput value={amount} onChange={(v) => setAmount(v)} />
+              <div className="ios-section-title">نحوه پرداخت هزینه</div>
+              <div className="chip-row">
+                <IonChip
+                  className={expensePayMethod === 'cash' ? 'ios-chip-active' : 'ios-chip'}
+                  onClick={() => setExpensePayMethod('cash')}
+                >
+                  نقدی
+                </IonChip>
+                <IonChip
+                  className={expensePayMethod === 'card_to_card' ? 'ios-chip-active' : 'ios-chip'}
+                  onClick={() => setExpensePayMethod('card_to_card')}
+                >
+                  کارت به کارت
+                </IonChip>
+              </div>
+              <p className="hint">حتماً مشخص کنید از صندوق نقد رفته یا کارت به کارت</p>
               <IonItem>
                 <IonLabel position="stacked">توضیح</IonLabel>
                 <IonInput value={description} onIonInput={(e) => setDescription(e.detail.value || '')} />
@@ -325,6 +356,7 @@ const Expense: React.FC = () => {
                   void run(async () => {
                     const parsed = parseAmount(amount);
                     if (!parsed || !description.trim()) throw new Error('مبلغ و توضیح الزامی است');
+                    if (!expensePayMethod) throw new Error('نحوه پرداخت را انتخاب کنید');
                     await wsClient.request(
                       'expense.create',
                       {
@@ -334,6 +366,7 @@ const Expense: React.FC = () => {
                         amount: parsed,
                         description,
                         date,
+                        paymentMethod: expensePayMethod,
                       },
                       { clientMutationId: newMutationId(), queueIfOffline: true }
                     );
@@ -435,6 +468,16 @@ const Expense: React.FC = () => {
 
           {mode === 'company' && (
             <div className="ios-glass-card">
+              <div className="ios-kpi-grid" style={{ marginBottom: 10 }}>
+                <div className="ios-kpi green">
+                  <div className="k-label">پرداخت‌شده به شرکت</div>
+                  <div className="k-value">{formatToman(companyPaidTotal)}</div>
+                </div>
+                <div className="ios-kpi rose">
+                  <div className="k-label">مانده بدهی</div>
+                  <div className="k-value">{formatToman(companyRemaining)}</div>
+                </div>
+              </div>
               <IonItem>
                 <IonLabel position="stacked">نام شرکت</IonLabel>
                 <IonInput value={supplier} onIonInput={(e) => setSupplier(e.detail.value || '')} />
@@ -452,10 +495,16 @@ const Expense: React.FC = () => {
                   نقد
                 </IonChip>
                 <IonChip
+                  className={method === 'card_to_card' ? 'ios-chip-active' : 'ios-chip'}
+                  onClick={() => setMethod('card_to_card')}
+                >
+                  کارت به کارت
+                </IonChip>
+                <IonChip
                   className={method === 'card' ? 'ios-chip-active' : 'ios-chip'}
                   onClick={() => setMethod('card')}
                 >
-                  کارت
+                  کارت / پوز
                 </IonChip>
               </div>
               <IonButton
@@ -490,11 +539,30 @@ const Expense: React.FC = () => {
                 <p className="hint">هنوز هزینه‌ای نیست</p>
               ) : (
                 expenses.map((e) => (
-                  <div key={e._id} className="day-row" style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                  <div
+                    key={e._id}
+                    className="day-row tap"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setDetail({ kind: 'expense', row: e })}
+                    style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}
+                  >
                     <span>
                       {formatDate(e.date)} · {e.description} · {formatToman(e.amount)}
+                      {e.paymentMethod === 'card_to_card'
+                        ? ' · کارت‌به‌کارت'
+                        : e.paymentMethod === 'card'
+                          ? ' · کارت'
+                          : ' · نقد'}
                     </span>
-                    <IonButton size="small" fill="clear" onClick={() => setDetail({ kind: 'expense', row: e })}>
+                    <IonButton
+                      size="small"
+                      fill="clear"
+                      onClick={(ev) => {
+                        ev.stopPropagation();
+                        setDetail({ kind: 'expense', row: e });
+                      }}
+                    >
                       <IonIcon icon={eyeOutline} />
                     </IonButton>
                   </div>
@@ -523,7 +591,11 @@ const Expense: React.FC = () => {
                   <div key={p._id} className="day-row" style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
                     <span>
                       {formatDate(p.date)} · {p.supplier} · {formatToman(p.amount)} ·{' '}
-                      {p.method === 'cash' ? 'نقد' : 'کارت'}
+                      {p.method === 'cash'
+                        ? 'نقد'
+                        : p.method === 'card_to_card'
+                          ? 'کارت‌به‌کارت'
+                          : 'کارت'}
                     </span>
                     <IonButton size="small" fill="clear" onClick={() => setDetail({ kind: 'company', row: p })}>
                       <IonIcon icon={eyeOutline} />
@@ -573,7 +645,34 @@ const Expense: React.FC = () => {
                 <p><b>توضیح:</b> {detail.row.description}</p>
                 <p><b>مبلغ:</b> {formatToman(detail.row.amount)}</p>
                 <p><b>تاریخ:</b> {formatDate(detail.row.date)}</p>
+                <p>
+                  <b>پرداخت:</b>{' '}
+                  {detail.row.paymentMethod === 'card_to_card'
+                    ? 'کارت به کارت'
+                    : detail.row.paymentMethod === 'card'
+                      ? 'کارت'
+                      : 'نقدی'}
+                </p>
                 {detail.row.notes && <p><b>یادداشت:</b> {detail.row.notes}</p>}
+                <IonButton
+                  expand="block"
+                  color="warning"
+                  fill="outline"
+                  className="ion-margin-top"
+                  onClick={() => {
+                    setEditAmount(String(detail.row.amount));
+                    setEditDesc(detail.row.description);
+                    setEditDate(String(detail.row.date).slice(0, 10));
+                    setEditPayMethod(
+                      detail.row.paymentMethod === 'card_to_card' ? 'card_to_card' : 'cash'
+                    );
+                    setEditPw('');
+                    setEditOpen(true);
+                  }}
+                >
+                  <IonIcon slot="start" icon={createOutline} />
+                  ویرایش با رمز
+                </IonButton>
               </>
             )}
             {detail?.kind === 'deposit' && (
@@ -603,6 +702,81 @@ const Expense: React.FC = () => {
             >
               <IonIcon slot="start" icon={trashOutline} />
               حذف (با رمز)
+            </IonButton>
+          </IonContent>
+        </IonModal>
+
+        <IonModal isOpen={editOpen} onDidDismiss={() => setEditOpen(false)}>
+          <IonHeader>
+            <IonToolbar>
+              <IonTitle>ویرایش هزینه</IonTitle>
+              <IonButtons slot="end">
+                <IonButton onClick={() => setEditOpen(false)}>انصراف</IonButton>
+              </IonButtons>
+            </IonToolbar>
+          </IonHeader>
+          <IonContent className="ion-padding">
+            <MoneyInput label="مبلغ" value={editAmount} onChange={setEditAmount} />
+            <IonItem>
+              <IonLabel position="stacked">توضیح</IonLabel>
+              <IonInput value={editDesc} onIonInput={(e) => setEditDesc(e.detail.value || '')} />
+            </IonItem>
+            <PersianDateField value={editDate} onChange={setEditDate} />
+            <div className="chip-row">
+              <IonChip
+                className={editPayMethod === 'cash' ? 'ios-chip-active' : 'ios-chip'}
+                onClick={() => setEditPayMethod('cash')}
+              >
+                نقدی
+              </IonChip>
+              <IonChip
+                className={editPayMethod === 'card_to_card' ? 'ios-chip-active' : 'ios-chip'}
+                onClick={() => setEditPayMethod('card_to_card')}
+              >
+                کارت به کارت
+              </IonChip>
+            </div>
+            <IonItem>
+              <IonLabel position="stacked">رمز ویرایش</IonLabel>
+              <IonInput
+                type="password"
+                value={editPw}
+                onIonInput={(e) => setEditPw(e.detail.value || '')}
+              />
+            </IonItem>
+            <IonButton
+              expand="block"
+              color="warning"
+              className="ion-margin-top"
+              disabled={loading || !editPw}
+              onClick={async () => {
+                if (!detail || detail.kind !== 'expense') return;
+                setLoading(true);
+                try {
+                  await wsClient.request('expense.update', {
+                    id: detail.row._id,
+                    password: editPw,
+                    amount: parseAmount(editAmount),
+                    description: editDesc,
+                    date: editDate,
+                    paymentMethod: editPayMethod,
+                  });
+                  setToast({ open: true, msg: 'ویرایش شد', color: 'success' });
+                  setEditOpen(false);
+                  setDetail(null);
+                  await loadLists(page);
+                } catch (e) {
+                  setToast({
+                    open: true,
+                    msg: e instanceof Error ? e.message : 'خطا',
+                    color: 'danger',
+                  });
+                } finally {
+                  setLoading(false);
+                }
+              }}
+            >
+              ذخیره با رمز
             </IonButton>
           </IonContent>
         </IonModal>

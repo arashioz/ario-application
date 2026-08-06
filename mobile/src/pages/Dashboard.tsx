@@ -363,6 +363,37 @@ const Dashboard: React.FC = () => {
                 </div>
               </div>
 
+              <div className="ios-glass-card dash-money-summary">
+                <div className="ios-section-title" style={{ marginTop: 0 }}>
+                  خلاصه مالی — {data.periodLabel || 'امروز'}
+                </div>
+                <p className="hint" style={{ marginTop: 0 }}>
+                  سود فروش از هزینه خرید و تخفیف می‌آید؛ هزینه مغازه و بدهی شرکت جدا حساب می‌شوند.
+                </p>
+                <div className="stat-row">
+                  <span className="stat-label">اینقدر سود کردی (فروش)</span>
+                  <span className="stat-value success">{formatToman(data.totalProfit || 0)}</span>
+                </div>
+                <div className="stat-row">
+                  <span className="stat-label">اینقدر هزینه کردی</span>
+                  <span className="stat-value danger">{formatToman(data.totalExpenses || 0)}</span>
+                </div>
+                <div className="stat-row">
+                  <span className="stat-label">بدهکاری به شرکت</span>
+                  <span className="stat-value warning">
+                    {formatToman(data.companyDebt?.total || 0)}
+                  </span>
+                </div>
+                <div className="stat-row">
+                  <span className="stat-label">سود خالص (سود − هزینه)</span>
+                  <span
+                    className={`stat-value ${(data.netProfit || 0) >= 0 ? 'success' : 'danger'}`}
+                  >
+                    {formatToman(data.netProfit || 0)}
+                  </span>
+                </div>
+              </div>
+
               {(data.cashSales != null || data.cardSales != null || data.creditSales != null) && (
                 <div className="ios-glass-card">
                   <div className="ios-section-title" style={{ marginTop: 0 }}>

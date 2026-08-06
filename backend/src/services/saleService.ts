@@ -195,6 +195,8 @@ export async function createSaleInvoice(data: {
   appliedOffer?: string;
   date?: Date;
   dueDate?: Date;
+  /** اگر نسیه با چک بوده */
+  creditIsCheck?: boolean;
   priceTier?: PriceTier;
   isGolden?: boolean;
   /** اگر true یا نقش بازاریاب: منتظر تأیید ادمین */
@@ -368,6 +370,7 @@ export async function createSaleInvoice(data: {
         date,
         dueDate: data.dueDate,
         isPaid: payment.credit === 0,
+        creditIsCheck: data.creditIsCheck === true && payment.credit > 0,
         priceTier,
         isGolden,
         status,
@@ -382,6 +385,25 @@ export async function createSaleInvoice(data: {
     }
   }
   if (!invoice) throw new Error('ثبت فاکتور فروش ناموفق بود');
+
+  if (invoice.creditIsCheck && payment.credit > 0) {
+    try {
+      const { createCheckReminder } = await import('./checkService');
+      const due = data.dueDate || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      await createCheckReminder({
+        payerName: customerName || 'مشتری',
+        customerId: customerId || undefined,
+        invoiceId: invoice._id.toString(),
+        invoiceNumber: invoice.invoiceNumber,
+        amount: payment.credit,
+        dueDate: due,
+        notes: 'ثبت خودکار از فاکتور نسیه — چک داده',
+        createdBy: data.marketerId,
+      });
+    } catch (e) {
+      console.warn('auto check reminder failed', e);
+    }
+  }
 
   if (!requiresApproval) {
     await applyStockAndMoney(invoice);

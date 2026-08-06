@@ -150,8 +150,10 @@ export async function listProducts(search?: string) {
   if (search) {
     filter.name = { $regex: search, $options: 'i' };
   }
-  // موجودی بیشتر اول — و نام تکراری فقط یک‌بار (همان که موجودی دارد)
-  const all = await Product.find(filter).populate('categoryId').sort({ stockKg: -1, name: 1 });
+  // کاتالوگ: ترتیب دستی؛ بعد موجودی بیشتر
+  const all = await Product.find(filter)
+    .populate('categoryId')
+    .sort({ catalogSortOrder: 1, stockKg: -1, name: 1 });
   const seen = new Set<string>();
   const unique: typeof all = [];
   for (const p of all) {
@@ -517,6 +519,17 @@ export async function updateProduct(
   return Product.findById(id).populate('categoryId');
 }
 
+/** ترتیب کاتالوگ — آرایهٔ idها از بالا به پایین */
+export async function reorderCatalogProducts(orderedIds: string[]) {
+  const ids = (orderedIds || []).map(String).filter(Boolean);
+  if (!ids.length) throw new Error('لیست ترتیب خالی است');
+  const ops = ids.map((id, index) =>
+    Product.updateOne({ _id: id }, { $set: { catalogSortOrder: index } })
+  );
+  await Promise.all(ops);
+  return { ok: true, count: ids.length };
+}
+
 export async function saveProductImage(productId: string, dataUrl: string) {
   const fs = await import('fs');
   const path = await import('path');
@@ -558,7 +571,10 @@ export async function getPublicCatalog() {
     };
   }
 
-  const products = await Product.find({ catalogVisible: true }).sort({ name: 1 });
+  const products = await Product.find({ catalogVisible: true }).sort({
+    catalogSortOrder: 1,
+    name: 1,
+  });
   const costBasis: CostBasis =
     settings.costBasis === 'weighted' || settings.costBasis === 'last' ? settings.costBasis : 'last';
   const items = [];

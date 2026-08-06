@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   IonPage,
   IonHeader,
@@ -23,7 +23,7 @@ import {
   RefresherEventDetail,
 } from '@ionic/react';
 import { useHistory } from 'react-router-dom';
-import { mapOutline, saveOutline, addOutline, eyeOutline, receiptOutline } from 'ionicons/icons';
+import { mapOutline, saveOutline, addOutline, eyeOutline, receiptOutline, personAddOutline } from 'ionicons/icons';
 import { wsClient, newMutationId } from '../api/ws';
 import { formatToman, formatKg, formatDate, normalizePhone } from '../utils/format';
 import { LocationPicker } from '../components/LocationPicker';
@@ -102,12 +102,14 @@ const Customers: React.FC = () => {
   const [summary, setSummary] = useState({ gold: 0, silver: 0, bronze: 0, new: 0 });
   const [tab, setTab] = useState<'all' | 'gold' | 'silver' | 'bronze' | 'new'>('all');
   const [search, setSearch] = useState('');
+  const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [address, setAddress] = useState('');
   const [lat, setLat] = useState<number | null>(null);
   const [lng, setLng] = useState<number | null>(null);
   const [selected, setSelected] = useState<CustomerRow | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
   const [editAddress, setEditAddress] = useState('');
   const [editLat, setEditLat] = useState('');
   const [editLng, setEditLng] = useState('');
@@ -147,6 +149,7 @@ const Customers: React.FC = () => {
       setAddress('');
       setLat(null);
       setLng(null);
+      setCreateOpen(false);
       setToast({
         open: true,
         msg: lat != null ? 'مشتری با موقعیت نقشه ثبت شد' : 'مشتری ثبت شد',
@@ -160,18 +163,38 @@ const Customers: React.FC = () => {
 
   const open = async (c: CustomerRow) => {
     setSelected(c);
+    setDetailOpen(true);
     setEditAddress(c.address || '');
     setEditLat(c.lat != null ? String(c.lat) : '');
     setEditLng(c.lng != null ? String(c.lng) : '');
     try {
       const res = await wsClient.request<{
+        customer?: CustomerRow;
         invoices: CustomerInvoice[];
       }>('customer.get', { id: c._id });
+      if (res.customer) setSelected({ ...c, ...res.customer });
       setInvoices(res.invoices || []);
     } catch {
       setInvoices([]);
     }
   };
+
+  const stats = useMemo(() => {
+    const active = invoices.filter((i) => i.status !== 'cancelled' && i.status !== 'inactive');
+    const totalAmount = active.reduce((s, i) => s + (i.totalAmount || 0), 0);
+    const totalKg = active.reduce((s, i) => s + (i.totalKg || 0), 0);
+    const totalCreditOpen = active.reduce((s, i) => s + (i.payment?.credit || 0), 0);
+    const debt = selected?.totalCredit ?? totalCreditOpen;
+    return {
+      totalAmount,
+      totalKg,
+      invoiceCount: active.length,
+      debt,
+      monthAmount: selected?.monthAmount || 0,
+      monthKg: selected?.monthKg || 0,
+      monthInvoices: selected?.monthInvoices || 0,
+    };
+  }, [invoices, selected]);
 
   const saveAddress = async () => {
     if (!selected) return;
@@ -216,6 +239,12 @@ const Customers: React.FC = () => {
       <IonHeader translucent className="ios-header">
         <IonToolbar>
           <IonTitle>مشتریان</IonTitle>
+          <IonButtons slot="end">
+            <IonButton onClick={() => setCreateOpen(true)}>
+              <IonIcon slot="start" icon={personAddOutline} />
+              جدید
+            </IonButton>
+          </IonButtons>
         </IonToolbar>
       </IonHeader>
       <IonContent fullscreen className="page-content ios-content">
@@ -248,46 +277,10 @@ const Customers: React.FC = () => {
             </div>
           </div>
 
-          <div className="ios-section-title">مشتری جدید</div>
-          <div className="ios-glass-card">
-            <IonItem lines="full">
-              <IonLabel position="stacked">نام</IonLabel>
-              <IonInput value={name} onIonInput={(e) => setName(e.detail.value || '')} />
-            </IonItem>
-            <DigitInput
-              label="موبایل"
-              mode="phone"
-              value={phone}
-              onChange={setPhone}
-              placeholder="09…"
-            />
-            <IonItem lines="none">
-              <IonLabel position="stacked">آدرس</IonLabel>
-              <IonInput value={address} onIonInput={(e) => setAddress(e.detail.value || '')} />
-            </IonItem>
-            <p className="hint convert-hint" style={{ marginTop: 8 }}>
-              موقعیت روی نقشه (اختیاری) — بزن روی نقشه یا موقعیت فعلی
-            </p>
-            <LocationPicker
-              lat={lat}
-              lng={lng}
-              address={address}
-              height={220}
-              onChange={({ lat: la, lng: ln, address: street }) => {
-                setLat(la);
-                setLng(ln);
-                if (street) setAddress(street);
-              }}
-            />
-            {lat != null && lng != null && (
-              <p className="hint">
-                مختصات: {lat.toFixed(5)}, {lng.toFixed(5)}
-              </p>
-            )}
-            <IonButton expand="block" className="ios-primary-btn ion-margin-top" onClick={() => void create()}>
-              افزودن
-            </IonButton>
-          </div>
+          <IonButton expand="block" className="ios-primary-btn" onClick={() => setCreateOpen(true)}>
+            <IonIcon slot="start" icon={addOutline} />
+            مشتری جدید
+          </IonButton>
 
           <IonSearchbar
             value={search}
@@ -322,7 +315,7 @@ const Customers: React.FC = () => {
           {filtered.map((c) => (
             <div
               key={c._id}
-              className={`ios-glass-card tap ${selected?._id === c._id ? 'selected-card' : ''}`}
+              className="ios-glass-card tap"
               onClick={() => void open(c)}
               role="button"
               tabIndex={0}
@@ -333,54 +326,176 @@ const Customers: React.FC = () => {
                   <div className="ios-caption">
                     {c.phone || '—'}
                     {c.address ? ` · ${c.address}` : ''}
-                    {c.lat != null && c.lng != null ? ' · 📍 نقشه' : ''}
                   </div>
                   <div className="ios-caption">
                     این ماه: {formatKg(c.monthKg || 0)} · {formatToman(c.monthAmount || 0)}
-                    {(c.totalCredit || 0) > 0 ? ` · نسیه ${formatToman(c.totalCredit || 0)}` : ''}
+                    {(c.totalCredit || 0) > 0 ? ` · بدهی ${formatToman(c.totalCredit || 0)}` : ''}
                   </div>
                 </div>
                 <IonBadge color={tierColor(c.loyaltyTier)}>{c.tierLabel || 'جدید'}</IonBadge>
               </div>
             </div>
           ))}
+        </div>
 
-          {selected && (
-            <>
-              <div className="ios-section-title">آدرس — {selected.name}</div>
-              <div className="ios-glass-card">
-                <IonItem lines="full">
-                  <IonLabel position="stacked">آدرس</IonLabel>
-                  <IonInput value={editAddress} onIonInput={(e) => setEditAddress(e.detail.value || '')} />
-                </IonItem>
-                <LocationPicker
-                  lat={editLat ? parseFloat(editLat) : null}
-                  lng={editLng ? parseFloat(editLng) : null}
-                  address={editAddress}
-                  onChange={({ lat, lng, address: street }) => {
-                    setEditLat(String(lat));
-                    setEditLng(String(lng));
-                    if (street) setEditAddress(street);
+        {/* ایجاد مشتری */}
+        <IonModal isOpen={createOpen} onDidDismiss={() => setCreateOpen(false)}>
+          <IonHeader>
+            <IonToolbar>
+              <IonTitle>مشتری جدید</IonTitle>
+              <IonButtons slot="end">
+                <IonButton onClick={() => setCreateOpen(false)}>بستن</IonButton>
+              </IonButtons>
+            </IonToolbar>
+          </IonHeader>
+          <IonContent className="ion-padding">
+            <IonItem lines="full">
+              <IonLabel position="stacked">نام</IonLabel>
+              <IonInput value={name} onIonInput={(e) => setName(e.detail.value || '')} />
+            </IonItem>
+            <DigitInput
+              label="موبایل"
+              mode="phone"
+              value={phone}
+              onChange={setPhone}
+              placeholder="09…"
+            />
+            <IonItem lines="none">
+              <IonLabel position="stacked">آدرس</IonLabel>
+              <IonInput value={address} onIonInput={(e) => setAddress(e.detail.value || '')} />
+            </IonItem>
+            <p className="hint convert-hint" style={{ marginTop: 8 }}>
+              موقعیت روی نقشه (اختیاری)
+            </p>
+            <LocationPicker
+              lat={lat}
+              lng={lng}
+              address={address}
+              height={220}
+              onChange={({ lat: la, lng: ln, address: street }) => {
+                setLat(la);
+                setLng(ln);
+                if (street) setAddress(street);
+              }}
+            />
+            <IonButton
+              expand="block"
+              className="ios-primary-btn ion-margin-top"
+              disabled={!name.trim()}
+              onClick={() => void create()}
+            >
+              ثبت مشتری
+            </IonButton>
+          </IonContent>
+        </IonModal>
+
+        {/* جزئیات مشتری */}
+        <IonModal
+          isOpen={detailOpen && !!selected}
+          onDidDismiss={() => {
+            setDetailOpen(false);
+            setSelected(null);
+          }}
+        >
+          <IonHeader>
+            <IonToolbar>
+              <IonTitle>{selected?.name || 'مشتری'}</IonTitle>
+              <IonButtons slot="end">
+                <IonButton
+                  onClick={() => {
+                    setDetailOpen(false);
+                    setSelected(null);
                   }}
-                />
+                >
+                  بستن
+                </IonButton>
+              </IonButtons>
+            </IonToolbar>
+          </IonHeader>
+          <IonContent className="ion-padding">
+            {selected && (
+              <>
+                <p className="hint">
+                  {selected.phone || 'بدون تلفن'}
+                  {selected.address ? ` · ${selected.address}` : ''}
+                </p>
+
+                <div className="ios-section-title" style={{ marginTop: 0 }}>
+                  گزارش مشتری
+                </div>
+                <div className="ios-kpi-grid">
+                  <div className="ios-kpi rose">
+                    <div className="k-label">بدهکاری</div>
+                    <div className="k-value">{formatToman(stats.debt)}</div>
+                  </div>
+                  <div className="ios-kpi orange">
+                    <div className="k-label">فروش این ماه</div>
+                    <div className="k-value">{formatToman(stats.monthAmount)}</div>
+                  </div>
+                  <div className="ios-kpi blue">
+                    <div className="k-label">کل فروش</div>
+                    <div className="k-value">{formatToman(stats.totalAmount)}</div>
+                  </div>
+                  <div className="ios-kpi green">
+                    <div className="k-label">کل تناژ</div>
+                    <div className="k-value">{formatKg(stats.totalKg)}</div>
+                  </div>
+                </div>
+                <div className="ios-glass-card">
+                  <div className="stat-row">
+                    <span className="stat-label">تناژ این ماه</span>
+                    <span className="stat-value">{formatKg(stats.monthKg)}</span>
+                  </div>
+                  <div className="stat-row">
+                    <span className="stat-label">فاکتور این ماه</span>
+                    <span className="stat-value">{stats.monthInvoices}</span>
+                  </div>
+                  <div className="stat-row">
+                    <span className="stat-label">کل فاکتورها</span>
+                    <span className="stat-value">{stats.invoiceCount}</span>
+                  </div>
+                </div>
+
                 <div className="chip-row">
-                  <IonButton size="small" onClick={() => void saveAddress()}>
-                    <IonIcon slot="start" icon={saveOutline} />
-                    ذخیره
+                  <IonButton size="small" color="success" onClick={() => goNewInvoice(selected)}>
+                    <IonIcon slot="start" icon={addOutline} />
+                    فاکتور جدید
                   </IonButton>
                   <IonButton size="small" fill="outline" onClick={() => openMap(selected)}>
                     <IonIcon slot="start" icon={mapOutline} />
                     نقشه
                   </IonButton>
-                  <IonButton size="small" color="success" onClick={() => goNewInvoice(selected)}>
-                    <IonIcon slot="start" icon={addOutline} />
-                    فاکتور جدید
+                  <IonButton size="small" fill="outline" routerLink="/debtors">
+                    نسیه
                   </IonButton>
                 </div>
-              </div>
 
-              <div className="ios-section-title">فاکتورهای مشتری</div>
-              <div className="ios-glass-card">
+                <div className="ios-section-title">آدرس</div>
+                <div className="ios-glass-card">
+                  <IonItem lines="full">
+                    <IonLabel position="stacked">آدرس</IonLabel>
+                    <IonInput
+                      value={editAddress}
+                      onIonInput={(e) => setEditAddress(e.detail.value || '')}
+                    />
+                  </IonItem>
+                  <LocationPicker
+                    lat={editLat ? parseFloat(editLat) : null}
+                    lng={editLng ? parseFloat(editLng) : null}
+                    address={editAddress}
+                    onChange={({ lat: la, lng: ln, address: street }) => {
+                      setEditLat(String(la));
+                      setEditLng(String(ln));
+                      if (street) setEditAddress(street);
+                    }}
+                  />
+                  <IonButton size="small" onClick={() => void saveAddress()}>
+                    <IonIcon slot="start" icon={saveOutline} />
+                    ذخیره آدرس
+                  </IonButton>
+                </div>
+
+                <div className="ios-section-title">ریز سفارش‌ها / فاکتورها</div>
                 {invoices.length === 0 && <p className="hint">فاکتوری نیست</p>}
                 {invoices.map((inv) => (
                   <div key={inv.invoiceNumber} className="inv-card" style={{ marginBottom: 10 }}>
@@ -394,6 +509,7 @@ const Customers: React.FC = () => {
                           {formatDate(inv.date)}
                           {inv.priceTier ? ` · ${TIER[inv.priceTier] || inv.priceTier}` : ''}
                           {inv.paymentMethod ? ` · ${PAY[inv.paymentMethod] || inv.paymentMethod}` : ''}
+                          {inv.status ? ` · ${STATUS[inv.status] || inv.status}` : ''}
                         </div>
                       </div>
                       <div className="inv-card-amount">
@@ -401,7 +517,12 @@ const Customers: React.FC = () => {
                         <div className="inv-card-kg">{formatKg(inv.totalKg || 0)}</div>
                       </div>
                     </div>
-                    {(inv.items || []).slice(0, 3).map((it, i) => {
+                    {(inv.payment?.credit || 0) > 0 && (
+                      <div className="ios-caption" style={{ color: 'var(--ion-color-danger)' }}>
+                        نسیه این فاکتور: {formatToman(inv.payment?.credit || 0)}
+                      </div>
+                    )}
+                    {(inv.items || []).map((it, i) => {
                       const perKg =
                         it.unitPricePerKg ||
                         (it.qtyKg > 0 ? Math.round(it.totalPrice / it.qtyKg) : 0);
@@ -410,33 +531,26 @@ const Customers: React.FC = () => {
                           {it.productName} · {formatKg(it.qtyKg)}
                           {it.unit === 'package' && it.qtyInput ? ` · ${it.qtyInput} بسته` : ''}
                           {' · فی '}
-                          {formatToman(perKg)}/کیلو
+                          {formatToman(perKg)}/کیلو · {formatToman(it.totalPrice)}
                         </div>
                       );
                     })}
-                    {(inv.items || []).length > 3 && (
-                      <div className="ios-caption">+{(inv.items || []).length - 3} قلم دیگر</div>
-                    )}
                     <div className="inv-card-actions">
                       <IonButton size="small" fill="clear" onClick={() => setInvDetail(inv)}>
                         <IonIcon slot="start" icon={eyeOutline} />
                         جزئیات
                       </IonButton>
-                      <IonButton
-                        size="small"
-                        fill="outline"
-                        onClick={() => goNewInvoice(selected)}
-                      >
+                      <IonButton size="small" fill="outline" onClick={() => goNewInvoice(selected)}>
                         <IonIcon slot="start" icon={receiptOutline} />
                         فاکتور دوباره
                       </IonButton>
                     </div>
                   </div>
                 ))}
-              </div>
-            </>
-          )}
-        </div>
+              </>
+            )}
+          </IonContent>
+        </IonModal>
 
         <IonModal isOpen={!!invDetail} onDidDismiss={() => setInvDetail(null)}>
           <IonHeader>
@@ -463,16 +577,6 @@ const Customers: React.FC = () => {
                 <p>
                   <b>تناژ:</b> {formatKg(invDetail.totalKg || 0)}
                 </p>
-                {invDetail.discount ? (
-                  <p>
-                    <b>تخفیف:</b> {formatToman(invDetail.discount)}
-                  </p>
-                ) : null}
-                {invDetail.priceTier ? (
-                  <p>
-                    <b>سطح:</b> {TIER[invDetail.priceTier] || invDetail.priceTier}
-                  </p>
-                ) : null}
                 <p>
                   <b>وضعیت:</b> {STATUS[invDetail.status || ''] || invDetail.status || '—'}
                 </p>
@@ -481,9 +585,6 @@ const Customers: React.FC = () => {
                 </p>
                 {invDetail.payment && (
                   <div className="ios-glass-card">
-                    <div className="ios-section-title" style={{ marginTop: 0 }}>
-                      پرداخت مشتری
-                    </div>
                     <div className="stat-row">
                       <span>نقد</span>
                       <span>{formatToman(invDetail.payment.cash || 0)}</span>
@@ -498,47 +599,24 @@ const Customers: React.FC = () => {
                     </div>
                   </div>
                 )}
-                {(invDetail.items || []).length > 0 && (
-                  <div className="ios-glass-card">
-                    <div className="ios-section-title" style={{ marginTop: 0 }}>
-                      چی خریدن — فی قند
+                {(invDetail.items || []).map((it, i) => {
+                  const perKg =
+                    it.unitPricePerKg ||
+                    (it.qtyKg > 0 ? Math.round(it.totalPrice / it.qtyKg) : 0);
+                  return (
+                    <div key={i} style={{ marginBottom: 10 }}>
+                      <div className="stat-row">
+                        <span>
+                          <strong>{it.productName}</strong>
+                        </span>
+                        <span>{formatToman(it.totalPrice)}</span>
+                      </div>
+                      <div className="ios-caption">
+                        {formatKg(it.qtyKg)} · فی {formatToman(perKg)}/کیلو
+                      </div>
                     </div>
-                    {(invDetail.items || []).map((it, i) => {
-                      const perKg =
-                        it.unitPricePerKg ||
-                        (it.qtyKg > 0 ? Math.round(it.totalPrice / it.qtyKg) : 0);
-                      return (
-                        <div key={i} style={{ marginBottom: 10 }}>
-                          <div className="stat-row">
-                            <span>
-                              <strong>{it.productName}</strong>
-                            </span>
-                            <span>{formatToman(it.totalPrice)}</span>
-                          </div>
-                          <div className="ios-caption">
-                            {formatKg(it.qtyKg)}
-                            {it.unit === 'package' && it.qtyInput ? ` · ${it.qtyInput} بسته` : ''}
-                            {' · فی '}
-                            {formatToman(perKg)}/کیلو
-                            {it.discount ? ` · تخفیف ${formatToman(it.discount)}` : ''}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-                {selected && (
-                  <IonButton
-                    expand="block"
-                    className="ios-primary-btn ion-margin-top"
-                    onClick={() => {
-                      setInvDetail(null);
-                      goNewInvoice(selected);
-                    }}
-                  >
-                    ثبت فاکتور جدید برای این مشتری
-                  </IonButton>
-                )}
+                  );
+                })}
               </>
             )}
           </IonContent>

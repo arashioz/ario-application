@@ -36,6 +36,8 @@ export interface IProduct extends Document {
   catalogPricePerKg?: number;
   /** توضیح کوتاه کاتالوگ */
   catalogNote?: string;
+  /** ترتیب نمایش در کاتالوگ (کمتر = بالاتر) */
+  catalogSortOrder: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -62,9 +64,12 @@ const ProductSchema = new Schema<IProduct>(
     catalogMinQty: { type: Number, default: 1, min: 0 },
     catalogPricePerKg: { type: Number },
     catalogNote: { type: String },
+    catalogSortOrder: { type: Number, default: 0 },
   },
   { timestamps: true }
 );
+
+ProductSchema.index({ catalogSortOrder: 1, name: 1 });
 
 ProductSchema.index({ normalizedName: 1 }, { unique: true });
 

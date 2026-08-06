@@ -24,7 +24,7 @@ import {
   useIonViewWillEnter,
   RefresherEventDetail,
 } from '@ionic/react';
-import { copyOutline, openOutline, imageOutline, trashOutline, createOutline, cubeOutline } from 'ionicons/icons';
+import { copyOutline, openOutline, imageOutline, trashOutline, createOutline, cubeOutline, chevronUpOutline, chevronDownOutline, reorderTwoOutline } from 'ionicons/icons';
 import { IonIcon } from '@ionic/react';
 import { wsClient } from '../api/ws';
 import { resolveMediaUrl } from '../api/client';
@@ -55,6 +55,7 @@ interface Product {
   catalogMinQty?: number;
   catalogPricePerKg?: number;
   catalogNote?: string;
+  catalogSortOrder?: number;
   avgCostPerKg?: number;
   lastPurchasePricePerKg?: number;
   purchasePrice?: number;
@@ -216,6 +217,41 @@ const CatalogAdmin: React.FC = () => {
     if (!bulkCatId) return products;
     return products.filter((p) => catIdOf(p) === bulkCatId);
   }, [products, bulkCatId]);
+
+  const catalogOrdered = useMemo(
+    () =>
+      products
+        .filter((p) => p.catalogVisible)
+        .slice()
+        .sort((a, b) => (a.catalogSortOrder ?? 0) - (b.catalogSortOrder ?? 0) || a.name.localeCompare(b.name, 'fa')),
+    [products]
+  );
+
+  const moveCatalog = async (id: string, dir: -1 | 1) => {
+    const list = catalogOrdered.map((p) => p._id);
+    const idx = list.indexOf(id);
+    if (idx < 0) return;
+    const j = idx + dir;
+    if (j < 0 || j >= list.length) return;
+    const next = list.slice();
+    const tmp = next[idx];
+    next[idx] = next[j];
+    next[j] = tmp;
+    // optimistic
+    setProducts((prev) =>
+      prev.map((p) => {
+        const oi = next.indexOf(p._id);
+        return oi >= 0 ? { ...p, catalogSortOrder: oi } : p;
+      })
+    );
+    try {
+      await wsClient.request('product.catalog.reorder', { orderedIds: next });
+      setToast({ open: true, msg: 'ترتیب کاتالوگ ذخیره شد', color: 'success' });
+    } catch (e) {
+      setToast({ open: true, msg: e instanceof Error ? e.message : 'خطا', color: 'danger' });
+      await load();
+    }
+  };
 
   const openEdit = (p: Product) => {
     setEditProduct(p);
@@ -820,6 +856,43 @@ const CatalogAdmin: React.FC = () => {
 
           {tab === 'catalog' && (
             <>
+              <div className="ios-glass-card">
+                <div className="ios-section-title" style={{ marginTop: 0 }}>
+                  <IonIcon icon={reorderTwoOutline} style={{ verticalAlign: 'middle', marginLeft: 6 }} />
+                  ترتیب نمایش کاتالوگ
+                </div>
+                <p className="hint">محصولات روشن‌شده در کاتالوگ — با فلش جابه‌جا کنید</p>
+                {catalogOrdered.length === 0 && <p className="hint">هنوز محصولی در کاتالوگ نیست</p>}
+                {catalogOrdered.map((p, i) => (
+                  <div key={p._id} className="ios-row catalog-order-row" style={{ marginBottom: 8 }}>
+                    <div>
+                      <strong>
+                        {(i + 1).toLocaleString('fa-IR')}. {p.name}
+                      </strong>
+                      <div className="ios-caption">{formatToman(tierPricePerKg(p, 'retail'))}/کیلو</div>
+                    </div>
+                    <div className="chip-row" style={{ margin: 0 }}>
+                      <IonButton
+                        size="small"
+                        fill="outline"
+                        disabled={i === 0}
+                        onClick={() => void moveCatalog(p._id, -1)}
+                      >
+                        <IonIcon icon={chevronUpOutline} />
+                      </IonButton>
+                      <IonButton
+                        size="small"
+                        fill="outline"
+                        disabled={i === catalogOrdered.length - 1}
+                        onClick={() => void moveCatalog(p._id, 1)}
+                      >
+                        <IonIcon icon={chevronDownOutline} />
+                      </IonButton>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
               <div className="ios-glass-card">
                 <div className="ios-section-title" style={{ marginTop: 0 }}>
                   لینک اشتراک

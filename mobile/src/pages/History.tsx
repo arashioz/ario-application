@@ -13,6 +13,9 @@ import {
   IonSpinner,
   IonRefresher,
   IonRefresherContent,
+  IonModal,
+  IonButtons,
+  IonChip,
   RefresherEventDetail,
 } from '@ionic/react';
 import { wsClient } from '../api/ws';
@@ -87,6 +90,28 @@ const History: React.FC = () => {
   const [period, setPeriod] = useState<Period | null>(null);
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState({ open: false, msg: '', color: 'success' });
+  const [companyDebt, setCompanyDebt] = useState<{
+    remainingDebt: number;
+    totalPaidToCompany: number;
+    totalPaidOnDebts: number;
+    totalDebtAmount: number;
+    openCount: number;
+    debts: Array<{
+      id: string;
+      supplier: string;
+      remaining: number;
+      amount: number;
+      paidAmount: number;
+      date: string;
+    }>;
+    recentPayments: Array<{
+      _id: string;
+      supplier: string;
+      amount: number;
+      method: string;
+      date: string;
+    }>;
+  } | null>(null);
   const [cashTxs, setCashTxs] = useState<
     Array<{
       _id: string;
@@ -95,8 +120,13 @@ const History: React.FC = () => {
       direction: 'in' | 'out';
       description: string;
       date: string;
+      paymentMethod?: 'cash' | 'card' | 'card_to_card';
     }>
   >([]);
+  const [cashDetail, setCashDetail] = useState<(typeof cashTxs)[0] | null>(null);
+  const [cashMethod, setCashMethod] = useState<'cash' | 'card' | 'card_to_card'>('cash');
+  const [cashPw, setCashPw] = useState('');
+  const [cashSaving, setCashSaving] = useState(false);
 
   const loadSettings = async () => {
     const s = await wsClient.request<{
@@ -124,9 +154,20 @@ const History: React.FC = () => {
     }
   };
 
+  const loadCompanyDebt = async () => {
+    if (!isAdmin) return;
+    try {
+      const s = await wsClient.request<NonNullable<typeof companyDebt>>('companyDebt.summary', {});
+      setCompanyDebt(s);
+    } catch {
+      setCompanyDebt(null);
+    }
+  };
+
   useEffect(() => {
     void loadSettings().catch(console.warn);
     void loadCashTxs();
+    void loadCompanyDebt();
   }, []);
 
   const runReport = async () => {
@@ -158,6 +199,7 @@ const History: React.FC = () => {
           onIonRefresh={async (e: CustomEvent<RefresherEventDetail>) => {
             await loadSettings();
             await loadCashTxs();
+            await loadCompanyDebt();
             if (from && to) await runReport();
             e.detail.complete();
           }}
@@ -179,6 +221,73 @@ const History: React.FC = () => {
               <div className="k-value">{formatToman(liveCard)}</div>
             </div>
           </div>
+
+          {isAdmin && companyDebt && (
+            <>
+              <div className="ios-section-title">بدهی و پرداخت به شرکت</div>
+              <div className="ios-kpi-grid">
+                <div className="ios-kpi rose">
+                  <div className="k-label">هنوز بدهکارم</div>
+                  <div className="k-value">{formatToman(companyDebt.remainingDebt || 0)}</div>
+                </div>
+                <div className="ios-kpi green">
+                  <div className="k-label">پرداخت‌شده به شرکت</div>
+                  <div className="k-value">{formatToman(companyDebt.totalPaidToCompany || 0)}</div>
+                </div>
+              </div>
+              <div className="ios-glass-card">
+                <div className="stat-row">
+                  <span className="stat-label">کل بدهی ثبت‌شده</span>
+                  <span className="stat-value">{formatToman(companyDebt.totalDebtAmount || 0)}</span>
+                </div>
+                <div className="stat-row">
+                  <span className="stat-label">پرداخت روی بدهی‌ها</span>
+                  <span className="stat-value">{formatToman(companyDebt.totalPaidOnDebts || 0)}</span>
+                </div>
+                <div className="stat-row">
+                  <span className="stat-label">فاکتور بدهی باز</span>
+                  <span className="stat-value">{companyDebt.openCount}</span>
+                </div>
+                {(companyDebt.debts || []).slice(0, 8).map((d) => (
+                  <div key={String(d.id)} className="day-row" style={{ marginTop: 6 }}>
+                    <div className="ios-row">
+                      <div>
+                        <strong>{d.supplier}</strong>
+                        <div className="ios-caption">{formatDate(d.date)}</div>
+                      </div>
+                      <div className="inv-card-amount">
+                        <div className="stat-value danger">{formatToman(d.remaining)}</div>
+                        <div className="ios-caption">
+                          از {formatToman(d.amount)} · پرداختی {formatToman(d.paidAmount)}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                {(companyDebt.recentPayments || []).length > 0 && (
+                  <>
+                    <div className="ios-section-title">آخرین پرداخت‌ها به شرکت</div>
+                    {companyDebt.recentPayments.slice(0, 8).map((p) => (
+                      <div key={p._id} className="stat-row">
+                        <span className="stat-label">
+                          {formatDate(p.date)} · {p.supplier} ·{' '}
+                          {p.method === 'cash'
+                            ? 'نقد'
+                            : p.method === 'card_to_card'
+                              ? 'کارت‌به‌کارت'
+                              : 'کارت'}
+                        </span>
+                        <span className="stat-value">{formatToman(p.amount)}</span>
+                      </div>
+                    ))}
+                  </>
+                )}
+                <IonButton expand="block" fill="outline" size="small" routerLink="/expense">
+                  ثبت پرداخت / هزینه
+                </IonButton>
+              </div>
+            </>
+          )}
 
           {isAdmin && (
             <div className="ios-glass-card">
@@ -227,17 +336,48 @@ const History: React.FC = () => {
               <div className="ios-glass-card">
                 {cashTxs.length === 0 && <p className="hint">تراکنشی ثبت نشده</p>}
                 {cashTxs.map((tx) => (
-                  <div key={tx._id} className="day-row">
+                  <div
+                    key={tx._id}
+                    className="day-row tap"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => {
+                      setCashDetail(tx);
+                      const inferred =
+                        tx.paymentMethod ||
+                        (/کارت به کارت|کارت‌به‌کارت/i.test(tx.description)
+                          ? 'card_to_card'
+                          : /کارت|پوز|کارتخوان/i.test(tx.description)
+                            ? 'card'
+                            : 'cash');
+                      setCashMethod(inferred as 'cash' | 'card' | 'card_to_card');
+                      setCashPw('');
+                    }}
+                  >
                     <div className="ios-row">
                       <div>
                         <strong>{tx.description}</strong>
                         <div className="ios-caption">
-                          {formatDate(tx.date)} · {tx.type} · {tx.direction === 'in' ? 'ورود' : 'خروج'}
+                          {formatDate(tx.date)} · {tx.direction === 'in' ? 'ورود' : 'خروج'}
+                          {tx.paymentMethod
+                            ? ` · ${
+                                tx.paymentMethod === 'cash'
+                                  ? 'نقد'
+                                  : tx.paymentMethod === 'card_to_card'
+                                    ? 'کارت‌به‌کارت'
+                                    : 'کارت'
+                              }`
+                            : ''}
                         </div>
                       </div>
                       <div
                         className="stat-value"
-                        style={{ color: tx.direction === 'in' ? 'var(--ion-color-success)' : 'var(--ion-color-danger)' }}
+                        style={{
+                          color:
+                            tx.direction === 'in'
+                              ? 'var(--ion-color-success)'
+                              : 'var(--ion-color-danger)',
+                        }}
                       >
                         {tx.direction === 'in' ? '+' : '−'}
                         {formatToman(tx.amount)}
@@ -281,6 +421,11 @@ const History: React.FC = () => {
                     <div className="k-label">سود فروش</div>
                     <div className="k-value">{formatToman(period.totalProfit)}</div>
                   </div>
+                  {period.totalProfit < 0 && (
+                    <p className="hint" style={{ gridColumn: '1 / -1', margin: 0 }}>
+                      سود منفی یعنی قیمت فروش (بعد از تخفیف) کمتر از هزینه خرید بوده — تخفیف سنگین، قیمت دستی پایین، یا هزینه خرید اشتباه/بالا.
+                    </p>
+                  )}
                   <div className="ios-kpi">
                     <div className="k-label">هزینه</div>
                     <div className="k-value">{formatToman(period.totalExpenses)}</div>
@@ -464,6 +609,91 @@ const History: React.FC = () => {
             )}
           </div>
         </div>
+
+        <IonModal isOpen={!!cashDetail} onDidDismiss={() => setCashDetail(null)}>
+          <IonHeader>
+            <IonToolbar>
+              <IonTitle>ویرایش گردش صندوق</IonTitle>
+              <IonButtons slot="end">
+                <IonButton onClick={() => setCashDetail(null)}>بستن</IonButton>
+              </IonButtons>
+            </IonToolbar>
+          </IonHeader>
+          <IonContent className="ion-padding">
+            {cashDetail && (
+              <>
+                <p>
+                  <b>شرح:</b> {cashDetail.description}
+                </p>
+                <p>
+                  <b>مبلغ:</b> {formatToman(cashDetail.amount)}
+                </p>
+                <p>
+                  <b>تاریخ:</b> {formatDate(cashDetail.date)}
+                </p>
+                <p className="hint">روش پرداخت را عوض کنید تا موجودی نقد / کارت اصلاح شود</p>
+                <div className="chip-row">
+                  <IonChip
+                    className={cashMethod === 'cash' ? 'ios-chip-active' : 'ios-chip'}
+                    onClick={() => setCashMethod('cash')}
+                  >
+                    نقدی
+                  </IonChip>
+                  <IonChip
+                    className={cashMethod === 'card_to_card' ? 'ios-chip-active' : 'ios-chip'}
+                    onClick={() => setCashMethod('card_to_card')}
+                  >
+                    کارت به کارت
+                  </IonChip>
+                  <IonChip
+                    className={cashMethod === 'card' ? 'ios-chip-active' : 'ios-chip'}
+                    onClick={() => setCashMethod('card')}
+                  >
+                    کارت / پوز
+                  </IonChip>
+                </div>
+                <IonItem>
+                  <IonLabel position="stacked">رمز عملیات</IonLabel>
+                  <IonInput
+                    type="password"
+                    value={cashPw}
+                    onIonInput={(e) => setCashPw(e.detail.value || '')}
+                  />
+                </IonItem>
+                <IonButton
+                  expand="block"
+                  className="ios-primary-btn ion-margin-top"
+                  disabled={cashSaving || !cashPw}
+                  onClick={async () => {
+                    if (!cashDetail) return;
+                    setCashSaving(true);
+                    try {
+                      await wsClient.request('cash.updateMethod', {
+                        id: cashDetail._id,
+                        password: cashPw,
+                        paymentMethod: cashMethod,
+                      });
+                      setToast({ open: true, msg: 'روش پرداخت ذخیره شد', color: 'success' });
+                      setCashDetail(null);
+                      await loadCashTxs();
+                      await loadSettings();
+                    } catch (e) {
+                      setToast({
+                        open: true,
+                        msg: e instanceof Error ? e.message : 'خطا',
+                        color: 'danger',
+                      });
+                    } finally {
+                      setCashSaving(false);
+                    }
+                  }}
+                >
+                  ذخیره روش پرداخت
+                </IonButton>
+              </>
+            )}
+          </IonContent>
+        </IonModal>
 
         <IonToast
           isOpen={toast.open}

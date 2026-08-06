@@ -71,6 +71,8 @@ export interface ISaleInvoice extends Document {
   date: Date;
   dueDate?: Date;
   isPaid: boolean;
+  /** نسیه با چک بوده */
+  creditIsCheck?: boolean;
   priceTier: PriceTier;
   isGolden: boolean;
   status: SaleStatus;
@@ -169,6 +171,7 @@ const SaleInvoiceSchema = new Schema<ISaleInvoice>(
     date: { type: Date, required: true, default: Date.now },
     dueDate: { type: Date },
     isPaid: { type: Boolean, default: true },
+    creditIsCheck: { type: Boolean, default: false },
     priceTier: {
       type: String,
       enum: ['retail', 'supermarket', 'wholesale'],

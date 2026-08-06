@@ -4,7 +4,7 @@ import { updateBalances, validateTransactionDate } from './productService';
 export async function createCompanyPayment(data: {
   supplier?: string;
   amount: number;
-  method: 'cash' | 'card';
+  method: 'cash' | 'card' | 'card_to_card';
   date?: Date;
   notes?: string;
   supplierDebtId?: string;
@@ -44,6 +44,10 @@ export async function createCompanyPayment(data: {
     }
   }
 
+  const useCard = data.method === 'card' || data.method === 'card_to_card';
+  const methodLabel =
+    data.method === 'cash' ? 'نقد' : data.method === 'card_to_card' ? 'کارت به کارت' : 'کارت';
+
   const payment = await CompanyPayment.create({
     supplier,
     amount: data.amount,
@@ -58,13 +62,14 @@ export async function createCompanyPayment(data: {
     type: 'purchase',
     amount: data.amount,
     direction: 'out',
-    description: `پرداخت به شرکت ${supplier}`,
+    description: `پرداخت به شرکت ${supplier} (${methodLabel})`,
     referenceId: payment._id.toString(),
     referenceModel: 'CompanyPayment',
+    paymentMethod: data.method,
     date,
   });
 
-  await updateBalances(data.method === 'cash' ? -data.amount : 0, data.method === 'card' ? -data.amount : 0);
+  await updateBalances(useCard ? 0 : -data.amount, useCard ? -data.amount : 0);
 
   return payment;
 }
@@ -86,11 +91,27 @@ export async function listSupplierDebts(settled?: boolean) {
 }
 
 export async function getCompanyDebtSummary() {
-  const open = await SupplierDebt.find({ isSettled: false });
-  const total = open.reduce((s, d) => s + (d.amount - d.paidAmount), 0);
-  const payments = await CompanyPayment.find().sort({ date: -1 }).limit(20);
+  const [open, allDebts, paymentsAgg, payments] = await Promise.all([
+    SupplierDebt.find({ isSettled: false }),
+    SupplierDebt.find(),
+    CompanyPayment.aggregate<{ total: number }>([{ $group: { _id: null, total: { $sum: '$amount' } } }]),
+    CompanyPayment.find().sort({ date: -1 }).limit(30),
+  ]);
+  const remainingDebt = open.reduce((s, d) => s + (d.amount - d.paidAmount), 0);
+  const totalDebtAmount = allDebts.reduce((s, d) => s + (d.amount || 0), 0);
+  const totalPaidOnDebts = allDebts.reduce((s, d) => s + (d.paidAmount || 0), 0);
+  const totalPaidToCompany = paymentsAgg[0]?.total || 0;
+
   return {
-    totalDebt: total,
+    /** مانده بدهی باز به شرکت */
+    totalDebt: remainingDebt,
+    remainingDebt,
+    /** کل بدهی ثبت‌شده (اصل) */
+    totalDebtAmount,
+    /** جمع پرداخت‌شده روی بدهی‌ها */
+    totalPaidOnDebts,
+    /** جمع همه پرداخت‌های ثبت‌شده به شرکت */
+    totalPaidToCompany,
     openCount: open.length,
     debts: open.map((d) => ({
       id: d._id,

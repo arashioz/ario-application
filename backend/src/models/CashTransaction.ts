@@ -17,6 +17,8 @@ export interface ICashTransaction extends Document {
   description: string;
   referenceId?: string;
   referenceModel?: string;
+  /** نقد / کارت / کارت‌به‌کارت — برای ادیت سمت صندوق */
+  paymentMethod?: 'cash' | 'card' | 'card_to_card';
   date: Date;
   createdAt: Date;
 }
@@ -36,6 +38,10 @@ const CashTransactionSchema = new Schema<ICashTransaction>(
     description: { type: String, required: true },
     referenceId: { type: String },
     referenceModel: { type: String },
+    paymentMethod: {
+      type: String,
+      enum: ['cash', 'card', 'card_to_card'],
+    },
     date: { type: Date, required: true, default: Date.now },
   },
   { timestamps: true }

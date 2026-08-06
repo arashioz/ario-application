@@ -9,6 +9,8 @@ export interface IExpense extends Document {
   description: string;
   date: Date;
   notes?: string;
+  /** نحوه پرداخت هزینه */
+  paymentMethod?: 'cash' | 'card' | 'card_to_card';
   createdAt: Date;
   updatedAt: Date;
 }
@@ -21,6 +23,11 @@ const ExpenseSchema = new Schema<IExpense>(
     description: { type: String, required: true },
     date: { type: Date, required: true, default: Date.now },
     notes: { type: String },
+    paymentMethod: {
+      type: String,
+      enum: ['cash', 'card', 'card_to_card'],
+      default: 'cash',
+    },
   },
   { timestamps: true }
 );

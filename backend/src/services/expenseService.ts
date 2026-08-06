@@ -25,9 +25,11 @@ export async function createExpense(data: {
   date?: Date;
   notes?: string;
   affectsCash?: boolean;
+  paymentMethod?: 'cash' | 'card' | 'card_to_card';
 }) {
   const date = data.date ? new Date(data.date) : new Date();
   validateTransactionDate(date);
+  const paymentMethod = data.paymentMethod || 'cash';
 
   const expense = await Expense.create({
     type: data.type,
@@ -36,10 +38,12 @@ export async function createExpense(data: {
     description: data.description,
     date,
     notes: data.notes,
+    paymentMethod,
   });
 
   const inflowTypes = ['loan_received'];
   const isInflow = inflowTypes.includes(data.type);
+  const useCard = paymentMethod === 'card' || paymentMethod === 'card_to_card';
 
   if (data.affectsCash !== false) {
     if (isInflow) {
@@ -47,23 +51,25 @@ export async function createExpense(data: {
         type: 'adjustment',
         amount: data.amount,
         direction: 'in',
-        description: data.description,
+        description: `${data.description} (${paymentMethod === 'cash' ? 'نقد' : paymentMethod === 'card_to_card' ? 'کارت به کارت' : 'کارت'})`,
         referenceId: expense._id.toString(),
         referenceModel: 'Expense',
+        paymentMethod,
         date,
       });
-      await updateBalances(data.amount, 0);
+      await updateBalances(useCard ? 0 : data.amount, useCard ? data.amount : 0);
     } else {
       await CashTransaction.create({
         type: 'expense',
         amount: data.amount,
         direction: 'out',
-        description: data.description,
+        description: `${data.description} (${paymentMethod === 'cash' ? 'نقد' : paymentMethod === 'card_to_card' ? 'کارت به کارت' : 'کارت'})`,
         referenceId: expense._id.toString(),
         referenceModel: 'Expense',
+        paymentMethod,
         date,
       });
-      await updateBalances(-data.amount, 0);
+      await updateBalances(useCard ? 0 : -data.amount, useCard ? -data.amount : 0);
     }
   }
 
@@ -92,6 +98,19 @@ export async function listExpenses(opts?: {
   return { items, total, page, pageSize, pages: Math.max(1, Math.ceil(total / pageSize)) };
 }
 
+function methodToDeltas(
+  method: string | undefined,
+  amount: number,
+  direction: 'in' | 'out'
+): { cash: number; card: number } {
+  const sign = direction === 'in' ? 1 : -1;
+  const useCard = method === 'card' || method === 'card_to_card';
+  return {
+    cash: useCard ? 0 : sign * amount,
+    card: useCard ? sign * amount : 0,
+  };
+}
+
 export async function deleteExpense(id: string, password?: string) {
   await assertDeletePassword(password);
   const expense = await Expense.findById(id);
@@ -101,13 +120,99 @@ export async function deleteExpense(id: string, password?: string) {
     referenceId: expense._id.toString(),
     referenceModel: 'Expense',
   });
-  for (const tx of txs) {
-    const delta = tx.direction === 'in' ? -tx.amount : tx.amount;
-    await updateBalances(delta, 0);
-    await tx.deleteOne();
+  if (txs.length) {
+    for (const tx of txs) {
+      const useCard =
+        expense.paymentMethod === 'card' ||
+        expense.paymentMethod === 'card_to_card' ||
+        /کارت/.test(tx.description || '');
+      if (tx.direction === 'in') {
+        await updateBalances(useCard ? 0 : -tx.amount, useCard ? -tx.amount : 0);
+      } else {
+        await updateBalances(useCard ? 0 : tx.amount, useCard ? tx.amount : 0);
+      }
+      await tx.deleteOne();
+    }
+  } else {
+    // سازگاری با هزینه‌های قدیمی بدون تراکنش
+    const inflow = expense.type === 'loan_received';
+    const d = methodToDeltas(expense.paymentMethod, expense.amount, inflow ? 'in' : 'out');
+    await updateBalances(-d.cash, -d.card);
   }
   await expense.deleteOne();
   return { ok: true, id };
+}
+
+/** ویرایش هزینه با رمز — برگشت اثر قبلی و اعمال دوباره */
+export async function updateExpense(
+  id: string,
+  password: string | undefined,
+  data: {
+    type?: ExpenseType;
+    categoryId?: string;
+    amount?: number;
+    description?: string;
+    date?: Date;
+    notes?: string;
+    paymentMethod?: 'cash' | 'card' | 'card_to_card';
+  }
+) {
+  await assertDeletePassword(password);
+  const expense = await Expense.findById(id);
+  if (!expense) throw new Error('هزینه یافت نشد');
+
+  // برگشت اثر قبلی
+  const oldTxs = await CashTransaction.find({
+    referenceId: expense._id.toString(),
+    referenceModel: 'Expense',
+  });
+  for (const tx of oldTxs) {
+    const useCard =
+      expense.paymentMethod === 'card' ||
+      expense.paymentMethod === 'card_to_card' ||
+      /کارت/.test(tx.description || '');
+    if (tx.direction === 'in') {
+      await updateBalances(useCard ? 0 : -tx.amount, useCard ? -tx.amount : 0);
+    } else {
+      await updateBalances(useCard ? 0 : tx.amount, useCard ? tx.amount : 0);
+    }
+    await tx.deleteOne();
+  }
+
+  if (data.type !== undefined) expense.type = data.type;
+  if (data.categoryId !== undefined) expense.categoryId = data.categoryId as never;
+  if (data.amount !== undefined) expense.amount = data.amount;
+  if (data.description !== undefined) expense.description = data.description;
+  if (data.date !== undefined) {
+    validateTransactionDate(data.date);
+    expense.date = data.date;
+  }
+  if (data.notes !== undefined) expense.notes = data.notes;
+  if (data.paymentMethod !== undefined) expense.paymentMethod = data.paymentMethod;
+  await expense.save();
+
+  const paymentMethod = expense.paymentMethod || 'cash';
+  const isInflow = expense.type === 'loan_received';
+  const useCard = paymentMethod === 'card' || paymentMethod === 'card_to_card';
+  const methodLabel =
+    paymentMethod === 'cash' ? 'نقد' : paymentMethod === 'card_to_card' ? 'کارت به کارت' : 'کارت';
+
+  await CashTransaction.create({
+    type: isInflow ? 'adjustment' : 'expense',
+    amount: expense.amount,
+    direction: isInflow ? 'in' : 'out',
+    description: `${expense.description} (${methodLabel})`,
+    referenceId: expense._id.toString(),
+    referenceModel: 'Expense',
+    date: expense.date,
+  });
+  if (isInflow) {
+    await updateBalances(useCard ? 0 : expense.amount, useCard ? expense.amount : 0);
+  } else {
+    await updateBalances(useCard ? 0 : -expense.amount, useCard ? -expense.amount : 0);
+  }
+
+  return expense;
 }
 
 /** واریز کارت — اختیاری روی بدهی مشتری اعمال می‌شود */
@@ -263,4 +368,79 @@ export async function listCashTransactions(opts?: {
   }
   const limit = Math.min(100, Math.max(10, opts?.limit || 40));
   return CashTransaction.find(filter).sort({ date: -1, createdAt: -1 }).limit(limit);
+}
+
+function inferMethodFromTx(tx: {
+  paymentMethod?: string;
+  description?: string;
+  type?: string;
+}): 'cash' | 'card' | 'card_to_card' {
+  if (tx.paymentMethod === 'cash' || tx.paymentMethod === 'card' || tx.paymentMethod === 'card_to_card') {
+    return tx.paymentMethod;
+  }
+  const d = tx.description || '';
+  if (/کارت به کارت|کارت‌به‌کارت|card_to_card/i.test(d)) return 'card_to_card';
+  if (/کارت|پوز|کارتخوان|card/i.test(d)) return 'card';
+  return 'cash';
+}
+
+function useCardMethod(m: 'cash' | 'card' | 'card_to_card') {
+  return m === 'card' || m === 'card_to_card';
+}
+
+function methodLabelFa(m: 'cash' | 'card' | 'card_to_card') {
+  return m === 'cash' ? 'نقد' : m === 'card_to_card' ? 'کارت به کارت' : 'کارت';
+}
+
+/**
+ * تغییر روش پرداخت یک گردش صندوق (نقد ↔ کارت) و اصلاح موجودی.
+ * برای Expense / CompanyPayment هم مدل مرجع را آپدیت می‌کند.
+ */
+export async function updateCashTransactionPaymentMethod(
+  id: string,
+  password: string | undefined,
+  paymentMethod: 'cash' | 'card' | 'card_to_card'
+) {
+  await assertDeletePassword(password);
+  const tx = await CashTransaction.findById(id);
+  if (!tx) throw new Error('تراکنش یافت نشد');
+  if (tx.type === 'sale_cash' || tx.type === 'sale_card' || tx.type === 'sale_credit') {
+    throw new Error('روش پرداخت فاکتور فروش را از ویرایش فاکتور تغییر دهید');
+  }
+  if (tx.type === 'card_deposit') {
+    throw new Error('واریز کارتخوان همیشه کارتی است');
+  }
+
+  const prev = inferMethodFromTx(tx);
+  if (prev === paymentMethod) {
+    tx.paymentMethod = paymentMethod;
+    await tx.save();
+    return tx;
+  }
+
+  const sign = tx.direction === 'in' ? 1 : -1;
+  const prevCard = useCardMethod(prev);
+  const nextCard = useCardMethod(paymentMethod);
+
+  // برداشتن اثر قبلی
+  await updateBalances(prevCard ? 0 : -sign * tx.amount, prevCard ? -sign * tx.amount : 0);
+  // اعمال اثر جدید
+  await updateBalances(nextCard ? 0 : sign * tx.amount, nextCard ? sign * tx.amount : 0);
+
+  tx.paymentMethod = paymentMethod;
+  // به‌روز کردن برچسب داخل توضیح اگر قبلاً پرانتز روش داشت
+  const base = (tx.description || '').replace(/\s*\((نقد|کارت به کارت|کارت)\)\s*$/, '').trim();
+  tx.description = `${base} (${methodLabelFa(paymentMethod)})`;
+  await tx.save();
+
+  if (tx.referenceModel === 'Expense' && tx.referenceId) {
+    await Expense.findByIdAndUpdate(tx.referenceId, { paymentMethod });
+  }
+  if (tx.referenceModel === 'CompanyPayment' && tx.referenceId) {
+    await CompanyPayment.findByIdAndUpdate(tx.referenceId, {
+      method: paymentMethod === 'card_to_card' ? 'card_to_card' : paymentMethod,
+    });
+  }
+
+  return tx;
 }

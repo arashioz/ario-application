@@ -20,6 +20,7 @@ import {
   IonRefresherContent,
   IonSegment,
   IonSegmentButton,
+  IonCheckbox,
   useIonViewWillEnter,
   RefresherEventDetail,
 } from '@ionic/react';
@@ -258,8 +259,10 @@ const Sale: React.FC = () => {
   const [payCard, setPayCard] = useState('');
   const [payCardToCard, setPayCardToCard] = useState('');
   const [payCredit, setPayCredit] = useState('');
+  const [creditIsCheck, setCreditIsCheck] = useState(false);
   const [workOn, setWorkOn] = useState(false);
-  const [priceTier, setPriceTier] = useState<PriceTier>('retail');
+  const [priceTier, setPriceTier] = useState<PriceTier | null>(null);
+  const [dateModalOpen, setDateModalOpen] = useState(false);
   const [deliveryMode, setDeliveryMode] = useState<'company' | 'self'>('company');
   const [isGolden, setIsGolden] = useState(false);
   const [discountMode, setDiscountMode] = useState<DiscountMode>('invoice');
@@ -304,8 +307,11 @@ const Sale: React.FC = () => {
   const [prodModalUnit, setProdModalUnit] = useState<'kg' | 'package'>('package');
   const [prodModalQty, setProdModalQty] = useState('1');
   const [prodModalPrice, setProdModalPrice] = useState('');
-  const needsCustomer = priceTier !== 'retail';
+  const needsCustomer = priceTier != null && priceTier !== 'retail';
   const isWholesaleCustomer = customerPreferredTier === 'wholesale';
+  /** تا وقتی تیو قیمت انتخاب نشده، قیمت‌گذاری با پیش‌فرض تکی حساب می‌شود ولی UI قفل است */
+  const calcTier: PriceTier = priceTier || 'retail';
+  const stepsUnlocked = priceTier != null;
 
   const selectPriceTier = (t: PriceTier) => {
     if (t === 'retail' && isWholesaleCustomer) {
@@ -753,23 +759,83 @@ const Sale: React.FC = () => {
     if (suggest.recentInvoices) setPrevInvoices(suggest.recentInvoices);
   };
 
-  /** سقف تخفیف تا ضرر نکنی: حداکثر ۶۰٪ سود این سبد */
-  const safeCartCap = useMemo(() => {
+  /** تحلیل سود: خرید + درصد پیشنهادی + قیمت واقعی بعد از تخفیف */
+  const marginInfo = useMemo(() => {
     let cost = 0;
+    let suggestedGross = 0;
+    const lineHints: Array<{
+      key: string;
+      name: string;
+      costPerKg: number;
+      pct: number;
+      suggestedPerKg: number;
+      yourPerKg: number;
+      diffPerKg: number;
+      status: 'low' | 'ok' | 'high';
+    }> = [];
+
     for (const l of lines) {
       const p = products.find((x) => x._id === l.productId);
       const costPerKg = p ? productCost(p, costBasis) : 0;
+      const pct = p ? tierPercent(p, calcTier) : 0;
+      const suggestedPerKg = p
+        ? l.suggestedPerKg > 0
+          ? l.suggestedPerKg
+          : priceFromPercent(costPerKg, pct)
+        : 0;
       const qty = parseFloat(l.qtyInput) || 0;
-      const { qtyKg } = resolveQty(l.unit, qty, l.kgPerPackage);
+      const price = parseAmount(l.unitPrice) || 0;
+      const { qtyKg } = resolveLineAmount(l.unit, price, qty, l.kgPerPackage);
+      const yourPerKg =
+        l.unit === 'package' && l.kgPerPackage > 0
+          ? Math.round(price / l.kgPerPackage)
+          : Math.round(price);
       cost += costPerKg * qtyKg;
+      suggestedGross += suggestedPerKg * qtyKg;
+      const diff = yourPerKg - suggestedPerKg;
+      const status: 'low' | 'ok' | 'high' =
+        Math.abs(diff) <= Math.max(100, suggestedPerKg * 0.01)
+          ? 'ok'
+          : diff < 0
+            ? 'low'
+            : 'high';
+      lineHints.push({
+        key: l.key,
+        name: l.productName,
+        costPerKg,
+        pct,
+        suggestedPerKg,
+        yourPerKg,
+        diffPerKg: diff,
+        status,
+      });
     }
-    const profit = Math.max(0, totals.amount - cost);
+
+    const targetProfit = suggestedGross - cost;
+    /** سود واقعی بعد از تخفیف — تخفیف از سود فروش کم می‌کند */
+    const actualProfit = totals.net - cost;
+
     return {
-      cost,
-      profit,
-      maxDiscount: Math.max(0, Math.floor(profit * 0.6)),
+      cost: Math.round(cost),
+      suggestedGross: Math.round(suggestedGross),
+      targetProfit: Math.round(targetProfit),
+      actualProfit: Math.round(actualProfit),
+      vsTarget: Math.round(actualProfit - targetProfit),
+      discount: totals.disc,
+      net: totals.net,
+      lineHints,
+      maxDiscount: Math.max(0, Math.floor(Math.max(0, targetProfit) * 0.6)),
     };
-  }, [lines, products, totals.amount, costBasis]);
+  }, [lines, products, totals.net, totals.disc, costBasis, calcTier]);
+
+  const safeCartCap = useMemo(
+    () => ({
+      cost: marginInfo.cost,
+      profit: Math.max(0, marginInfo.targetProfit),
+      maxDiscount: marginInfo.maxDiscount,
+    }),
+    [marginInfo]
+  );
 
   const applyOffer = (amount: number, label: string) => {
     const capped = roundToman(Math.min(amount, safeCartCap.maxDiscount || amount));
@@ -1129,7 +1195,7 @@ const Sale: React.FC = () => {
         missing.push(sl.productName);
         continue;
       }
-      const percent = tierPercent(p, priceTier);
+      const percent = tierPercent(p, calcTier);
       const cost = productCost(p, costBasis);
       const suggested = priceFromPercent(cost, percent);
       const unit = sl.unit || 'package';
@@ -1304,7 +1370,7 @@ const Sale: React.FC = () => {
   };
 
   const openProductModal = (p: Product, existing?: LineItem) => {
-    const percent = tierPercent(p, priceTier);
+    const percent = tierPercent(p, calcTier);
     const cost = productCost(p, costBasis);
     const suggested = priceFromPercent(cost, percent);
     if (existing) {
@@ -1328,7 +1394,7 @@ const Sale: React.FC = () => {
       setProdModalUnit(unit);
       return;
     }
-    const percent = tierPercent(p, priceTier);
+    const percent = tierPercent(p, calcTier);
     const cost = productCost(p, costBasis);
     const suggested = priceFromPercent(cost, percent);
     setProdModalUnit(unit);
@@ -1356,7 +1422,7 @@ const Sale: React.FC = () => {
       openAddCustomerModal();
       return;
     }
-    const percent = tierPercent(p, priceTier);
+    const percent = tierPercent(p, calcTier);
     const cost = productCost(p, costBasis);
     const suggested = priceFromPercent(cost, percent);
     const priceStr = prodModalPrice || formatMoneyInput(String(Math.round(suggested)));
@@ -1430,7 +1496,7 @@ const Sale: React.FC = () => {
       prev.map((l) => {
         const p = products.find((x) => x._id === l.productId);
         if (!p) return l;
-        const percent = tierPercent(p, priceTier);
+        const percent = tierPercent(p, calcTier);
         const cost = productCost(p, costBasis);
         const suggested = priceFromPercent(cost, percent);
         const price = l.unit === 'package' ? suggested * (l.kgPerPackage || 5) : suggested;
@@ -1449,6 +1515,14 @@ const Sale: React.FC = () => {
   };
 
   const submit = async () => {
+    if (!priceTier) {
+      setToast({
+        open: true,
+        msg: 'اول نوع فروش را انتخاب کنید: تکی / سوپرمارکت / عمده',
+        color: 'warning',
+      });
+      return;
+    }
     if (!lines.length) {
       setToast({ open: true, msg: 'اقلامی نیست — اول محصول اضافه کنید', color: 'danger' });
       return;
@@ -1507,6 +1581,10 @@ const Sale: React.FC = () => {
             paymentMethod === 'credit' || (paymentMethod === 'mixed' && (parseAmount(payCredit) || 0) > 0)
               ? dueDate || undefined
               : undefined,
+          creditIsCheck:
+            creditIsCheck &&
+            (paymentMethod === 'credit' ||
+              (paymentMethod === 'mixed' && (parseAmount(payCredit) || 0) > 0)),
           priceTier,
           deliveryMode: !isAdmin ? deliveryMode : undefined,
           isGolden,
@@ -1641,7 +1719,8 @@ const Sale: React.FC = () => {
       setDueDate('');
       setDate(todayIso());
       setDeliveryMode('company');
-      setPriceTier('retail');
+      setPriceTier(null);
+      setCreditIsCheck(false);
       setHistOpen(false);
       setCustModalOpen(false);
     } catch (e) {
@@ -1728,6 +1807,12 @@ const Sale: React.FC = () => {
                 {bulkCount > 0 ? ` · امروز ${bulkCount.toLocaleString('fa-IR')} فاکتور ثبت شد` : ''}
               </p>
             )}
+            <button type="button" className="sale-date-btn" onClick={() => setDateModalOpen(true)}>
+              <span className="sale-date-label">تاریخ فاکتور</span>
+              <span className="sale-date-value">
+                {date ? new Date(date + 'T12:00:00').toLocaleDateString('fa-IR') : 'انتخاب'}
+              </span>
+            </button>
             <div className="sale-tier-row">
               {(Object.keys(TIER_LABELS) as PriceTier[]).map((t) => {
                 const lockedRetail = t === 'retail' && isWholesaleCustomer;
@@ -1745,11 +1830,17 @@ const Sale: React.FC = () => {
               })}
               <IonToggle
                 checked={isGolden}
+                disabled={!stepsUnlocked}
                 onIonChange={(e) => setIsGolden(e.detail.checked)}
                 title="فاکتور ویژه / VIP"
               />
             </div>
-            {(isGolden || (goldenAutoEnabled && totals.kg >= (goldenMinKg || 500))) && (
+            {!stepsUnlocked && (
+              <p className="hint sale-step-hint">
+                مرحله ۱: تکی / سوپرمارکت / عمده را انتخاب کنید تا بقیه فیلدها فعال شود
+              </p>
+            )}
+            {stepsUnlocked && (isGolden || (goldenAutoEnabled && totals.kg >= (goldenMinKg || 500))) && (
               <div className="golden-perks">
                 <div className="golden-perks-title">⭐ امتیاز مدیر فروش (فاکتور طلایی)</div>
                 {goldenSuggestions.map((t) => (
@@ -1767,48 +1858,12 @@ const Sale: React.FC = () => {
                   </div>
                 ))}
                 <div className="chip-row">
-                  <IonButton
-                    size="small"
-                    className="golden-perk-btn"
-                    onClick={() => applyGoldenPerk('pct5')}
-                  >
-                    تخفیف ۵٪
-                  </IonButton>
-                  <IonButton
-                    size="small"
-                    className="golden-perk-btn"
-                    onClick={() => applyGoldenPerk('pct10')}
-                  >
-                    تخفیف ۱۰٪
-                  </IonButton>
-                  <IonButton
-                    size="small"
-                    className="golden-perk-btn"
-                    onClick={() => applyGoldenPerk('pct15')}
-                  >
-                    تخفیف ۱۵٪
-                  </IonButton>
-                  <IonButton
-                    size="small"
-                    className="golden-perk-btn"
-                    onClick={() => applyGoldenPerk('perkg')}
-                  >
-                    ۱۰۰۰ ت/کیلو
-                  </IonButton>
-                  <IonButton
-                    size="small"
-                    className="golden-perk-btn"
-                    onClick={() => applyGoldenPerk('gift1')}
-                  >
-                    اشانتیون ۱ بسته
-                  </IonButton>
-                  <IonButton
-                    size="small"
-                    className="golden-perk-btn special"
-                    onClick={() => applyGoldenPerk('vip_combo')}
-                  >
-                    VIP: ۵٪ + اشانتیون
-                  </IonButton>
+                  <IonButton size="small" className="golden-perk-btn" onClick={() => applyGoldenPerk('pct5')}>تخفیف ۵٪</IonButton>
+                  <IonButton size="small" className="golden-perk-btn" onClick={() => applyGoldenPerk('pct10')}>تخفیف ۱۰٪</IonButton>
+                  <IonButton size="small" className="golden-perk-btn" onClick={() => applyGoldenPerk('pct15')}>تخفیف ۱۵٪</IonButton>
+                  <IonButton size="small" className="golden-perk-btn" onClick={() => applyGoldenPerk('perkg')}>۱۰۰۰ ت/کیلو</IonButton>
+                  <IonButton size="small" className="golden-perk-btn" onClick={() => applyGoldenPerk('gift1')}>اشانتیون ۱ بسته</IonButton>
+                  <IonButton size="small" className="golden-perk-btn special" onClick={() => applyGoldenPerk('vip_combo')}>VIP: ۵٪ + اشانتیون</IonButton>
                 </div>
               </div>
             )}
@@ -1817,27 +1872,35 @@ const Sale: React.FC = () => {
                 مشتری عمده — فاکتور تکی مجاز نیست
               </p>
             )}
-            <div className="chip-row" style={{ marginTop: 6 }}>
-              <IonChip
-                className={costBasis === 'last' ? 'ios-chip-active' : 'ios-chip'}
-                onClick={() => void applyCostBasis('last')}
-              >
-                قیمت آخر خرید
-              </IonChip>
-              <IonChip
-                className={costBasis === 'weighted' ? 'ios-chip-active' : 'ios-chip'}
-                onClick={() => void applyCostBasis('weighted')}
-              >
-                میانگین موزون
-              </IonChip>
-            </div>
-            <p className="hint" style={{ margin: '4px 0 0' }}>
-              {costBasis === 'last'
-                ? 'قیمت پیشنهادی بر اساس آخرین خرید است — روی محصول هزینه و پیشنهاد را ببینید'
-                : 'قیمت پیشنهادی بر اساس میانگین موزون موجودی است — روی محصول هزینه و پیشنهاد را ببینید'}
-            </p>
+            {stepsUnlocked && (
+              <>
+                <div className="chip-row" style={{ marginTop: 6 }}>
+                  <IonChip
+                    className={costBasis === 'last' ? 'ios-chip-active' : 'ios-chip'}
+                    onClick={() => void applyCostBasis('last')}
+                  >
+                    قیمت آخر خرید
+                  </IonChip>
+                  <IonChip
+                    className={costBasis === 'weighted' ? 'ios-chip-active' : 'ios-chip'}
+                    onClick={() => void applyCostBasis('weighted')}
+                  >
+                    میانگین موزون
+                  </IonChip>
+                </div>
+                <p className="hint" style={{ margin: '4px 0 0' }}>
+                  {costBasis === 'last'
+                    ? 'قیمت پیشنهادی بر اساس آخرین خرید است — روی محصول هزینه و پیشنهاد را ببینید'
+                    : 'قیمت پیشنهادی بر اساس میانگین موزون موجودی است — روی محصول هزینه و پیشنهاد را ببینید'}
+                </p>
+              </>
+            )}
           </div>
 
+          <div className={stepsUnlocked ? 'sale-steps' : 'sale-steps sale-steps-locked'}>
+            {!stepsUnlocked && (
+              <div className="sale-lock-banner">برای ادامه، نوع فروش (تکی / سوپر / عمده) را بالا انتخاب کنید</div>
+            )}
           <div className="ios-glass-card sale-navy-card">
             <div className="ios-row" style={{ marginBottom: 6 }}>
               <strong>مشتری</strong>
@@ -2006,7 +2069,7 @@ const Sale: React.FC = () => {
             {filtered.map((p) => {
               const stock = p.stockKg ?? p.stock ?? 0;
               const inLines = lineQty(p._id);
-              const percent = tierPercent(p, priceTier);
+              const percent = tierPercent(p, calcTier);
               const cost = productCost(p, costBasis);
               const suggested = priceFromPercent(cost, percent);
               const avg = p.avgCostPerKg ?? p.purchasePrice ?? 0;
@@ -2101,6 +2164,28 @@ const Sale: React.FC = () => {
                           {formatKg(qtyKg)} · {Math.round(qtyPackages).toLocaleString('fa-IR')} بسته
                           {lineDiscAmt > 0 ? ` · تخفیف ${formatToman(lineDiscAmt)}` : ''}
                         </div>
+                        {(() => {
+                          const hint = marginInfo.lineHints.find((h) => h.key === l.key);
+                          if (!hint) return null;
+                          return (
+                            <div className="ios-caption">
+                              خرید {formatToman(hint.costPerKg)} · {hint.pct.toLocaleString('fa-IR')}٪
+                              → {formatToman(hint.suggestedPerKg)}
+                              {hint.status === 'low' && (
+                                <span style={{ color: 'var(--ion-color-danger)' }}>
+                                  {' '}
+                                  · قیمت کم
+                                </span>
+                              )}
+                              {hint.status === 'high' && (
+                                <span style={{ color: 'var(--ion-color-success)' }}>
+                                  {' '}
+                                  · بالاتر از پیشنهاد
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </div>
                     </div>
                     <div className="cart-item-actions" onClick={(e) => e.stopPropagation()}>
@@ -2137,9 +2222,86 @@ const Sale: React.FC = () => {
             })}
           </div>
 
+          {lines.length > 0 && (
+            <div className="ios-glass-card sale-navy-card sale-margin-card">
+              <div className="ios-section-title" style={{ marginTop: 0 }}>
+                سود این فاکتور
+              </div>
+              <p className="hint" style={{ marginTop: 0 }}>
+                سود = مبلغ نهایی بعد از تخفیف − هزینه خرید. تخفیف از سود کم می‌کند؛ هزینه مغازه جداست.
+              </p>
+              <div className="stat-row">
+                <span className="stat-label">هزینه خرید (اولیه)</span>
+                <span className="stat-value">{formatToman(marginInfo.cost)}</span>
+              </div>
+              <div className="stat-row">
+                <span className="stat-label">پیشنهادی با درصد شما</span>
+                <span className="stat-value">{formatToman(marginInfo.suggestedGross)}</span>
+              </div>
+              <div className="stat-row">
+                <span className="stat-label">سود هدف (با درصد)</span>
+                <span className="stat-value">{formatToman(marginInfo.targetProfit)}</span>
+              </div>
+              {marginInfo.discount > 0 && (
+                <div className="stat-row">
+                  <span className="stat-label">تخفیف</span>
+                  <span className="stat-value danger">−{formatToman(marginInfo.discount)}</span>
+                </div>
+              )}
+              <div className="stat-row">
+                <span className="stat-label">فروش نهایی</span>
+                <span className="stat-value">{formatToman(marginInfo.net)}</span>
+              </div>
+              <div className="stat-row">
+                <span className="stat-label">سود واقعی این فاکتور</span>
+                <span
+                  className={`stat-value ${marginInfo.actualProfit >= 0 ? 'success' : 'danger'}`}
+                >
+                  {formatToman(marginInfo.actualProfit)}
+                </span>
+              </div>
+              {marginInfo.vsTarget !== 0 && (
+                <div className="stat-row">
+                  <span className="stat-label">نسبت به هدف درصد</span>
+                  <span
+                    className={`stat-value ${marginInfo.vsTarget >= 0 ? 'success' : 'danger'}`}
+                  >
+                    {marginInfo.vsTarget >= 0 ? '+' : ''}
+                    {formatToman(marginInfo.vsTarget)}
+                  </span>
+                </div>
+              )}
+              {marginInfo.lineHints.map((h) => (
+                <div key={h.key} className="ios-caption" style={{ marginTop: 6 }}>
+                  <strong>{h.name}</strong>
+                  {' · خرید '}
+                  {formatToman(h.costPerKg)}
+                  {' · '}
+                  {h.pct.toLocaleString('fa-IR')}٪
+                  {' → پیشنهادی '}
+                  {formatToman(h.suggestedPerKg)}
+                  {' · شما '}
+                  {formatToman(h.yourPerKg)}
+                  {h.status === 'low' && (
+                    <span style={{ color: 'var(--ion-color-danger)' }}>
+                      {' '}
+                      · کم {formatToman(Math.abs(h.diffPerKg))}/کیلو
+                    </span>
+                  )}
+                  {h.status === 'high' && (
+                    <span style={{ color: 'var(--ion-color-success)' }}>
+                      {' '}
+                      · بیشتر {formatToman(h.diffPerKg)}/کیلو
+                    </span>
+                  )}
+                  {h.status === 'ok' && <span> · نزدیک پیشنهاد</span>}
+                </div>
+              ))}
+            </div>
+          )}
+
           <details className="sale-details ios-glass-card sale-navy-card">
             <summary>تخفیف · {formatToman(totals.net)}</summary>
-            <PersianDateField value={date} onChange={setDate} />
             <div className="chip-row">
               {(
                 [
@@ -2367,8 +2529,26 @@ const Sale: React.FC = () => {
             )}
             {(paymentMethod === 'credit' ||
               (paymentMethod === 'mixed' && (parseAmount(payCredit) || 0) > 0)) && (
-              <PersianDateField label="سررسید نسیه" value={dueDate} onChange={setDueDate} />
+              <>
+                <PersianDateField label="سررسید نسیه" value={dueDate} onChange={setDueDate} />
+                <IonItem lines="none" className="credit-check-item">
+                  <IonCheckbox
+                    slot="start"
+                    checked={creditIsCheck}
+                    onIonChange={(e) => setCreditIsCheck(e.detail.checked)}
+                  />
+                  <IonLabel>
+                    <strong>چک داده</strong>
+                    <p className="ios-caption">اگر مشتری چک داد، تیک بزنید تا در چک‌ها ثبت شود</p>
+                  </IonLabel>
+                </IonItem>
+                {creditIsCheck && (
+                  <div className="sale-check-badge">✓ چک داده — سررسید همان تاریخ نسیه</div>
+                )}
+              </>
             )}
+          </div>
+
           </div>
 
           <IonButton
@@ -2376,7 +2556,7 @@ const Sale: React.FC = () => {
             className="ios-primary-btn"
             color={isGolden ? 'warning' : 'primary'}
             onClick={submit}
-            disabled={loading}
+            disabled={loading || !stepsUnlocked}
           >
             <IonIcon slot="start" icon={isGolden ? diamondOutline : checkmarkCircleOutline} />
             {loading ? '…' : isAdmin ? `ثبت · ${formatToman(totals.net)}` : 'ارسال برای تأیید'}
@@ -2553,7 +2733,7 @@ const Sale: React.FC = () => {
                       {formatToman(
                         priceFromPercent(
                           productCost(prodModalProduct, costBasis),
-                          tierPercent(prodModalProduct, priceTier)
+                          tierPercent(prodModalProduct, calcTier)
                         )
                       )}
                       /کیلو
@@ -2780,6 +2960,21 @@ const Sale: React.FC = () => {
                 </div>
               </div>
             ))}
+          </IonContent>
+        </IonModal>
+
+
+        <IonModal isOpen={dateModalOpen} onDidDismiss={() => setDateModalOpen(false)} initialBreakpoint={0.45} breakpoints={[0, 0.45, 0.7]}>
+          <IonHeader>
+            <IonToolbar>
+              <IonTitle>تاریخ فاکتور</IonTitle>
+              <IonButtons slot="end">
+                <IonButton onClick={() => setDateModalOpen(false)}>تأیید</IonButton>
+              </IonButtons>
+            </IonToolbar>
+          </IonHeader>
+          <IonContent className="ion-padding">
+            <PersianDateField label="تاریخ" value={date} onChange={setDate} />
           </IonContent>
         </IonModal>
 

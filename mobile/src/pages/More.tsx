@@ -11,7 +11,6 @@ import {
   useIonViewWillEnter,
 } from '@ionic/react';
 import {
-  personOutline,
   peopleOutline,
   walletOutline,
   flagOutline,
@@ -30,6 +29,7 @@ import {
   cloudOfflineOutline,
   cloudDoneOutline,
   statsChartOutline,
+  cartOutline,
 } from 'ionicons/icons';
 import { useAuth } from '../auth/AuthContext';
 import { wsClient } from '../api/ws';
@@ -139,7 +139,6 @@ const More: React.FC = () => {
         desc: 'فروش و خرید',
       },
       { href: '/orders', icon: fileTrayFullOutline, label: 'سفارش‌ها', desc: 'تأیید و ارسال' },
-      { href: '/customers', icon: personOutline, label: 'مشتریان', desc: 'لیست و ثبت' },
       {
         href: '/customers-map',
         icon: mapOutline,
@@ -155,6 +154,14 @@ const More: React.FC = () => {
         desc: 'صندوق و بازه',
       },
     ];
+    if (isAdmin) {
+      sales.unshift({
+        href: '/purchase',
+        icon: cartOutline,
+        label: 'خرید',
+        desc: 'فاکتور خرید از شرکت',
+      });
+    }
 
     const partner: MoreLink[] = [];
     if (isAdmin) {

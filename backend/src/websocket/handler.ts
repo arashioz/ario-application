@@ -15,10 +15,11 @@ import {
   adjustProductStock,
   saveProductImage,
   getPublicCatalog,
+  reorderCatalogProducts,
 } from '../services/productService';
 import { createPurchaseInvoice, listPurchaseInvoices, deletePurchaseInvoice, updatePurchaseInvoice } from '../services/purchaseService';
 import { createSaleInvoice, listSaleInvoices, recordDebtPayment, recordCustomerDebtPayment, updateDebtor, approveSale, shipSale, cancelSale, getSalePdfHtml, deleteSaleInvoice, updateSaleInvoice, deactivateSaleInvoice, deactivateUnshippedSales } from '../services/saleService';
-import { createExpense, recordCardDeposit, listExpenses, listCardDeposits, deleteExpense, deleteCardDeposit, deleteCompanyPayment, listCashTransactions } from '../services/expenseService';
+import { createExpense, updateExpense, recordCardDeposit, listExpenses, listCardDeposits, deleteExpense, deleteCardDeposit, deleteCompanyPayment, listCashTransactions, updateCashTransactionPaymentMethod } from '../services/expenseService';
 import { wipeDevData, listWipeSections, getMongoCompassHint } from '../services/devWipeService';
 import { createCustomer, listCustomers, getCustomer, getCustomerInvoices, updateCustomer, getCustomerSuggestedPricing, quickFindCustomer, getCustomerCrmInsights, listCustomerDirectory, getCustomersMap } from '../services/customerService';
 import {
@@ -419,6 +420,15 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
       return { type: 'product.uploadImage', payload: result };
     }
 
+    case 'product.catalog.reorder': {
+      const user = await requireAuth(ws, msg);
+      requireAdmin(user);
+      const ids = Array.isArray(p.orderedIds) ? (p.orderedIds as string[]) : [];
+      const result = await reorderCatalogProducts(ids);
+      notifyDataChange('product', 'reorder', result);
+      return { type: 'product.catalog.reorder', payload: result };
+    }
+
     case 'catalog.public': {
       // برای پیش‌نمایش داخل اپ (با auth هم می‌شود)
       await requireAuth(ws, msg);
@@ -642,6 +652,7 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
           appliedOffer: p.appliedOffer as string | undefined,
           date: p.date ? new Date(String(p.date)) : undefined,
           dueDate: p.dueDate ? new Date(String(p.dueDate)) : undefined,
+          creditIsCheck: p.creditIsCheck === true,
           priceTier: p.priceTier as 'retail' | 'supermarket' | 'wholesale' | undefined,
           isGolden: p.isGolden as boolean | undefined,
           requiresApproval: user.role === 'marketer' || p.requiresApproval === true,
@@ -784,6 +795,18 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
       };
     }
 
+    case 'cash.updateMethod': {
+      const user = await requireAuth(ws, msg);
+      requireAdmin(user);
+      const result = await updateCashTransactionPaymentMethod(
+        String(p.id),
+        p.password as string | undefined,
+        (p.paymentMethod as 'cash' | 'card' | 'card_to_card') || 'cash'
+      );
+      notifyDataChange('cash', 'update', result);
+      return { type: 'cash.updateMethod', payload: result };
+    }
+
     case 'expense.create': {
       const user = await requireAuth(ws, msg);
       requireAdmin(user);
@@ -797,10 +820,30 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
           date: p.date ? new Date(String(p.date)) : undefined,
           notes: p.notes as string | undefined,
           affectsCash: p.affectsCash as boolean | undefined,
+          paymentMethod: p.paymentMethod as 'cash' | 'card' | 'card_to_card' | undefined,
         })
       );
       notifyDataChange('expense', 'create', result);
       return { type: 'expense.create', payload: result };
+    }
+
+    case 'expense.update': {
+      const user = await requireAuth(ws, msg);
+      requireAdmin(user);
+      const typeKey = p.type
+        ? resolveExpenseTypeKey(String(p.type || p.categoryName || 'other'))
+        : undefined;
+      const result = await updateExpense(String(p.id), p.password as string | undefined, {
+        type: typeKey,
+        categoryId: p.categoryId as string | undefined,
+        amount: p.amount !== undefined ? Number(p.amount) : undefined,
+        description: p.description as string | undefined,
+        date: p.date ? new Date(String(p.date)) : undefined,
+        notes: p.notes as string | undefined,
+        paymentMethod: p.paymentMethod as 'cash' | 'card' | 'card_to_card' | undefined,
+      });
+      notifyDataChange('expense', 'update', result);
+      return { type: 'expense.update', payload: result };
     }
 
     case 'expenseCategory.list': {
@@ -891,7 +934,7 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
         createCompanyPayment({
           supplier: p.supplier as string | undefined,
           amount: Number(p.amount),
-          method: (p.method as 'cash' | 'card') || 'cash',
+          method: (p.method as 'cash' | 'card' | 'card_to_card') || 'cash',
           date: p.date ? new Date(String(p.date)) : undefined,
           notes: p.notes as string | undefined,
           supplierDebtId: p.supplierDebtId as string | undefined,

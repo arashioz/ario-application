@@ -13,12 +13,12 @@ import {
 import { IonReactRouter } from '@ionic/react-router';
 import {
   homeOutline,
-  cartOutline,
   receiptOutline,
   chatbubbleEllipsesOutline,
   gridOutline,
   fileTrayFullOutline,
   bicycleOutline,
+  peopleOutline,
 } from 'ionicons/icons';
 
 import { AuthProvider, useAuth } from './auth/AuthContext';
@@ -176,12 +176,10 @@ const AuthedApp: React.FC = () => {
           <IonIcon icon={homeOutline} />
           <IonLabel>خانه</IonLabel>
         </IonTabButton>
-        {isAdmin && (
-          <IonTabButton tab="purchase" href="/purchase">
-            <IonIcon icon={cartOutline} />
-            <IonLabel>خرید</IonLabel>
-          </IonTabButton>
-        )}
+        <IonTabButton tab="customers" href="/customers">
+          <IonIcon icon={peopleOutline} />
+          <IonLabel>مشتریان</IonLabel>
+        </IonTabButton>
         <IonTabButton tab="sale" href="/sale">
           <IonIcon icon={receiptOutline} />
           <IonLabel>فروش</IonLabel>

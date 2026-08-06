@@ -73,7 +73,7 @@ const SHIP_BY_LABEL: Record<ShippingBy, string> = {
 
 const Orders: React.FC = () => {
   const { isAdmin } = useAuth();
-  const [tab, setTab] = useState<'pending' | 'approved' | 'shipped' | 'delivered' | 'all'>('pending');
+  const [tab, setTab] = useState<'pending' | 'approved' | 'shipped' | 'delivered' | 'all'>('approved');
   const [list, setList] = useState<SaleInv[]>([]);
   const [drivers, setDrivers] = useState<Driver[]>([]);
   const [shipNotes, setShipNotes] = useState<Record<string, string>>({});
@@ -203,17 +203,17 @@ const Orders: React.FC = () => {
           <IonRefresherContent />
         </IonRefresher>
 
-        <div className="ion-padding compact">
+        <div className="ion-padding orders-page">
           <IonSegment
             value={tab}
             className="ios-segment"
-            onIonChange={(e) => setTab((e.detail.value as typeof tab) || 'pending')}
+            onIonChange={(e) => setTab((e.detail.value as typeof tab) || 'approved')}
           >
-            <IonSegmentButton value="pending">
-              <IonLabel>تأیید</IonLabel>
-            </IonSegmentButton>
             <IonSegmentButton value="approved">
               <IonLabel>آماده ارسال</IonLabel>
+            </IonSegmentButton>
+            <IonSegmentButton value="pending">
+              <IonLabel>تأیید</IonLabel>
             </IonSegmentButton>
             <IonSegmentButton value="shipped">
               <IonLabel>ارسال‌شده</IonLabel>
