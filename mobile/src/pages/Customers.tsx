@@ -9,6 +9,7 @@ import {
   IonLabel,
   IonInput,
   IonButton,
+  IonButtons,
   IonSearchbar,
   IonToast,
   IonRefresher,
@@ -17,10 +18,12 @@ import {
   IonBadge,
   IonSegment,
   IonSegmentButton,
+  IonModal,
   useIonViewWillEnter,
   RefresherEventDetail,
 } from '@ionic/react';
-import { mapOutline, saveOutline } from 'ionicons/icons';
+import { useHistory } from 'react-router-dom';
+import { mapOutline, saveOutline, addOutline, eyeOutline, receiptOutline } from 'ionicons/icons';
 import { wsClient, newMutationId } from '../api/ws';
 import { formatToman, formatKg, formatDate, normalizePhone } from '../utils/format';
 import { LocationPicker } from '../components/LocationPicker';
@@ -42,7 +45,59 @@ interface CustomerRow {
   tierLabel?: string;
 }
 
+interface CustomerInvoiceItem {
+  productName: string;
+  qtyKg: number;
+  totalPrice: number;
+  unit?: 'kg' | 'package';
+  qtyInput?: number;
+  unitPrice?: number;
+  unitPricePerKg?: number;
+  discount?: number;
+}
+
+interface CustomerInvoice {
+  _id?: string;
+  invoiceNumber: string;
+  totalAmount: number;
+  totalKg?: number;
+  totalProfit?: number;
+  discount?: number;
+  date: string;
+  status?: string;
+  paymentMethod?: string;
+  payment?: { cash?: number; card?: number; credit?: number };
+  priceTier?: string;
+  isGolden?: boolean;
+  notes?: string;
+  items?: CustomerInvoiceItem[];
+}
+
+const STATUS: Record<string, string> = {
+  pending: 'منتظر تأیید',
+  approved: 'تأیید شده',
+  shipped: 'ارسال شده',
+  delivered: 'تحویل شد',
+  cancelled: 'لغو',
+  inactive: 'غیرفعال',
+};
+
+const PAY: Record<string, string> = {
+  cash: 'نقد',
+  card: 'پوز',
+  card_to_card: 'کارت به کارت',
+  credit: 'نسیه',
+  mixed: 'ترکیبی',
+};
+
+const TIER: Record<string, string> = {
+  retail: 'تکی',
+  supermarket: 'سوپرمارکت',
+  wholesale: 'عمده',
+};
+
 const Customers: React.FC = () => {
+  const history = useHistory();
   const [list, setList] = useState<CustomerRow[]>([]);
   const [summary, setSummary] = useState({ gold: 0, silver: 0, bronze: 0, new: 0 });
   const [tab, setTab] = useState<'all' | 'gold' | 'silver' | 'bronze' | 'new'>('all');
@@ -56,9 +111,8 @@ const Customers: React.FC = () => {
   const [editAddress, setEditAddress] = useState('');
   const [editLat, setEditLat] = useState('');
   const [editLng, setEditLng] = useState('');
-  const [invoices, setInvoices] = useState<
-    Array<{ invoiceNumber: string; totalAmount: number; totalKg?: number; date: string; status?: string }>
-  >([]);
+  const [invoices, setInvoices] = useState<CustomerInvoice[]>([]);
+  const [invDetail, setInvDetail] = useState<CustomerInvoice | null>(null);
   const [toast, setToast] = useState({ open: false, msg: '', color: 'success' });
 
   const load = useCallback(async (q?: string) => {
@@ -111,13 +165,7 @@ const Customers: React.FC = () => {
     setEditLng(c.lng != null ? String(c.lng) : '');
     try {
       const res = await wsClient.request<{
-        invoices: Array<{
-          invoiceNumber: string;
-          totalAmount: number;
-          totalKg?: number;
-          date: string;
-          status?: string;
-        }>;
+        invoices: CustomerInvoice[];
       }>('customer.get', { id: c._id });
       setInvoices(res.invoices || []);
     } catch {
@@ -152,6 +200,10 @@ const Customers: React.FC = () => {
       return;
     }
     window.open(`https://maps.google.com/?q=${encodeURIComponent(c.address || c.name)}`, '_blank');
+  };
+
+  const goNewInvoice = (c: CustomerRow) => {
+    history.push('/sale', { followUpCustomerId: c._id });
   };
 
   const filtered = list.filter((c) => (tab === 'all' ? true : c.loyaltyTier === tab));
@@ -285,6 +337,7 @@ const Customers: React.FC = () => {
                   </div>
                   <div className="ios-caption">
                     این ماه: {formatKg(c.monthKg || 0)} · {formatToman(c.monthAmount || 0)}
+                    {(c.totalCredit || 0) > 0 ? ` · نسیه ${formatToman(c.totalCredit || 0)}` : ''}
                   </div>
                 </div>
                 <IonBadge color={tierColor(c.loyaltyTier)}>{c.tierLabel || 'جدید'}</IonBadge>
@@ -319,21 +372,178 @@ const Customers: React.FC = () => {
                     <IonIcon slot="start" icon={mapOutline} />
                     نقشه
                   </IonButton>
+                  <IonButton size="small" color="success" onClick={() => goNewInvoice(selected)}>
+                    <IonIcon slot="start" icon={addOutline} />
+                    فاکتور جدید
+                  </IonButton>
                 </div>
               </div>
-              <div className="ios-section-title">فاکتورهای قبلی</div>
+
+              <div className="ios-section-title">فاکتورهای مشتری</div>
               <div className="ios-glass-card">
                 {invoices.length === 0 && <p className="hint">فاکتوری نیست</p>}
                 {invoices.map((inv) => (
-                  <div key={inv.invoiceNumber} className="day-row">
-                    {formatDate(inv.date)} · {inv.invoiceNumber} · {formatToman(inv.totalAmount)} ·{' '}
-                    {formatKg(inv.totalKg || 0)}
+                  <div key={inv.invoiceNumber} className="inv-card" style={{ marginBottom: 10 }}>
+                    <div className="inv-card-top">
+                      <div>
+                        <div className="inv-card-num">
+                          {inv.isGolden ? '⭐ ' : ''}
+                          {inv.invoiceNumber}
+                        </div>
+                        <div className="inv-card-meta">
+                          {formatDate(inv.date)}
+                          {inv.priceTier ? ` · ${TIER[inv.priceTier] || inv.priceTier}` : ''}
+                          {inv.paymentMethod ? ` · ${PAY[inv.paymentMethod] || inv.paymentMethod}` : ''}
+                        </div>
+                      </div>
+                      <div className="inv-card-amount">
+                        <div className="inv-card-money">{formatToman(inv.totalAmount)}</div>
+                        <div className="inv-card-kg">{formatKg(inv.totalKg || 0)}</div>
+                      </div>
+                    </div>
+                    {(inv.items || []).slice(0, 3).map((it, i) => {
+                      const perKg =
+                        it.unitPricePerKg ||
+                        (it.qtyKg > 0 ? Math.round(it.totalPrice / it.qtyKg) : 0);
+                      return (
+                        <div key={i} className="ios-caption" style={{ marginTop: 4 }}>
+                          {it.productName} · {formatKg(it.qtyKg)}
+                          {it.unit === 'package' && it.qtyInput ? ` · ${it.qtyInput} بسته` : ''}
+                          {' · فی '}
+                          {formatToman(perKg)}/کیلو
+                        </div>
+                      );
+                    })}
+                    {(inv.items || []).length > 3 && (
+                      <div className="ios-caption">+{(inv.items || []).length - 3} قلم دیگر</div>
+                    )}
+                    <div className="inv-card-actions">
+                      <IonButton size="small" fill="clear" onClick={() => setInvDetail(inv)}>
+                        <IonIcon slot="start" icon={eyeOutline} />
+                        جزئیات
+                      </IonButton>
+                      <IonButton
+                        size="small"
+                        fill="outline"
+                        onClick={() => goNewInvoice(selected)}
+                      >
+                        <IonIcon slot="start" icon={receiptOutline} />
+                        فاکتور دوباره
+                      </IonButton>
+                    </div>
                   </div>
                 ))}
               </div>
             </>
           )}
         </div>
+
+        <IonModal isOpen={!!invDetail} onDidDismiss={() => setInvDetail(null)}>
+          <IonHeader>
+            <IonToolbar>
+              <IonTitle>جزئیات فاکتور</IonTitle>
+              <IonButtons slot="end">
+                <IonButton onClick={() => setInvDetail(null)}>بستن</IonButton>
+              </IonButtons>
+            </IonToolbar>
+          </IonHeader>
+          <IonContent className="ion-padding">
+            {invDetail && (
+              <>
+                <p>
+                  <b>شماره:</b> {invDetail.invoiceNumber}
+                  {invDetail.isGolden ? ' ⭐' : ''}
+                </p>
+                <p>
+                  <b>تاریخ:</b> {formatDate(invDetail.date)}
+                </p>
+                <p>
+                  <b>مبلغ:</b> {formatToman(invDetail.totalAmount)}
+                </p>
+                <p>
+                  <b>تناژ:</b> {formatKg(invDetail.totalKg || 0)}
+                </p>
+                {invDetail.discount ? (
+                  <p>
+                    <b>تخفیف:</b> {formatToman(invDetail.discount)}
+                  </p>
+                ) : null}
+                {invDetail.priceTier ? (
+                  <p>
+                    <b>سطح:</b> {TIER[invDetail.priceTier] || invDetail.priceTier}
+                  </p>
+                ) : null}
+                <p>
+                  <b>وضعیت:</b> {STATUS[invDetail.status || ''] || invDetail.status || '—'}
+                </p>
+                <p>
+                  <b>پرداخت:</b> {PAY[invDetail.paymentMethod || ''] || invDetail.paymentMethod || '—'}
+                </p>
+                {invDetail.payment && (
+                  <div className="ios-glass-card">
+                    <div className="ios-section-title" style={{ marginTop: 0 }}>
+                      پرداخت مشتری
+                    </div>
+                    <div className="stat-row">
+                      <span>نقد</span>
+                      <span>{formatToman(invDetail.payment.cash || 0)}</span>
+                    </div>
+                    <div className="stat-row">
+                      <span>پوز / کارت</span>
+                      <span>{formatToman(invDetail.payment.card || 0)}</span>
+                    </div>
+                    <div className="stat-row">
+                      <span>نسیه</span>
+                      <span className="warning">{formatToman(invDetail.payment.credit || 0)}</span>
+                    </div>
+                  </div>
+                )}
+                {(invDetail.items || []).length > 0 && (
+                  <div className="ios-glass-card">
+                    <div className="ios-section-title" style={{ marginTop: 0 }}>
+                      چی خریدن — فی قند
+                    </div>
+                    {(invDetail.items || []).map((it, i) => {
+                      const perKg =
+                        it.unitPricePerKg ||
+                        (it.qtyKg > 0 ? Math.round(it.totalPrice / it.qtyKg) : 0);
+                      return (
+                        <div key={i} style={{ marginBottom: 10 }}>
+                          <div className="stat-row">
+                            <span>
+                              <strong>{it.productName}</strong>
+                            </span>
+                            <span>{formatToman(it.totalPrice)}</span>
+                          </div>
+                          <div className="ios-caption">
+                            {formatKg(it.qtyKg)}
+                            {it.unit === 'package' && it.qtyInput ? ` · ${it.qtyInput} بسته` : ''}
+                            {' · فی '}
+                            {formatToman(perKg)}/کیلو
+                            {it.discount ? ` · تخفیف ${formatToman(it.discount)}` : ''}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                {selected && (
+                  <IonButton
+                    expand="block"
+                    className="ios-primary-btn ion-margin-top"
+                    onClick={() => {
+                      setInvDetail(null);
+                      goNewInvoice(selected);
+                    }}
+                  >
+                    ثبت فاکتور جدید برای این مشتری
+                  </IonButton>
+                )}
+              </>
+            )}
+          </IonContent>
+        </IonModal>
+
         <IonToast
           isOpen={toast.open}
           message={toast.msg}

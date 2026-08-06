@@ -69,31 +69,42 @@ async function getInventorySnapshot() {
   };
 }
 
-export async function getDashboard(date?: Date, marketerId?: string) {
+export async function getDashboard(
+  date?: Date,
+  marketerId?: string,
+  period: 'today' | 'week' | 'month' = 'today'
+) {
   const targetDate = date ? new Date(date) : new Date();
-  const dayStart = startOfDay(targetDate);
   const dayEnd = endOfDay(targetDate);
+  let rangeStart = startOfDay(targetDate);
+  if (period === 'week') {
+    rangeStart = startOfDay(new Date(targetDate.getTime() - 6 * 24 * 60 * 60 * 1000));
+  } else if (period === 'month') {
+    rangeStart = startOfDay(new Date(targetDate.getFullYear(), targetDate.getMonth(), 1));
+  }
 
   const monthStart = startOfDay(new Date(targetDate.getFullYear(), targetDate.getMonth(), 1));
   const monthEnd = endOfDay(new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 0));
 
-  const saleFilterDay: Record<string, unknown> = { date: { $gte: dayStart, $lte: dayEnd } };
+  const saleFilterRange: Record<string, unknown> = { date: { $gte: rangeStart, $lte: dayEnd } };
   const saleFilterMonth: Record<string, unknown> = { date: { $gte: monthStart, $lte: monthEnd } };
   if (marketerId) {
-    saleFilterDay.marketerId = marketerId;
+    saleFilterRange.marketerId = marketerId;
     saleFilterMonth.marketerId = marketerId;
   }
 
+  const ACTIVE = { $in: ['approved', 'shipped', 'delivered'] };
+
   const [sales, monthSales, expenses, settings, debtors, cardDeposits, company, checks, crm, readyShip, pendingCount, inventory] =
     await Promise.all([
-      SaleInvoice.find({ ...saleFilterDay, status: { $in: ['approved', 'shipped', 'delivered'] } }),
-      SaleInvoice.find({ ...saleFilterMonth, status: { $in: ['approved', 'shipped', 'delivered'] } }),
-      Expense.find({ date: { $gte: dayStart, $lte: dayEnd } }),
+      SaleInvoice.find({ ...saleFilterRange, status: ACTIVE }),
+      SaleInvoice.find({ ...saleFilterMonth, status: ACTIVE }),
+      Expense.find({ date: { $gte: rangeStart, $lte: dayEnd } }),
       getOrCreateSettings(),
       Debtor.find({ isSettled: false }).sort({ dueDate: 1 }),
       CashTransaction.find({
         type: 'card_deposit',
-        date: { $gte: dayStart, $lte: dayEnd },
+        date: { $gte: rangeStart, $lte: dayEnd },
       }),
       getCompanyDebtSummary(),
       getDueChecksSummary(),
@@ -109,10 +120,16 @@ export async function getDashboard(date?: Date, marketerId?: string) {
   const totalSales = sales.reduce((s, inv) => s + inv.totalAmount, 0);
   const soldKg = sales.reduce((s, inv) => s + (inv.totalKg || 0), 0);
   const totalProfit = sales.reduce((s, inv) => s + (inv.totalProfit || 0), 0);
-  const totalExpenses = expenses.reduce(
-    (s, e) => s + operatingExpenseAmount(e.type, e.amount),
-    0
-  );
+
+  const expenseByType: Record<string, number> = {};
+  let totalExpenses = 0;
+  for (const e of expenses) {
+    const amt = operatingExpenseAmount(e.type, e.amount);
+    if (amt <= 0) continue;
+    totalExpenses += amt;
+    const key = e.type || 'other';
+    expenseByType[key] = (expenseByType[key] || 0) + amt;
+  }
   const netProfit = totalProfit - totalExpenses;
 
   const monthSalesAmount = monthSales.reduce((s, inv) => s + inv.totalAmount, 0);
@@ -136,8 +153,14 @@ export async function getDashboard(date?: Date, marketerId?: string) {
     );
   }
 
+  const periodLabel = period === 'week' ? '۷ روز' : period === 'month' ? 'این ماه' : 'امروز';
+
   return {
     date: targetDate.toISOString(),
+    period,
+    periodLabel,
+    periodFrom: rangeStart.toISOString(),
+    periodTo: dayEnd.toISOString(),
     totalSales,
     /** مبالغ سیستم به تومان است */
     totalSalesToman: totalSales,
@@ -146,6 +169,7 @@ export async function getDashboard(date?: Date, marketerId?: string) {
     totalProfit,
     totalExpenses,
     netProfit,
+    expenseByType,
     cashSales,
     cardSales,
     creditSales,
@@ -153,7 +177,7 @@ export async function getDashboard(date?: Date, marketerId?: string) {
     cashBalance: settings.cashBalance,
     cardBalance: settings.cardBalance,
     salesCount: sales.length,
-    expenseCount: expenses.length,
+    expenseCount: expenses.filter((e) => operatingExpenseAmount(e.type, e.amount) > 0).length,
     inventory,
     month: {
       totalSales: monthSalesAmount,
@@ -312,6 +336,116 @@ export async function getPeriodSummary(from: Date, to: Date, marketerId?: string
     })),
   };
 
+  /** فروش انبار در بازه — به تفکیک محصول (تناژ / بسته / مبلغ) */
+  const soldMap = new Map<
+    string,
+    { productId: string; name: string; soldKg: number; soldPackages: number; revenue: number }
+  >();
+  for (const sale of sales) {
+    for (const it of sale.items || []) {
+      const pid = it.productId ? String(it.productId) : it.productName || 'unknown';
+      const cur = soldMap.get(pid) || {
+        productId: pid,
+        name: it.productName || '—',
+        soldKg: 0,
+        soldPackages: 0,
+        revenue: 0,
+      };
+      cur.soldKg += it.qtyKg || 0;
+      cur.soldPackages += it.qtyPackages || 0;
+      cur.revenue += it.totalPrice || 0;
+      if (it.productName) cur.name = it.productName;
+      soldMap.set(pid, cur);
+    }
+  }
+  const soldByProduct = Array.from(soldMap.values()).sort((a, b) => b.soldKg - a.soldKg);
+
+  /** بدهکاران باز — تجمیع به تفکیک نفر */
+  const openDebtors = await Debtor.find({ isSettled: false }).sort({ dueDate: 1 });
+  const debtorByPerson = new Map<
+    string,
+    {
+      key: string;
+      name: string;
+      phone?: string;
+      remaining: number;
+      count: number;
+      overdue: boolean;
+      nearestDue: Date;
+    }
+  >();
+  const now = new Date();
+  for (const d of openDebtors) {
+    const remaining = Math.max(0, (d.amount || 0) - (d.paidAmount || 0));
+    if (remaining <= 0) continue;
+    const key = d.customerId
+      ? `c:${d.customerId}`
+      : `n:${(d.name || '').trim()}|${(d.phone || '').trim()}`;
+    const prev = debtorByPerson.get(key);
+    const overdue = new Date(d.dueDate) < now;
+    if (!prev) {
+      debtorByPerson.set(key, {
+        key,
+        name: d.name || 'بدون نام',
+        phone: d.phone,
+        remaining,
+        count: 1,
+        overdue,
+        nearestDue: d.dueDate,
+      });
+    } else {
+      prev.remaining += remaining;
+      prev.count += 1;
+      prev.overdue = prev.overdue || overdue;
+      if (new Date(d.dueDate) < new Date(prev.nearestDue)) prev.nearestDue = d.dueDate;
+      if (!prev.phone && d.phone) prev.phone = d.phone;
+    }
+  }
+  const debtorsByPerson = Array.from(debtorByPerson.values())
+    .map((d) => ({
+      name: d.name,
+      phone: d.phone,
+      remaining: Math.round(d.remaining),
+      invoiceCount: d.count,
+      overdue: d.overdue,
+      dueDate: d.nearestDue,
+    }))
+    .sort((a, b) => b.remaining - a.remaining);
+
+  /** نسیه ثبت‌شده در همین بازه گزارش — به تفکیک مشتری */
+  const creditInPeriodMap = new Map<
+    string,
+    { name: string; phone?: string; credit: number; kg: number; invoices: number }
+  >();
+  for (const sale of sales) {
+    const credit = sale.payment?.credit || 0;
+    if (credit <= 0) continue;
+    const key = sale.customerId
+      ? `c:${sale.customerId}`
+      : `n:${(sale.customerName || '').trim()}|${(sale.customerPhone || '').trim()}`;
+    const prev = creditInPeriodMap.get(key) || {
+      name: sale.customerName || 'بدون نام',
+      phone: sale.customerPhone,
+      credit: 0,
+      kg: 0,
+      invoices: 0,
+    };
+    prev.credit += credit;
+    prev.kg += sale.totalKg || 0;
+    prev.invoices += 1;
+    if (!prev.phone && sale.customerPhone) prev.phone = sale.customerPhone;
+    creditInPeriodMap.set(key, prev);
+  }
+  const creditByCustomer = Array.from(creditInPeriodMap.values())
+    .map((c) => ({
+      name: c.name,
+      phone: c.phone,
+      credit: Math.round(c.credit),
+      kg: c.kg,
+      invoices: c.invoices,
+    }))
+    .sort((a, b) => b.credit - a.credit);
+
   return {
     from: from.toISOString(),
     to: to.toISOString(),
@@ -331,6 +465,13 @@ export async function getPeriodSummary(from: Date, to: Date, marketerId?: string
       shopName: settings.shopName,
     },
     inventory,
+    soldByProduct,
+    debtors: {
+      total: debtorsByPerson.reduce((s, d) => s + d.remaining, 0),
+      count: debtorsByPerson.length,
+      byPerson: debtorsByPerson,
+    },
+    creditByCustomer,
     daily,
   };
 }
@@ -370,6 +511,8 @@ export async function updateShopSettings(data: {
   goldenSuggestGiftName?: string;
   goldenSuggestGiftQty?: number;
   goldenSuggestDiscountPercent?: number;
+  actionPassword?: string;
+  wipePassword?: string;
 }) {
   const settings = await getOrCreateSettings();
   if (data.shopName) settings.shopName = data.shopName;
@@ -421,6 +564,16 @@ export async function updateShopSettings(data: {
     settings.goldenSuggestGiftQty = Math.max(0, data.goldenSuggestGiftQty);
   if (data.goldenSuggestDiscountPercent !== undefined)
     settings.goldenSuggestDiscountPercent = Math.max(0, Math.min(50, data.goldenSuggestDiscountPercent));
+  if (data.actionPassword !== undefined) {
+    const pw = String(data.actionPassword).trim();
+    if (pw.length < 4) throw new Error('رمز عملیات حداقل ۴ کاراکتر');
+    settings.actionPassword = pw;
+  }
+  if (data.wipePassword !== undefined) {
+    const pw = String(data.wipePassword).trim();
+    if (pw.length < 4) throw new Error('رمز پاک‌سازی حداقل ۴ کاراکتر');
+    settings.wipePassword = pw;
+  }
   await settings.save();
   return settings;
 }
@@ -428,7 +581,77 @@ export async function updateShopSettings(data: {
 export async function listDebtors(settled?: boolean) {
   const filter: Record<string, unknown> = {};
   if (settled !== undefined) filter.isSettled = settled;
-  return Debtor.find(filter).sort({ dueDate: 1 });
+  const rows = await Debtor.find(filter)
+    .populate(
+      'saleInvoiceId',
+      'invoiceNumber totalAmount totalKg date paymentMethod status items discount customerName customerPhone'
+    )
+    .populate('customerId', 'name phone address totalCredit')
+    .sort({ dueDate: 1 })
+    .lean();
+
+  return rows.map((d) => {
+    const inv = d.saleInvoiceId as
+      | {
+          _id?: unknown;
+          invoiceNumber?: string;
+          totalAmount?: number;
+          totalKg?: number;
+          date?: Date;
+          paymentMethod?: string;
+          status?: string;
+          items?: Array<{
+            productName: string;
+            qtyKg: number;
+            totalPrice: number;
+            unitPricePerKg?: number;
+          }>;
+          discount?: number;
+        }
+      | null
+      | undefined;
+    const cust = d.customerId as
+      | { _id?: unknown; name?: string; phone?: string; address?: string; totalCredit?: number }
+      | null
+      | undefined;
+    const remaining = Math.max(0, (d.amount || 0) - (d.paidAmount || 0));
+    return {
+      _id: String(d._id),
+      name: d.name,
+      phone: d.phone,
+      amount: d.amount,
+      paidAmount: d.paidAmount || 0,
+      remaining,
+      dueDate: d.dueDate,
+      description: d.description,
+      isSettled: d.isSettled,
+      customerId: cust?._id
+        ? String(cust._id)
+        : d.customerId
+          ? String(d.customerId)
+          : undefined,
+      customerName: cust?.name || d.name,
+      customerPhone: cust?.phone || d.phone,
+      customerAddress: cust?.address,
+      customerTotalCredit: cust?.totalCredit,
+      saleInvoiceId: inv?._id
+        ? String(inv._id)
+        : d.saleInvoiceId
+          ? String(d.saleInvoiceId)
+          : undefined,
+      invoiceNumber: inv?.invoiceNumber,
+      invoiceTotal: inv?.totalAmount,
+      invoiceKg: inv?.totalKg,
+      invoiceDate: inv?.date,
+      invoiceStatus: inv?.status,
+      invoiceItems: inv?.items?.map((it) => ({
+        productName: it.productName,
+        qtyKg: it.qtyKg,
+        totalPrice: it.totalPrice,
+        unitPricePerKg: it.unitPricePerKg,
+      })),
+    };
+  });
 }
 
 /** آنالیز فروش یک محصول — کلی + بازه‌ها + برترین مشتریان */

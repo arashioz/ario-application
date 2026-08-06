@@ -594,7 +594,7 @@ async function reverseSaleEffects(invoice: InstanceType<typeof SaleInvoice>) {
 /** حذف کامل فاکتور فروش با رمز — برگشت موجودی، صندوق و بدهی */
 export async function deleteSaleInvoice(invoiceId: string, password?: string) {
   const { assertDeletePassword } = await import('./expenseService');
-  assertDeletePassword(password);
+  await assertDeletePassword(password);
 
   const invoice = await SaleInvoice.findById(invoiceId);
   if (!invoice) throw new Error('فاکتور یافت نشد');
@@ -613,6 +613,74 @@ export async function deleteSaleInvoice(invoiceId: string, password?: string) {
   const id = invoice._id.toString();
   await invoice.deleteOne();
   return { ok: true, id };
+}
+
+/**
+ * غیرفعال کردن فاکتور ارسال‌نشده — سند می‌ماند (تاریخچه مشتری)
+ * ولی از محاسبات فروش/سود/انبار خارج می‌شود (برگشت اثر موجودی و صندوق)
+ */
+export async function deactivateSaleInvoice(invoiceId: string, password?: string) {
+  const { assertDeletePassword } = await import('./expenseService');
+  await assertDeletePassword(password);
+
+  const invoice = await SaleInvoice.findById(invoiceId);
+  if (!invoice) throw new Error('فاکتور یافت نشد');
+  if (invoice.status === 'inactive') return invoice;
+  if (invoice.status === 'shipped' || invoice.status === 'delivered') {
+    throw new Error('فاکتور ارسال/تحویل‌شده را نمی‌توان غیرفعال کرد');
+  }
+  if (invoice.status === 'cancelled') {
+    throw new Error('فاکتور لغوشده است');
+  }
+
+  await reverseSaleEffects(invoice);
+
+  if (invoice.shippingExpenseId) {
+    const { deleteExpense } = await import('./expenseService');
+    try {
+      await deleteExpense(invoice.shippingExpenseId.toString(), password);
+      invoice.shippingExpenseId = undefined;
+    } catch {
+      /* ignore */
+    }
+  }
+
+  invoice.status = 'inactive';
+  invoice.notes = invoice.notes
+    ? `${invoice.notes}\n[غیرفعال شد — از محاسبات خارج]`
+    : '[غیرفعال شد — از محاسبات خارج]';
+  await invoice.save();
+  return invoice;
+}
+
+/** غیرفعال کردن همه فاکتورهای ارسال‌نشده (pending + approved) */
+export async function deactivateUnshippedSales(password?: string) {
+  const { assertDeletePassword } = await import('./expenseService');
+  await assertDeletePassword(password);
+
+  const list = await SaleInvoice.find({
+    status: { $in: ['pending', 'approved'] },
+  }).select('_id');
+
+  const results: Array<{ id: string; ok: boolean; error?: string }> = [];
+  for (const row of list) {
+    try {
+      await deactivateSaleInvoice(row._id.toString(), password);
+      results.push({ id: row._id.toString(), ok: true });
+    } catch (e) {
+      results.push({
+        id: row._id.toString(),
+        ok: false,
+        error: e instanceof Error ? e.message : 'خطا',
+      });
+    }
+  }
+  return {
+    total: list.length,
+    deactivated: results.filter((r) => r.ok).length,
+    failed: results.filter((r) => !r.ok).length,
+    results,
+  };
 }
 
 /** ویرایش فاکتور فروش با رمز — برگشت اثر قبلی و اعمال مقادیر جدید */
@@ -636,7 +704,7 @@ export async function updateSaleInvoice(
   }
 ) {
   const { assertDeletePassword } = await import('./expenseService');
-  assertDeletePassword(password);
+  await assertDeletePassword(password);
 
   const invoice = await SaleInvoice.findById(invoiceId);
   if (!invoice) throw new Error('فاکتور یافت نشد');
@@ -914,5 +982,66 @@ export async function recordDebtPayment(debtorId: string, amount: number, method
     await SaleInvoice.findByIdAndUpdate(debtor.saleInvoiceId, { isPaid: debtor.isSettled });
   }
 
+  if (debtor.customerId && amount > 0) {
+    await Customer.findByIdAndUpdate(debtor.customerId, { $inc: { totalCredit: -amount } });
+  }
+
   return debtor;
+}
+
+export async function updateDebtor(
+  id: string,
+  data: { dueDate?: Date; description?: string; name?: string; phone?: string }
+) {
+  const d = await Debtor.findById(id);
+  if (!d) throw new Error('بدهکار یافت نشد');
+  if (data.dueDate) d.dueDate = data.dueDate;
+  if (data.description !== undefined) d.description = data.description;
+  if (data.name?.trim()) d.name = data.name.trim();
+  if (data.phone !== undefined) d.phone = data.phone || undefined;
+  await d.save();
+  return d;
+}
+
+/** دریافت روی کل بدهی مشتری — از قدیمی‌ترین فاکتور */
+export async function recordCustomerDebtPayment(opts: {
+  customerId?: string;
+  name?: string;
+  phone?: string;
+  amount: number;
+  method?: 'cash' | 'card';
+}) {
+  const amount = Math.round(opts.amount || 0);
+  if (amount <= 0) throw new Error('مبلغ نامعتبر است');
+
+  const filter: Record<string, unknown> = { isSettled: false };
+  if (opts.customerId) filter.customerId = opts.customerId;
+  else if (opts.name?.trim()) {
+    filter.name = opts.name.trim();
+    if (opts.phone) filter.phone = opts.phone;
+  } else {
+    throw new Error('مشتری مشخص نیست');
+  }
+
+  const debts = await Debtor.find(filter).sort({ dueDate: 1, createdAt: 1 });
+  if (!debts.length) throw new Error('بدهی بازی برای این مشتری نیست');
+
+  let left = amount;
+  const applied: Array<{ id: string; paid: number }> = [];
+  for (const d of debts) {
+    if (left <= 0) break;
+    const rem = Math.max(0, d.amount - (d.paidAmount || 0));
+    if (rem <= 0) continue;
+    const pay = Math.min(rem, left);
+    await recordDebtPayment(d._id.toString(), pay, opts.method || 'cash');
+    applied.push({ id: d._id.toString(), paid: pay });
+    left -= pay;
+  }
+
+  return {
+    requested: amount,
+    applied: amount - left,
+    leftover: left,
+    payments: applied,
+  };
 }

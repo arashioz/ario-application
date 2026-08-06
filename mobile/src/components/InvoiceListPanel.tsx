@@ -25,7 +25,6 @@ import {
   formatDate,
   formatMoneyInput,
   parseAmount,
-  sanitizeNumberInput,
   normalizePhone,
   INVOICE_PERIODS,
   periodRange,
@@ -34,12 +33,14 @@ import {
 import { buildInvoiceShareText, copyText } from '../utils/invoiceShare';
 import { useAuth } from '../auth/AuthContext';
 import { DigitInput } from './DigitInput';
+import { QtyStepper } from './QtyStepper';
 
 export interface SaleInvRow {
   _id: string;
   invoiceNumber: string;
   customerName?: string;
   customerPhone?: string;
+  customerAddress?: string;
   totalAmount: number;
   totalKg?: number;
   totalProfit?: number;
@@ -47,6 +48,8 @@ export interface SaleInvRow {
   status?: string;
   isGolden?: boolean;
   paymentMethod?: string;
+  payment?: { cash?: number; card?: number; credit?: number };
+  priceTier?: string;
   date: string;
   items?: Array<{
     productId?: string;
@@ -61,6 +64,7 @@ export interface SaleInvRow {
     kgPerPackage?: number;
   }>;
   notes?: string;
+  shippingNotes?: string;
 }
 
 export interface PurchaseInvRow {
@@ -91,6 +95,7 @@ const STATUS: Record<string, string> = {
   shipped: 'ارسال شده',
   delivered: 'تحویل شد',
   cancelled: 'لغو',
+  inactive: 'غیرفعال',
 };
 
 const PAY: Record<string, string> = {
@@ -99,6 +104,12 @@ const PAY: Record<string, string> = {
   card_to_card: 'کارت به کارت',
   credit: 'نسیه',
   mixed: 'ترکیبی',
+};
+
+const TIER: Record<string, string> = {
+  retail: 'تکی',
+  supermarket: 'سوپرمارکت',
+  wholesale: 'عمده',
 };
 
 type EditSaleItem = {
@@ -147,9 +158,39 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
   const [editCustomerPhone, setEditCustomerPhone] = useState('');
   const [editNotes, setEditNotes] = useState('');
   const [editPaymentMethod, setEditPaymentMethod] = useState('cash');
+  const [editPayCash, setEditPayCash] = useState('');
+  const [editPayCard, setEditPayCard] = useState('');
+  const [editPayCredit, setEditPayCredit] = useState('');
   const [editDiscount, setEditDiscount] = useState('');
+  const [editCustomerAddress, setEditCustomerAddress] = useState('');
+  const [editPriceTier, setEditPriceTier] = useState<'retail' | 'supermarket' | 'wholesale'>('retail');
   const [editSaleItems, setEditSaleItems] = useState<EditSaleItem[]>([]);
   const [editPurchaseItems, setEditPurchaseItems] = useState<EditPurchaseItem[]>([]);
+  const [productOptions, setProductOptions] = useState<
+    Array<{ _id: string; name: string; kgPerPackage?: number; stockKg?: number }>
+  >([]);
+  const [addProductId, setAddProductId] = useState('');
+  const [deactivateOpen, setDeactivateOpen] = useState(false);
+  const [deactivatePw, setDeactivatePw] = useState('');
+  const [deactivating, setDeactivating] = useState(false);
+
+  const bumpSaleQty = (idx: number, next: string) => {
+    setEditSaleItems((prev) => prev.map((row, i) => (i === idx ? { ...row, qtyInput: next } : row)));
+  };
+  const bumpPurchaseQty = (idx: number, next: string) => {
+    setEditPurchaseItems((prev) =>
+      prev.map((row, i) => (i === idx ? { ...row, qtyInput: next } : row))
+    );
+  };
+
+  const loadProducts = async () => {
+    try {
+      const list = await wsClient.request<typeof productOptions>('product.list', {});
+      setProductOptions(Array.isArray(list) ? list : []);
+    } catch {
+      setProductOptions([]);
+    }
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -214,8 +255,17 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
       const s = inv as SaleInvRow;
       setEditCustomerName(s.customerName || '');
       setEditCustomerPhone(s.customerPhone || '');
+      setEditCustomerAddress(s.customerAddress || '');
       setEditPaymentMethod(s.paymentMethod || 'cash');
+      setEditPriceTier(
+        s.priceTier === 'supermarket' || s.priceTier === 'wholesale' ? s.priceTier : 'retail'
+      );
+      setEditPayCash(s.payment?.cash ? formatMoneyInput(String(s.payment.cash)) : '');
+      setEditPayCard(s.payment?.card ? formatMoneyInput(String(s.payment.card)) : '');
+      setEditPayCredit(s.payment?.credit ? formatMoneyInput(String(s.payment.credit)) : '');
       setEditDiscount(s.discount ? formatMoneyInput(String(s.discount)) : '');
+      setAddProductId('');
+      void loadProducts();
       setEditSaleItems(
         (s.items || []).map((it) => {
           const unit = it.unit || 'kg';
@@ -295,14 +345,26 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
           kgPerPackage: it.kgPerPackage,
         }));
         if (items.some((it) => it.qtyInput <= 0)) throw new Error('مقدار اقلام باید بیشتر از صفر باشد');
+        if (!items.length) throw new Error('حداقل یک قلم لازم است');
+        const payPayload =
+          editPaymentMethod === 'mixed'
+            ? {
+                cash: parseAmount(editPayCash) || 0,
+                card: parseAmount(editPayCard) || 0,
+                credit: parseAmount(editPayCredit) || 0,
+              }
+            : undefined;
         await wsClient.request('sale.update', {
           id: detail._id,
           password: editPw,
           customerName: editCustomerName.trim() || undefined,
           customerPhone: editCustomerPhone ? normalizePhone(editCustomerPhone) || undefined : undefined,
+          customerAddress: editCustomerAddress.trim() || undefined,
           notes: editNotes.trim() || undefined,
           paymentMethod: editPaymentMethod,
+          payment: payPayload,
           discount: parseAmount(editDiscount) || 0,
+          priceTier: editPriceTier,
           items,
         });
       } else {
@@ -490,9 +552,9 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
       </div>
 
       <IonModal
-        isOpen={!!detail && !deleteOpen && !editOpen}
+        isOpen={!!detail && !deleteOpen && !editOpen && !deactivateOpen}
         onDidDismiss={() => {
-          if (!deleteOpen && !editOpen) setDetail(null);
+          if (!deleteOpen && !editOpen && !deactivateOpen) setDetail(null);
         }}
       >
         <IonHeader>
@@ -512,7 +574,15 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
               </p>
               <p>
                 <b>مشتری:</b> {(detail as SaleInvRow).customerName || '—'}
+                {(detail as SaleInvRow).customerPhone
+                  ? ` · ${(detail as SaleInvRow).customerPhone}`
+                  : ''}
               </p>
+              {(detail as SaleInvRow).customerAddress ? (
+                <p>
+                  <b>آدرس:</b> {(detail as SaleInvRow).customerAddress}
+                </p>
+              ) : null}
               <p>
                 <b>تاریخ:</b> {formatDate(detail.date)}
               </p>
@@ -522,26 +592,63 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
               <p>
                 <b>تناژ:</b> {formatKg((detail as SaleInvRow).totalKg || 0)}
               </p>
+              {(detail as SaleInvRow).totalProfit != null ? (
+                <p>
+                  <b>سود:</b> {formatToman((detail as SaleInvRow).totalProfit || 0)}
+                </p>
+              ) : null}
               {(detail as SaleInvRow).discount ? (
                 <p>
                   <b>تخفیف:</b> {formatToman((detail as SaleInvRow).discount || 0)}
                 </p>
               ) : null}
+              {(detail as SaleInvRow).priceTier ? (
+                <p>
+                  <b>سطح قیمت:</b>{' '}
+                  {TIER[(detail as SaleInvRow).priceTier || ''] || (detail as SaleInvRow).priceTier}
+                </p>
+              ) : null}
               {(detail as SaleInvRow).paymentMethod ? (
                 <p>
-                  <b>پرداخت:</b>{' '}
+                  <b>روش پرداخت:</b>{' '}
                   {PAY[(detail as SaleInvRow).paymentMethod || ''] ||
                     (detail as SaleInvRow).paymentMethod}
                 </p>
               ) : null}
+              {(detail as SaleInvRow).payment && (
+                <div className="ios-glass-card">
+                  <div className="ios-section-title" style={{ marginTop: 0 }}>
+                    جزئیات پرداخت مشتری
+                  </div>
+                  <div className="stat-row">
+                    <span>نقد</span>
+                    <span>{formatToman((detail as SaleInvRow).payment?.cash || 0)}</span>
+                  </div>
+                  <div className="stat-row">
+                    <span>پوز / کارت</span>
+                    <span>{formatToman((detail as SaleInvRow).payment?.card || 0)}</span>
+                  </div>
+                  <div className="stat-row">
+                    <span>نسیه</span>
+                    <span className="warning">
+                      {formatToman((detail as SaleInvRow).payment?.credit || 0)}
+                    </span>
+                  </div>
+                </div>
+              )}
               <p>
                 <b>وضعیت:</b>{' '}
                 {STATUS[(detail as SaleInvRow).status || ''] || (detail as SaleInvRow).status || '—'}
               </p>
+              {(detail as SaleInvRow).shippingNotes ? (
+                <p>
+                  <b>ارسال:</b> {(detail as SaleInvRow).shippingNotes}
+                </p>
+              ) : null}
               {(detail as SaleInvRow).items?.length ? (
                 <div className="ios-glass-card">
                   <div className="ios-section-title" style={{ marginTop: 0 }}>
-                    اقلام
+                    اقلام و فی قند
                   </div>
                   {(detail as SaleInvRow).items!.map((it, i) => {
                     const perKg =
@@ -607,6 +714,21 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
                   >
                     ویرایش با رمز
                   </IonButton>
+                  {((detail as SaleInvRow).status === 'pending' ||
+                    (detail as SaleInvRow).status === 'approved') && (
+                    <IonButton
+                      expand="block"
+                      color="medium"
+                      fill="outline"
+                      className="ion-margin-top"
+                      onClick={() => {
+                        setDeactivatePw('');
+                        setDeactivateOpen(true);
+                      }}
+                    >
+                      غیرفعال (بدون حذف)
+                    </IonButton>
+                  )}
                   <IonButton
                     expand="block"
                     color="danger"
@@ -723,6 +845,25 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
                 placeholder="09…"
               />
               <IonItem>
+                <IonLabel position="stacked">آدرس</IonLabel>
+                <IonInput
+                  value={editCustomerAddress}
+                  onIonInput={(e) => setEditCustomerAddress(e.detail.value || '')}
+                />
+              </IonItem>
+              <div className="ios-section-title">نوع فاکتور (سطح قیمت)</div>
+              <div className="chip-row">
+                {(['retail', 'supermarket', 'wholesale'] as const).map((t) => (
+                  <IonChip
+                    key={t}
+                    className={editPriceTier === t ? 'ios-chip-active' : 'ios-chip'}
+                    onClick={() => setEditPriceTier(t)}
+                  >
+                    {TIER[t]}
+                  </IonChip>
+                ))}
+              </div>
+              <IonItem>
                 <IonLabel position="stacked">روش پرداخت</IonLabel>
                 <IonSelect
                   value={editPaymentMethod}
@@ -736,6 +877,37 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
                   <IonSelectOption value="mixed">ترکیبی</IonSelectOption>
                 </IonSelect>
               </IonItem>
+              {editPaymentMethod === 'mixed' && (
+                <div className="ios-glass-card" style={{ marginTop: 8 }}>
+                  <div className="ios-section-title" style={{ marginTop: 0 }}>
+                    ترکیب پرداخت
+                  </div>
+                  <IonItem>
+                    <IonLabel position="stacked">نقد</IonLabel>
+                    <IonInput
+                      inputMode="numeric"
+                      value={editPayCash}
+                      onIonInput={(e) => setEditPayCash(formatMoneyInput(e.detail.value || ''))}
+                    />
+                  </IonItem>
+                  <IonItem>
+                    <IonLabel position="stacked">پوز / کارت</IonLabel>
+                    <IonInput
+                      inputMode="numeric"
+                      value={editPayCard}
+                      onIonInput={(e) => setEditPayCard(formatMoneyInput(e.detail.value || ''))}
+                    />
+                  </IonItem>
+                  <IonItem>
+                    <IonLabel position="stacked">نسیه</IonLabel>
+                    <IonInput
+                      inputMode="numeric"
+                      value={editPayCredit}
+                      onIonInput={(e) => setEditPayCredit(formatMoneyInput(e.detail.value || ''))}
+                    />
+                  </IonItem>
+                </div>
+              )}
               <IonItem>
                 <IonLabel position="stacked">تخفیف فاکتور (تومان)</IonLabel>
                 <IonInput
@@ -744,29 +916,103 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
                   onIonInput={(e) => setEditDiscount(formatMoneyInput(e.detail.value || ''))}
                 />
               </IonItem>
+
+              <div className="ios-glass-card" style={{ marginTop: 10 }}>
+                <div className="ios-section-title" style={{ marginTop: 0 }}>
+                  افزودن محصول
+                </div>
+                <IonItem>
+                  <IonLabel position="stacked">محصول</IonLabel>
+                  <IonSelect
+                    value={addProductId}
+                    placeholder="انتخاب…"
+                    interface="popover"
+                    onIonChange={(e) => setAddProductId(String(e.detail.value || ''))}
+                  >
+                    {productOptions.map((p) => (
+                      <IonSelectOption key={p._id} value={p._id}>
+                        {p.name} ({Math.round(p.stockKg || 0)} کیلو)
+                      </IonSelectOption>
+                    ))}
+                  </IonSelect>
+                </IonItem>
+                <IonButton
+                  size="small"
+                  expand="block"
+                  disabled={!addProductId}
+                  onClick={() => {
+                    const p = productOptions.find((x) => x._id === addProductId);
+                    if (!p) return;
+                    if (editSaleItems.some((it) => it.productId === p._id)) {
+                      onToast?.('این محصول از قبل در فاکتور هست', 'warning');
+                      return;
+                    }
+                    setEditSaleItems((prev) => [
+                      ...prev,
+                      {
+                        productId: p._id,
+                        productName: p.name,
+                        unit: 'kg',
+                        qtyInput: '1',
+                        unitPrice: '',
+                        discount: '',
+                        kgPerPackage: p.kgPerPackage || 5,
+                      },
+                    ]);
+                    setAddProductId('');
+                  }}
+                >
+                  افزودن به اقلام
+                </IonButton>
+              </div>
+
               {editSaleItems.map((it, idx) => (
                 <div key={idx} className="ios-glass-card" style={{ marginTop: 10 }}>
-                  <div className="ios-section-title" style={{ marginTop: 0 }}>
-                    {it.productName}
+                  <div className="ios-row" style={{ alignItems: 'center' }}>
+                    <div className="ios-section-title" style={{ marginTop: 0, marginBottom: 0 }}>
+                      {it.productName}
+                    </div>
+                    {editSaleItems.length > 1 && (
+                      <IonButton
+                        size="small"
+                        fill="clear"
+                        color="danger"
+                        onClick={() =>
+                          setEditSaleItems((prev) => prev.filter((_, i) => i !== idx))
+                        }
+                      >
+                        حذف قلم
+                      </IonButton>
+                    )}
                   </div>
-                  <IonItem>
-                    <IonLabel position="stacked">
-                      مقدار ({it.unit === 'package' ? 'بسته' : 'کیلو'})
-                    </IonLabel>
-                    <IonInput
-                      type="text"
-                      inputMode="decimal"
-                      value={it.qtyInput}
-                      onIonInput={(e) => {
-                        const v = sanitizeNumberInput(e.detail.value || '', { decimal: true });
+                  <div className="chip-row" style={{ marginTop: 6 }}>
+                    <IonChip
+                      className={it.unit === 'kg' ? 'ios-chip-active' : 'ios-chip'}
+                      onClick={() =>
                         setEditSaleItems((prev) =>
-                          prev.map((row, i) => (i === idx ? { ...row, qtyInput: v } : row))
-                        );
-                      }}
-                    />
-                  </IonItem>
+                          prev.map((row, i) => (i === idx ? { ...row, unit: 'kg' } : row))
+                        )
+                      }
+                    >
+                      کیلو
+                    </IonChip>
+                    <IonChip
+                      className={it.unit === 'package' ? 'ios-chip-active' : 'ios-chip'}
+                      onClick={() =>
+                        setEditSaleItems((prev) =>
+                          prev.map((row, i) => (i === idx ? { ...row, unit: 'package' } : row))
+                        )
+                      }
+                    >
+                      بسته
+                    </IonChip>
+                  </div>
+                  <p className="hint" style={{ marginBottom: 4 }}>
+                    مقدار ({it.unit === 'package' ? 'بسته' : 'کیلو'})
+                  </p>
+                  <QtyStepper value={it.qtyInput} onChange={(v) => bumpSaleQty(idx, v)} />
                   <IonItem>
-                    <IonLabel position="stacked">قیمت واحد (تومان)</IonLabel>
+                    <IonLabel position="stacked">فی / قیمت واحد (تومان)</IonLabel>
                     <IonInput
                       type="text"
                       inputMode="numeric"
@@ -814,25 +1060,49 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
               </IonItem>
               {editPurchaseItems.map((it, idx) => (
                 <div key={idx} className="ios-glass-card" style={{ marginTop: 10 }}>
-                  <div className="ios-section-title" style={{ marginTop: 0 }}>
-                    {it.productName}
+                  <div className="ios-row" style={{ alignItems: 'center' }}>
+                    <div className="ios-section-title" style={{ marginTop: 0, marginBottom: 0 }}>
+                      {it.productName}
+                    </div>
+                    {editPurchaseItems.length > 1 && (
+                      <IonButton
+                        size="small"
+                        fill="clear"
+                        color="danger"
+                        onClick={() =>
+                          setEditPurchaseItems((prev) => prev.filter((_, i) => i !== idx))
+                        }
+                      >
+                        حذف قلم
+                      </IonButton>
+                    )}
                   </div>
-                  <IonItem>
-                    <IonLabel position="stacked">
-                      مقدار ({it.unit === 'package' ? 'بسته' : 'کیلو'})
-                    </IonLabel>
-                    <IonInput
-                      type="text"
-                      inputMode="decimal"
-                      value={it.qtyInput}
-                      onIonInput={(e) => {
-                        const v = sanitizeNumberInput(e.detail.value || '', { decimal: true });
+                  <div className="chip-row" style={{ marginTop: 6 }}>
+                    <IonChip
+                      className={it.unit === 'kg' ? 'ios-chip-active' : 'ios-chip'}
+                      onClick={() =>
                         setEditPurchaseItems((prev) =>
-                          prev.map((row, i) => (i === idx ? { ...row, qtyInput: v } : row))
-                        );
-                      }}
-                    />
-                  </IonItem>
+                          prev.map((row, i) => (i === idx ? { ...row, unit: 'kg' } : row))
+                        )
+                      }
+                    >
+                      کیلو
+                    </IonChip>
+                    <IonChip
+                      className={it.unit === 'package' ? 'ios-chip-active' : 'ios-chip'}
+                      onClick={() =>
+                        setEditPurchaseItems((prev) =>
+                          prev.map((row, i) => (i === idx ? { ...row, unit: 'package' } : row))
+                        )
+                      }
+                    >
+                      بسته
+                    </IonChip>
+                  </div>
+                  <p className="hint" style={{ marginBottom: 4 }}>
+                    مقدار ({it.unit === 'package' ? 'بسته' : 'کیلو'})
+                  </p>
+                  <QtyStepper value={it.qtyInput} onChange={(v) => bumpPurchaseQty(idx, v)} />
                   <IonItem>
                     <IonLabel position="stacked">قیمت واحد (تومان)</IonLabel>
                     <IonInput
@@ -873,6 +1143,57 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
             onClick={() => void confirmEdit()}
           >
             {saving ? '…' : 'ذخیره با رمز'}
+          </IonButton>
+        </IonContent>
+      </IonModal>
+
+      <IonModal isOpen={deactivateOpen} onDidDismiss={() => setDeactivateOpen(false)}>
+        <IonHeader>
+          <IonToolbar>
+            <IonTitle>غیرفعال کردن فاکتور</IonTitle>
+            <IonButtons slot="end">
+              <IonButton onClick={() => setDeactivateOpen(false)}>انصراف</IonButton>
+            </IonButtons>
+          </IonToolbar>
+        </IonHeader>
+        <IonContent className="ion-padding">
+          <p className="hint">
+            فاکتور پاک نمی‌شود و در تاریخچه مشتری می‌ماند، ولی از فروش/سود/موجودی محاسبه نمی‌شود.
+            موجودی و صندوق برمی‌گردند.
+          </p>
+          <IonItem>
+            <IonLabel position="stacked">رمز</IonLabel>
+            <IonInput
+              type="password"
+              value={deactivatePw}
+              onIonInput={(e) => setDeactivatePw(e.detail.value || '')}
+            />
+          </IonItem>
+          <IonButton
+            expand="block"
+            color="medium"
+            className="ion-margin-top"
+            disabled={deactivating || !deactivatePw || !detail}
+            onClick={async () => {
+              if (!detail) return;
+              setDeactivating(true);
+              try {
+                await wsClient.request('sale.deactivate', {
+                  id: detail._id,
+                  password: deactivatePw,
+                });
+                onToast?.('فاکتور غیرفعال شد', 'success');
+                setDeactivateOpen(false);
+                setDetail(null);
+                await load();
+              } catch (e) {
+                onToast?.(e instanceof Error ? e.message : 'انجام نشد', 'danger');
+              } finally {
+                setDeactivating(false);
+              }
+            }}
+          >
+            {deactivating ? '…' : 'تأیید غیرفعال'}
           </IonButton>
         </IonContent>
       </IonModal>

@@ -24,6 +24,7 @@ import { useAuth } from '../auth/AuthContext';
 interface Period {
   totalSales: number;
   soldKg: number;
+  soldTons?: number;
   totalProfit: number;
   totalExpenses: number;
   netProfit?: number;
@@ -37,7 +38,40 @@ interface Period {
     productCount: number;
     items: Array<{ id: string; name: string; stockKg: number; avgCostPerKg: number }>;
   };
-  daily: Array<{ date: string; sales: number; soldKg: number; netProfit: number; expenses?: number }>;
+  soldByProduct?: Array<{
+    productId: string;
+    name: string;
+    soldKg: number;
+    soldPackages: number;
+    revenue: number;
+  }>;
+  debtors?: {
+    total: number;
+    count: number;
+    byPerson: Array<{
+      name: string;
+      phone?: string;
+      remaining: number;
+      invoiceCount: number;
+      overdue: boolean;
+      dueDate: string;
+    }>;
+  };
+  creditByCustomer?: Array<{
+    name: string;
+    phone?: string;
+    credit: number;
+    kg: number;
+    invoices: number;
+  }>;
+  daily: Array<{
+    date: string;
+    sales: number;
+    soldKg: number;
+    profit?: number;
+    netProfit: number;
+    expenses?: number;
+  }>;
 }
 
 const History: React.FC = () => {
@@ -239,9 +273,12 @@ const History: React.FC = () => {
                   <div className="ios-kpi orange">
                     <div className="k-label">فروش تناژ</div>
                     <div className="k-value">{formatKg(period.soldKg)}</div>
+                    {period.soldTons != null && (
+                      <div className="ios-caption">{period.soldTons.toLocaleString('fa-IR')} تن</div>
+                    )}
                   </div>
                   <div className="ios-kpi green">
-                    <div className="k-label">سود ناخالص</div>
+                    <div className="k-label">سود فروش</div>
                     <div className="k-value">{formatToman(period.totalProfit)}</div>
                   </div>
                   <div className="ios-kpi">
@@ -278,6 +315,65 @@ const History: React.FC = () => {
                   </>
                 )}
 
+                {period.debtors && (
+                  <>
+                    <div className="ios-section-title">بدهکاران (به تفکیک نفر)</div>
+                    <div className="ios-kpi-grid">
+                      <div className="ios-kpi rose">
+                        <div className="k-label">جمع بدهی باز</div>
+                        <div className="k-value">{formatToman(period.debtors.total)}</div>
+                      </div>
+                      <div className="ios-kpi">
+                        <div className="k-label">تعداد نفر</div>
+                        <div className="k-value">{period.debtors.count}</div>
+                      </div>
+                    </div>
+                    {period.debtors.byPerson.length === 0 && (
+                      <p className="hint">بدهکار بازی نیست</p>
+                    )}
+                    {period.debtors.byPerson.map((d, i) => (
+                      <div key={`${d.name}-${i}`} className="ios-glass-card" style={{ marginTop: 8 }}>
+                        <div className="ios-row">
+                          <div>
+                            <strong>{d.name}</strong>
+                            {d.overdue && (
+                              <span className="overdue-badge" style={{ marginRight: 8 }}>
+                                معوق
+                              </span>
+                            )}
+                            <div className="ios-caption">
+                              {d.phone || '—'}
+                              {d.invoiceCount > 1 ? ` · ${d.invoiceCount} فاکتور` : ''}
+                              {' · سررسید '}
+                              {formatDate(d.dueDate)}
+                            </div>
+                          </div>
+                          <span className="stat-value danger">{formatToman(d.remaining)}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </>
+                )}
+
+                {period.creditByCustomer && period.creditByCustomer.length > 0 && (
+                  <>
+                    <div className="ios-section-title">نسیه همین بازه (به تفکیک مشتری)</div>
+                    {period.creditByCustomer.map((c, i) => (
+                      <div key={`${c.name}-c-${i}`} className="ios-glass-card" style={{ marginTop: 8 }}>
+                        <div className="ios-row">
+                          <div>
+                            <strong>{c.name}</strong>
+                            <div className="ios-caption">
+                              {c.phone || '—'} · {c.invoices} فاکتور · {formatKg(c.kg)}
+                            </div>
+                          </div>
+                          <span className="stat-value warning">{formatToman(c.credit)}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </>
+                )}
+
                 {period.golden && (
                   <>
                     <div className="ios-section-title">فاکتورهای طلایی</div>
@@ -296,9 +392,33 @@ const History: React.FC = () => {
                   </>
                 )}
 
+                {period.soldByProduct && period.soldByProduct.length > 0 && (
+                  <>
+                    <div className="ios-section-title">فروش انبار در بازه (به تفکیک محصول)</div>
+                    {period.soldByProduct.map((it) => (
+                      <div key={it.productId} className="ios-glass-card" style={{ marginTop: 8 }}>
+                        <div className="ios-row">
+                          <strong>{it.name}</strong>
+                          <span className="stat-value">{formatToman(it.revenue)}</span>
+                        </div>
+                        <div className="stat-row">
+                          <span className="stat-label">تناژ فروخته</span>
+                          <span className="stat-value">{formatKg(it.soldKg)}</span>
+                        </div>
+                        <div className="stat-row">
+                          <span className="stat-label">بسته</span>
+                          <span className="stat-value">
+                            {Math.round(it.soldPackages || 0).toLocaleString('fa-IR')}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </>
+                )}
+
                 {period.inventory && (
                   <>
-                    <div className="ios-section-title">مدیریت کالا / انبار</div>
+                    <div className="ios-section-title">موجودی فعلی انبار</div>
                     <div className="stat-row">
                       <span className="stat-label">تعداد محصول</span>
                       <span className="stat-value">{period.inventory.productCount}</span>
@@ -320,21 +440,23 @@ const History: React.FC = () => {
                   </>
                 )}
 
-                <div className="ios-section-title">روزبه‌روز</div>
+                <div className="ios-section-title">روزبه‌روز — فروش و تناژ</div>
                 {period.daily.map((d) => (
                   <div key={d.date} className="ios-glass-card" style={{ marginTop: 8 }}>
                     <strong>{formatDate(d.date)}</strong>
                     <div className="stat-row">
-                      <span className="stat-label">فروش</span>
+                      <span className="stat-label">فروش مبلغی</span>
                       <span className="stat-value">{formatToman(d.sales)}</span>
                     </div>
                     <div className="stat-row">
-                      <span className="stat-label">تناژ</span>
+                      <span className="stat-label">تناژ فروخته‌شده انبار</span>
                       <span className="stat-value">{formatKg(d.soldKg)}</span>
                     </div>
                     <div className="stat-row">
-                      <span className="stat-label">سود خالص روز</span>
-                      <span className="stat-value success">{formatToman(d.netProfit)}</span>
+                      <span className="stat-label">سود فروش روز</span>
+                      <span className="stat-value success">
+                        {formatToman(d.profit ?? d.netProfit)}
+                      </span>
                     </div>
                   </div>
                 ))}

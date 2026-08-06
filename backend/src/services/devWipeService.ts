@@ -19,11 +19,11 @@ import {
   Category,
   ExpenseCategory,
 } from '../models';
-import { DELETE_PASSWORD } from './expenseService';
+import { DEFAULT_DELETE_PASSWORD, getActionPassword } from './expenseService';
 import { getOrCreateSettings } from './productService';
 import { getShopOpeningDate } from '../config/database';
 
-/** رمز مخصوص پاک‌سازی توسعه — جدا از رمز حذف فاکتور */
+/** رمز پیش‌فرض پاک‌سازی توسعه */
 export const WIPE_PASSWORD = 'wipe-ario-dev';
 
 export type WipeSection =
@@ -73,7 +73,10 @@ export function listWipeSections() {
 }
 
 export async function wipeDevData(password: string | undefined, sections: WipeSection[]) {
-  if (password !== WIPE_PASSWORD && password !== DELETE_PASSWORD) {
+  const settings = await getOrCreateSettings();
+  const wipePw = (settings.wipePassword && String(settings.wipePassword).trim()) || WIPE_PASSWORD;
+  const actionPw = await getActionPassword();
+  if (password !== wipePw && password !== actionPw && password !== WIPE_PASSWORD && password !== DEFAULT_DELETE_PASSWORD) {
     throw new Error('رمز پاک‌سازی اشتباه است');
   }
   if (!sections?.length) throw new Error('حداقل یک بخش را انتخاب کنید');

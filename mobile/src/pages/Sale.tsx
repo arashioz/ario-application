@@ -983,7 +983,7 @@ const Sale: React.FC = () => {
           }
           setToast({
             open: true,
-            msg: `فالوآپ ${res.customer.name} — تخفیف پیشنهادی اعمال شد`,
+            msg: `مشتری ${res.customer.name} انتخاب شد — فاکتور بزنید`,
             color: 'success',
           });
         }

@@ -267,7 +267,7 @@ async function applyPurchaseMoney(
 /** حذف فاکتور خرید با رمز — برگشت موجودی و صندوق / بدهی شرکت */
 export async function deletePurchaseInvoice(invoiceId: string, password?: string) {
   const { assertDeletePassword } = await import('./expenseService');
-  assertDeletePassword(password);
+  await assertDeletePassword(password);
 
   const invoice = await PurchaseInvoice.findById(invoiceId);
   if (!invoice) throw new Error('فاکتور خرید یافت نشد');
@@ -292,7 +292,7 @@ export async function updatePurchaseInvoice(
   }
 ) {
   const { assertDeletePassword } = await import('./expenseService');
-  assertDeletePassword(password);
+  await assertDeletePassword(password);
 
   const invoice = await PurchaseInvoice.findById(invoiceId);
   if (!invoice) throw new Error('فاکتور خرید یافت نشد');

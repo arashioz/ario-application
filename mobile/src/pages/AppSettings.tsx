@@ -16,6 +16,8 @@ import {
   IonCheckbox,
   IonChip,
   IonIcon,
+  IonSelect,
+  IonSelectOption,
   IonRefresher,
   IonRefresherContent,
   useIonViewWillEnter,
@@ -69,6 +71,21 @@ const AppSettings: React.FC = () => {
   const [goldenGiftQty, setGoldenGiftQty] = useState('1');
   const [goldenDiscPercent, setGoldenDiscPercent] = useState('5');
 
+  const [actionPassword, setActionPassword] = useState('');
+  const [wipePasswordSetting, setWipePasswordSetting] = useState('');
+  const [currentLoginPw, setCurrentLoginPw] = useState('');
+  const [newLoginUser, setNewLoginUser] = useState('');
+  const [newLoginName, setNewLoginName] = useState('');
+  const [newLoginPw, setNewLoginPw] = useState('');
+  const [newLoginPw2, setNewLoginPw2] = useState('');
+  const [userList, setUserList] = useState<
+    Array<{ _id: string; username: string; name: string; role: string }>
+  >([]);
+  const [adminSetUserId, setAdminSetUserId] = useState('');
+  const [adminSetUsername, setAdminSetUsername] = useState('');
+  const [adminSetPw, setAdminSetPw] = useState('');
+  const [adminConfirmPw, setAdminConfirmPw] = useState('');
+
   const [chartDays, setChartDays] = useState<DailyPoint[]>([]);
   const [chartLoading, setChartLoading] = useState(false);
   const [chartRange, setChartRange] = useState<'7' | '30' | '90'>('30');
@@ -109,6 +126,8 @@ const AppSettings: React.FC = () => {
       goldenSuggestGiftName?: string;
       goldenSuggestGiftQty?: number;
       goldenSuggestDiscountPercent?: number;
+      actionPassword?: string;
+      wipePassword?: string;
     }>('settings.get');
     setShopName(s.shopName || '');
     setDriverPanelEnabled(s.driverPanelEnabled !== false);
@@ -121,7 +140,15 @@ const AppSettings: React.FC = () => {
     setGoldenGiftName(s.goldenSuggestGiftName || 'کارتن');
     setGoldenGiftQty(String(s.goldenSuggestGiftQty ?? 1));
     setGoldenDiscPercent(String(s.goldenSuggestDiscountPercent ?? 5));
+    setActionPassword(s.actionPassword || 'delete-ario');
+    setWipePasswordSetting(s.wipePassword || 'wipe-ario-dev');
     if (isAdmin) {
+      try {
+        const users = await wsClient.request<typeof userList>('user.list', {});
+        setUserList(Array.isArray(users) ? users : []);
+      } catch {
+        setUserList([]);
+      }
       try {
         const w = await wsClient.request<{ sections: Array<{ key: string; label: string }> }>(
           'dev.wipe.sections'
@@ -523,6 +550,211 @@ const AppSettings: React.FC = () => {
             </div>
           )}
 
+          <div className="ios-glass-card" style={{ marginTop: 12 }}>
+            <div className="ios-section-title" style={{ marginTop: 0 }}>
+              حساب ورود من
+            </div>
+            <p className="hint">تغییر نام کاربری / رمز ورود با تأیید رمز فعلی</p>
+            <IonItem>
+              <IonLabel position="stacked">رمز فعلی</IonLabel>
+              <IonInput
+                type="password"
+                value={currentLoginPw}
+                onIonInput={(e) => setCurrentLoginPw(e.detail.value || '')}
+              />
+            </IonItem>
+            <IonItem>
+              <IonLabel position="stacked">نام نمایشی جدید (اختیاری)</IonLabel>
+              <IonInput value={newLoginName} onIonInput={(e) => setNewLoginName(e.detail.value || '')} />
+            </IonItem>
+            <IonItem>
+              <IonLabel position="stacked">نام کاربری جدید (اختیاری)</IonLabel>
+              <IonInput
+                value={newLoginUser}
+                onIonInput={(e) => setNewLoginUser(e.detail.value || '')}
+                autocomplete="off"
+              />
+            </IonItem>
+            <IonItem>
+              <IonLabel position="stacked">رمز ورود جدید (اختیاری)</IonLabel>
+              <IonInput
+                type="password"
+                value={newLoginPw}
+                onIonInput={(e) => setNewLoginPw(e.detail.value || '')}
+              />
+            </IonItem>
+            <IonItem>
+              <IonLabel position="stacked">تکرار رمز جدید</IonLabel>
+              <IonInput
+                type="password"
+                value={newLoginPw2}
+                onIonInput={(e) => setNewLoginPw2(e.detail.value || '')}
+              />
+            </IonItem>
+            <IonButton
+              expand="block"
+              className="ios-primary-btn ion-margin-top"
+              disabled={!currentLoginPw}
+              onClick={async () => {
+                if (newLoginPw && newLoginPw !== newLoginPw2) {
+                  setToast({ open: true, msg: 'تکرار رمز جدید یکسان نیست', color: 'danger' });
+                  return;
+                }
+                try {
+                  await wsClient.request('auth.changePassword', {
+                    currentPassword: currentLoginPw,
+                    newPassword: newLoginPw || undefined,
+                    newUsername: newLoginUser.trim() || undefined,
+                    newName: newLoginName.trim() || undefined,
+                  });
+                  setToast({ open: true, msg: 'حساب به‌روز شد — با رمز جدید وارد شوید', color: 'success' });
+                  setCurrentLoginPw('');
+                  setNewLoginPw('');
+                  setNewLoginPw2('');
+                  setNewLoginUser('');
+                  setNewLoginName('');
+                } catch (e) {
+                  setToast({
+                    open: true,
+                    msg: e instanceof Error ? e.message : 'خطا',
+                    color: 'danger',
+                  });
+                }
+              }}
+            >
+              ذخیره حساب من
+            </IonButton>
+          </div>
+
+          {isAdmin && (
+            <div className="ios-glass-card" style={{ marginTop: 12 }}>
+              <div className="ios-section-title" style={{ marginTop: 0 }}>
+                رمز عملیات حساس
+              </div>
+              <p className="hint">
+                همین رمز برای حذف/ویرایش فاکتور، اصلاح موجودی، غیرفعال کردن فاکتور و … استفاده می‌شود
+              </p>
+              <IonItem>
+                <IonLabel position="stacked">رمز عملیات</IonLabel>
+                <IonInput
+                  type="password"
+                  value={actionPassword}
+                  onIonInput={(e) => setActionPassword(e.detail.value || '')}
+                />
+              </IonItem>
+              <IonItem>
+                <IonLabel position="stacked">رمز پاک‌سازی توسعه</IonLabel>
+                <IonInput
+                  type="password"
+                  value={wipePasswordSetting}
+                  onIonInput={(e) => setWipePasswordSetting(e.detail.value || '')}
+                />
+              </IonItem>
+              <IonButton
+                expand="block"
+                className="ios-primary-btn ion-margin-top"
+                onClick={async () => {
+                  try {
+                    await wsClient.request('settings.update', {
+                      actionPassword: actionPassword.trim(),
+                      wipePassword: wipePasswordSetting.trim(),
+                    });
+                    setToast({ open: true, msg: 'رمزها ذخیره شد', color: 'success' });
+                  } catch (e) {
+                    setToast({
+                      open: true,
+                      msg: e instanceof Error ? e.message : 'خطا',
+                      color: 'danger',
+                    });
+                  }
+                }}
+              >
+                ذخیره رمزها
+              </IonButton>
+            </div>
+          )}
+
+          {isAdmin && (
+            <div className="ios-glass-card" style={{ marginTop: 12 }}>
+              <div className="ios-section-title" style={{ marginTop: 0 }}>
+                تغییر رمز کاربران
+              </div>
+              <p className="hint">با رمز ورود خودتان، رمز/نام‌کاربری دیگران را عوض کنید</p>
+              <IonItem>
+                <IonLabel position="stacked">کاربر</IonLabel>
+                <IonSelect
+                  value={adminSetUserId}
+                  placeholder="انتخاب…"
+                  interface="popover"
+                  onIonChange={(e) => {
+                    const id = String(e.detail.value || '');
+                    setAdminSetUserId(id);
+                    const u = userList.find((x) => x._id === id);
+                    setAdminSetUsername(u?.username || '');
+                  }}
+                >
+                  {userList.map((u) => (
+                    <IonSelectOption key={u._id} value={u._id}>
+                      {u.name} ({u.username}) — {u.role}
+                    </IonSelectOption>
+                  ))}
+                </IonSelect>
+              </IonItem>
+              <IonItem>
+                <IonLabel position="stacked">نام کاربری جدید</IonLabel>
+                <IonInput
+                  value={adminSetUsername}
+                  onIonInput={(e) => setAdminSetUsername(e.detail.value || '')}
+                />
+              </IonItem>
+              <IonItem>
+                <IonLabel position="stacked">رمز جدید</IonLabel>
+                <IonInput
+                  type="password"
+                  value={adminSetPw}
+                  onIonInput={(e) => setAdminSetPw(e.detail.value || '')}
+                />
+              </IonItem>
+              <IonItem>
+                <IonLabel position="stacked">رمز ورود مدیر (تأیید)</IonLabel>
+                <IonInput
+                  type="password"
+                  value={adminConfirmPw}
+                  onIonInput={(e) => setAdminConfirmPw(e.detail.value || '')}
+                />
+              </IonItem>
+              <IonButton
+                expand="block"
+                color="warning"
+                className="ion-margin-top"
+                disabled={!adminSetUserId || !adminConfirmPw}
+                onClick={async () => {
+                  try {
+                    await wsClient.request('auth.adminSetUser', {
+                      userId: adminSetUserId,
+                      username: adminSetUsername.trim() || undefined,
+                      password: adminSetPw || undefined,
+                      adminPassword: adminConfirmPw,
+                    });
+                    setToast({ open: true, msg: 'کاربر به‌روز شد', color: 'success' });
+                    setAdminSetPw('');
+                    setAdminConfirmPw('');
+                    const users = await wsClient.request<typeof userList>('user.list', {});
+                    setUserList(Array.isArray(users) ? users : []);
+                  } catch (e) {
+                    setToast({
+                      open: true,
+                      msg: e instanceof Error ? e.message : 'خطا',
+                      color: 'danger',
+                    });
+                  }
+                }}
+              >
+                اعمال روی کاربر
+              </IonButton>
+            </div>
+          )}
+
           {isAdmin && (
             <div className="ios-glass-card" style={{ marginTop: 12 }}>
               <div className="ios-section-title" style={{ marginTop: 0 }}>
@@ -678,7 +910,7 @@ const AppSettings: React.FC = () => {
                 پاک‌سازی توسعه
               </div>
               <p className="hint">
-                فقط برای حالت توسعه. رمز: <code>wipe-ario-dev</code> — کاربران ادمین حذف نمی‌شوند.
+                فقط برای حالت توسعه. رمز از تنظیمات «رمز پاک‌سازی» — پیش‌فرض: <code>wipe-ario-dev</code> — کاربران ادمین حذف نمی‌شوند.
               </p>
               <div className="chip-row" style={{ marginBottom: 8 }}>
                 <IonButton size="small" fill="outline" onClick={() => selectAllWipe(true)}>

@@ -385,6 +385,80 @@ export async function generateInvoiceNumber(prefix: string): Promise<string> {
   return `${dayKey}-${String(seq).padStart(4, '0')}`;
 }
 
+/** حذف محصول — با رمز حذف؛ تاریخچه فاکتورها (نام قلم) حفظ می‌شود */
+export async function deleteProduct(id: string, password?: string) {
+  const { assertDeletePassword } = await import('./expenseService');
+  await assertDeletePassword(password);
+  const p = await Product.findById(id);
+  if (!p) throw new Error('محصول یافت نشد');
+  const stock = p.stockKg ?? p.stock ?? 0;
+  if (stock > 0.01) {
+    throw new Error(
+      `موجودی این محصول ${Math.round(stock).toLocaleString('fa-IR')} کیلو است — اول با «اصلاح موجودی» صفر کنید`
+    );
+  }
+  await p.deleteOne();
+  return { ok: true, id, name: p.name };
+}
+
+/**
+ * اصلاح دستی موجودی انبار با رمز حذف/ویرایش.
+ * mode=set → موجودی نهایی (کیلو)
+ * mode=delta → اضافه/کم کردن (کیلو؛ منفی = کاهش)
+ */
+export async function adjustProductStock(
+  id: string,
+  password: string | undefined,
+  data: {
+    mode: 'set' | 'delta';
+    qtyKg: number;
+    notes?: string;
+  }
+) {
+  const { assertDeletePassword } = await import('./expenseService');
+  await assertDeletePassword(password);
+
+  const p = await Product.findById(id);
+  if (!p) throw new Error('محصول یافت نشد');
+
+  const before = Number(p.stockKg ?? p.stock ?? 0) || 0;
+  const qty = Number(data.qtyKg);
+  if (!Number.isFinite(qty)) throw new Error('مقدار نامعتبر است');
+
+  let after: number;
+  if (data.mode === 'set') {
+    if (qty < 0) throw new Error('موجودی نمی‌تواند منفی باشد');
+    after = Math.round(qty * 1000) / 1000;
+  } else {
+    after = Math.round((before + qty) * 1000) / 1000;
+    if (after < -0.001) {
+      throw new Error(
+        `کاهش بیشتر از موجودی است (موجودی فعلی ${before.toLocaleString('fa-IR')} کیلو)`
+      );
+    }
+    after = Math.max(0, after);
+  }
+
+  p.stockKg = after;
+  p.stock = after;
+  if (data.notes?.trim()) {
+    const stamp = new Date().toLocaleString('fa-IR');
+    const line = `[اصلاح انبار ${stamp}] ${before} → ${after} کیلو${data.notes.trim() ? ` — ${data.notes.trim()}` : ''}`;
+    p.notes = p.notes ? `${p.notes}\n${line}` : line;
+  }
+  await p.save();
+
+  return {
+    ok: true,
+    id: p._id.toString(),
+    name: p.name,
+    beforeKg: before,
+    afterKg: after,
+    deltaKg: after - before,
+    stockKg: after,
+  };
+}
+
 export async function updateProduct(
   id: string,
   data: {

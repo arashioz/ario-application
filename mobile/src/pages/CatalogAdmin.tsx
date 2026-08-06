@@ -20,16 +20,18 @@ import {
   IonModal,
   IonSelect,
   IonSelectOption,
+  IonChip,
   useIonViewWillEnter,
   RefresherEventDetail,
 } from '@ionic/react';
-import { copyOutline, openOutline, imageOutline, trashOutline, createOutline } from 'ionicons/icons';
+import { copyOutline, openOutline, imageOutline, trashOutline, createOutline, cubeOutline } from 'ionicons/icons';
 import { IonIcon } from '@ionic/react';
 import { wsClient } from '../api/ws';
 import { resolveMediaUrl } from '../api/client';
-import { formatToman, formatMoneyInput, parseAmount, sanitizeNumberInput, priceFromPercent, roundToman } from '../utils/format';
+import { formatToman, formatMoneyInput, parseAmount, sanitizeNumberInput, priceFromPercent, roundToman, formatKg } from '../utils/format';
 import { useAuth } from '../auth/AuthContext';
 import { DigitInput } from '../components/DigitInput';
+import { QtyStepper } from '../components/QtyStepper';
 
 type PriceTier = 'retail' | 'supermarket' | 'wholesale';
 type AdminTab = 'products' | 'categories' | 'catalog';
@@ -141,6 +143,19 @@ const CatalogAdmin: React.FC = () => {
   const [editWholePrice, setEditWholePrice] = useState('');
   const [editNote, setEditNote] = useState('');
   const [editSaving, setEditSaving] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Product | null>(null);
+  const [deletePw, setDeletePw] = useState('');
+  const [deleting, setDeleting] = useState(false);
+
+  const [stockOpen, setStockOpen] = useState(false);
+  const [stockTarget, setStockTarget] = useState<Product | null>(null);
+  const [stockMode, setStockMode] = useState<'set' | 'delta'>('set');
+  const [stockUnit, setStockUnit] = useState<'kg' | 'package'>('kg');
+  const [stockQty, setStockQty] = useState('');
+  const [stockPw, setStockPw] = useState('');
+  const [stockNotes, setStockNotes] = useState('');
+  const [stockSaving, setStockSaving] = useState(false);
 
   const catalogUrl =
     typeof window !== 'undefined' ? `${window.location.origin}/catalog` : '/catalog';
@@ -594,6 +609,42 @@ const CatalogAdmin: React.FC = () => {
                         <IonIcon slot="start" icon={createOutline} />
                         ویرایش قیمت و سود
                       </IonButton>
+                      {isAdmin && (
+                        <>
+                          <IonButton
+                            size="small"
+                            expand="block"
+                            color="tertiary"
+                            fill="outline"
+                            onClick={() => {
+                              setStockTarget(p);
+                              setStockMode('set');
+                              setStockUnit('kg');
+                              setStockQty(String(Math.round(p.stockKg || 0)));
+                              setStockPw('');
+                              setStockNotes('');
+                              setStockOpen(true);
+                            }}
+                          >
+                            <IonIcon slot="start" icon={cubeOutline} />
+                            اصلاح موجودی (رمز)
+                          </IonButton>
+                          <IonButton
+                            size="small"
+                            expand="block"
+                            color="danger"
+                            fill="clear"
+                            onClick={() => {
+                              setDeleteTarget(p);
+                              setDeletePw('');
+                              setDeleteOpen(true);
+                            }}
+                          >
+                            <IonIcon slot="start" icon={trashOutline} />
+                            حذف محصول
+                          </IonButton>
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1042,6 +1093,234 @@ const CatalogAdmin: React.FC = () => {
                 </IonButton>
               </>
             )}
+          </IonContent>
+        </IonModal>
+
+        <IonModal isOpen={stockOpen} onDidDismiss={() => setStockOpen(false)}>
+          <IonHeader>
+            <IonToolbar>
+              <IonTitle>اصلاح موجودی</IonTitle>
+              <IonButtons slot="end">
+                <IonButton onClick={() => setStockOpen(false)}>انصراف</IonButton>
+              </IonButtons>
+            </IonToolbar>
+          </IonHeader>
+          <IonContent className="ion-padding">
+            {stockTarget && (
+              <>
+                <p className="hint">
+                  <strong>{stockTarget.name}</strong>
+                  <br />
+                  موجودی فعلی: {formatKg(stockTarget.stockKg || 0)}
+                  {' · '}
+                  بسته {stockTarget.kgPerPackage || 5}kg
+                </p>
+
+                <div className="chip-row">
+                  <IonChip
+                    className={stockMode === 'set' ? 'ios-chip-active' : 'ios-chip'}
+                    onClick={() => {
+                      setStockMode('set');
+                      setStockQty(String(Math.round(stockTarget.stockKg || 0)));
+                    }}
+                  >
+                    تنظیم موجودی نهایی
+                  </IonChip>
+                  <IonChip
+                    className={stockMode === 'delta' ? 'ios-chip-active' : 'ios-chip'}
+                    onClick={() => {
+                      setStockMode('delta');
+                      setStockQty('');
+                    }}
+                  >
+                    اضافه / کم کردن
+                  </IonChip>
+                </div>
+
+                <div className="chip-row" style={{ marginTop: 8 }}>
+                  <IonChip
+                    className={stockUnit === 'kg' ? 'ios-chip-active' : 'ios-chip'}
+                    onClick={() => setStockUnit('kg')}
+                  >
+                    کیلو
+                  </IonChip>
+                  <IonChip
+                    className={stockUnit === 'package' ? 'ios-chip-active' : 'ios-chip'}
+                    onClick={() => setStockUnit('package')}
+                  >
+                    بسته
+                  </IonChip>
+                </div>
+
+                <p className="hint" style={{ marginBottom: 4 }}>
+                  {stockMode === 'set'
+                    ? `موجودی نهایی (${stockUnit === 'kg' ? 'کیلو' : 'بسته'})`
+                    : `مقدار تغییر (+ اضافه / − کم) به ${stockUnit === 'kg' ? 'کیلو' : 'بسته'}`}
+                </p>
+                <QtyStepper
+                  value={stockQty}
+                  onChange={setStockQty}
+                  min={stockMode === 'set' ? 0 : -999999}
+                  allowNegative={stockMode === 'delta'}
+                />
+                {stockMode === 'delta' && (
+                  <div className="chip-row" style={{ marginTop: 6 }}>
+                    <IonButton
+                      size="small"
+                      fill="outline"
+                      color="danger"
+                      onClick={() => {
+                        const n = Math.abs(parseFloat(stockQty) || 0);
+                        setStockQty(n ? `-${n}` : '-');
+                      }}
+                    >
+                      منفی (کاهش)
+                    </IonButton>
+                    <IonButton
+                      size="small"
+                      fill="outline"
+                      color="success"
+                      onClick={() => {
+                        const n = Math.abs(parseFloat(stockQty) || 0);
+                        setStockQty(n ? String(n) : '');
+                      }}
+                    >
+                      مثبت (افزایش)
+                    </IonButton>
+                  </div>
+                )}
+
+                <IonItem>
+                  <IonLabel position="stacked">یادداشت (اختیاری)</IonLabel>
+                  <IonInput
+                    value={stockNotes}
+                    onIonInput={(e) => setStockNotes(e.detail.value || '')}
+                    placeholder="مثلاً انبارگردانی / کسری"
+                  />
+                </IonItem>
+                <IonItem>
+                  <IonLabel position="stacked">رمز اصلاح</IonLabel>
+                  <IonInput
+                    type="password"
+                    value={stockPw}
+                    onIonInput={(e) => setStockPw(e.detail.value || '')}
+                    placeholder="رمز حذف/ویرایش"
+                  />
+                </IonItem>
+
+                <IonButton
+                  expand="block"
+                  color="tertiary"
+                  className="ion-margin-top"
+                  disabled={stockSaving || !stockPw || stockQty === '' || stockQty === '-'}
+                  onClick={async () => {
+                    if (!stockTarget) return;
+                    const raw = parseFloat(stockQty);
+                    if (!Number.isFinite(raw)) {
+                      setToast({ open: true, msg: 'مقدار نامعتبر', color: 'danger' });
+                      return;
+                    }
+                    const kgPer = stockTarget.kgPerPackage || 5;
+                    const qtyKg = stockUnit === 'package' ? raw * kgPer : raw;
+                    setStockSaving(true);
+                    try {
+                      const res = await wsClient.request<{
+                        beforeKg: number;
+                        afterKg: number;
+                      }>('product.stock.adjust', {
+                        id: stockTarget._id,
+                        password: stockPw,
+                        mode: stockMode,
+                        qtyKg,
+                        notes: stockNotes.trim() || undefined,
+                      });
+                      setToast({
+                        open: true,
+                        msg: `موجودی: ${formatKg(res.beforeKg)} → ${formatKg(res.afterKg)}`,
+                        color: 'success',
+                      });
+                      setStockOpen(false);
+                      setStockTarget(null);
+                      await load();
+                    } catch (e) {
+                      setToast({
+                        open: true,
+                        msg: e instanceof Error ? e.message : 'ذخیره نشد',
+                        color: 'danger',
+                      });
+                    } finally {
+                      setStockSaving(false);
+                    }
+                  }}
+                >
+                  {stockSaving ? '…' : 'ذخیره با رمز'}
+                </IonButton>
+              </>
+            )}
+          </IonContent>
+        </IonModal>
+
+        <IonModal isOpen={deleteOpen} onDidDismiss={() => setDeleteOpen(false)}>
+          <IonHeader>
+            <IonToolbar>
+              <IonTitle>حذف محصول</IonTitle>
+              <IonButtons slot="end">
+                <IonButton onClick={() => setDeleteOpen(false)}>انصراف</IonButton>
+              </IonButtons>
+            </IonToolbar>
+          </IonHeader>
+          <IonContent className="ion-padding">
+            <p className="hint">
+              «{deleteTarget?.name}» حذف می‌شود. موجودی باید صفر باشد. فاکتورهای قبلی نام قلم را نگه
+              می‌دارند.
+            </p>
+            {(deleteTarget?.stockKg || 0) > 0.01 && (
+              <p className="hint danger-text">
+                موجودی فعلی: {Math.round(deleteTarget?.stockKg || 0).toLocaleString('fa-IR')} کیلو —
+                اول خالی کنید
+              </p>
+            )}
+            <IonItem>
+              <IonLabel position="stacked">رمز حذف</IonLabel>
+              <IonInput
+                type="password"
+                value={deletePw}
+                onIonInput={(e) => setDeletePw(e.detail.value || '')}
+                placeholder="رمز حذف"
+              />
+            </IonItem>
+            <IonButton
+              expand="block"
+              color="danger"
+              className="ion-margin-top"
+              disabled={deleting || !deletePw || !deleteTarget}
+              onClick={async () => {
+                if (!deleteTarget) return;
+                setDeleting(true);
+                try {
+                  await wsClient.request('product.delete', {
+                    id: deleteTarget._id,
+                    password: deletePw,
+                  });
+                  setToast({ open: true, msg: 'محصول حذف شد', color: 'success' });
+                  setDeleteOpen(false);
+                  setDeleteTarget(null);
+                  setDeletePw('');
+                  setEditOpen(false);
+                  await load();
+                } catch (e) {
+                  setToast({
+                    open: true,
+                    msg: e instanceof Error ? e.message : 'حذف نشد',
+                    color: 'danger',
+                  });
+                } finally {
+                  setDeleting(false);
+                }
+              }}
+            >
+              {deleting ? '…' : 'تأیید حذف'}
+            </IonButton>
           </IonContent>
         </IonModal>
 

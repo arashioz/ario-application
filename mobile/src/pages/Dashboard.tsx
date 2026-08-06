@@ -11,6 +11,7 @@ import {
   IonButtons,
   IonButton,
   IonIcon,
+  IonChip,
   useIonViewWillEnter,
   RefresherEventDetail,
 } from '@ionic/react';
@@ -45,8 +46,12 @@ interface InvProduct {
 interface Dash {
   totalSales: number;
   soldKg: number;
+  totalProfit?: number;
   netProfit: number;
   totalExpenses: number;
+  expenseByType?: Record<string, number>;
+  period?: 'today' | 'week' | 'month';
+  periodLabel?: string;
   cashBalance: number;
   cardBalance: number;
   salesCount: number;
@@ -140,24 +145,30 @@ const Dashboard: React.FC = () => {
   const history = useHistory();
   const [data, setData] = useState<Dash | null>(null);
   const [error, setError] = useState('');
+  const [kpiPeriod, setKpiPeriod] = useState<'today' | 'week' | 'month'>('today');
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (period: 'today' | 'week' | 'month' = kpiPeriod) => {
     try {
-      const d = await wsClient.request<Dash>('dashboard.get', {});
+      const d = await wsClient.request<Dash>('dashboard.get', { period });
       setData(d);
       setError('');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'خطا');
     }
-  }, []);
+  }, [kpiPeriod]);
 
   useIonViewWillEnter(() => {
-    void load();
+    void load(kpiPeriod);
   });
 
   const onRefresh = async (ev: CustomEvent<RefresherEventDetail>) => {
-    await load();
+    await load(kpiPeriod);
     ev.detail.complete();
+  };
+
+  const setPeriod = (p: 'today' | 'week' | 'month') => {
+    setKpiPeriod(p);
+    void load(p);
   };
 
   const quick = [
@@ -171,7 +182,7 @@ const Dashboard: React.FC = () => {
     ...(isAdmin
       ? [
           { href: '/expense', icon: walletOutline, label: 'هزینه', color: 'qa-slate' },
-          { href: '/drivers-map', icon: navigateOutline, label: 'نقشه', color: 'qa-cyan' },
+          { href: '/drivers-map', icon: navigateOutline, label: 'نقشه تیم', color: 'qa-cyan' },
           { href: '/checks', icon: documentTextOutline, label: 'چک', color: 'qa-violet' },
         ]
       : [
@@ -310,7 +321,29 @@ const Dashboard: React.FC = () => {
                 </IonButton>
               </div>
 
-              <div className="ios-section-title">امروز</div>
+              <div className="ios-section-title">
+                خلاصه فروش — {data.periodLabel || 'امروز'}
+              </div>
+              <div className="chip-row" style={{ marginBottom: 8 }}>
+                <IonChip
+                  className={kpiPeriod === 'today' ? 'ios-chip-active' : 'ios-chip'}
+                  onClick={() => setPeriod('today')}
+                >
+                  امروز
+                </IonChip>
+                <IonChip
+                  className={kpiPeriod === 'week' ? 'ios-chip-active' : 'ios-chip'}
+                  onClick={() => setPeriod('week')}
+                >
+                  ۷ روز
+                </IonChip>
+                <IonChip
+                  className={kpiPeriod === 'month' ? 'ios-chip-active' : 'ios-chip'}
+                  onClick={() => setPeriod('month')}
+                >
+                  این ماه
+                </IonChip>
+              </div>
               <div className="ios-kpi-grid">
                 <div className="ios-kpi blue">
                   <div className="k-label">فروش</div>
@@ -321,10 +354,8 @@ const Dashboard: React.FC = () => {
                   <div className="k-value">{formatKg(data.soldKg)}</div>
                 </div>
                 <div className="ios-kpi green">
-                  <div className="k-label">سود خالص</div>
-                  <div className={`k-value${(data.netProfit || 0) < 0 ? ' warning' : ''}`}>
-                    {formatToman(data.netProfit || 0)}
-                  </div>
+                  <div className="k-label">سود فروش</div>
+                  <div className="k-value">{formatToman(data.totalProfit || 0)}</div>
                 </div>
                 <div className="ios-kpi gray">
                   <div className="k-label">فاکتور</div>
@@ -335,7 +366,7 @@ const Dashboard: React.FC = () => {
               {(data.cashSales != null || data.cardSales != null || data.creditSales != null) && (
                 <div className="ios-glass-card">
                   <div className="ios-section-title" style={{ marginTop: 0 }}>
-                    ترکیب پرداخت امروز
+                    ترکیب پرداخت — {data.periodLabel || 'امروز'}
                   </div>
                   <div className="stat-row">
                     <span className="stat-label">نقد</span>

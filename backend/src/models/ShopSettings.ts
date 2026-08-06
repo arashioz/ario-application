@@ -48,6 +48,10 @@ export interface IShopSettings extends Document {
   goldenSuggestGiftName: string;
   goldenSuggestGiftQty: number;
   goldenSuggestDiscountPercent: number;
+  /** رمز عملیات حساس (حذف/ویرایش فاکتور، اصلاح موجودی، …) — پیش‌فرض delete-ario */
+  actionPassword?: string;
+  /** رمز پاک‌سازی توسعه — پیش‌فرض wipe-ario-dev */
+  wipePassword?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -97,6 +101,8 @@ const ShopSettingsSchema = new Schema<IShopSettings>(
     goldenSuggestGiftName: { type: String, default: 'کارتن' },
     goldenSuggestGiftQty: { type: Number, default: 1 },
     goldenSuggestDiscountPercent: { type: Number, default: 5 },
+    actionPassword: { type: String, default: 'delete-ario' },
+    wipePassword: { type: String, default: 'wipe-ario-dev' },
   },
   { timestamps: true }
 );

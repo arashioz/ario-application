@@ -1,10 +1,18 @@
 import { Expense, ExpenseType, CashTransaction, Debtor, Customer, CompanyPayment } from '../models';
-import { validateTransactionDate, updateBalances } from './productService';
+import { validateTransactionDate, updateBalances, getOrCreateSettings } from './productService';
 
-export const DELETE_PASSWORD = 'delete-ario';
+export const DEFAULT_DELETE_PASSWORD = 'delete-ario';
+/** @deprecated استفاده از assertDeletePassword */
+export const DELETE_PASSWORD = DEFAULT_DELETE_PASSWORD;
 
-export function assertDeletePassword(password?: string) {
-  if (password !== DELETE_PASSWORD) {
+export async function getActionPassword(): Promise<string> {
+  const s = await getOrCreateSettings();
+  return (s.actionPassword && String(s.actionPassword).trim()) || DEFAULT_DELETE_PASSWORD;
+}
+
+export async function assertDeletePassword(password?: string) {
+  const expected = await getActionPassword();
+  if (password !== expected) {
     throw new Error('رمز اشتباه است');
   }
 }
@@ -85,7 +93,7 @@ export async function listExpenses(opts?: {
 }
 
 export async function deleteExpense(id: string, password?: string) {
-  assertDeletePassword(password);
+  await assertDeletePassword(password);
   const expense = await Expense.findById(id);
   if (!expense) throw new Error('هزینه یافت نشد');
 
@@ -214,7 +222,7 @@ export async function listCardDeposits(opts?: {
 }
 
 export async function deleteCardDeposit(id: string, password?: string) {
-  assertDeletePassword(password);
+  await assertDeletePassword(password);
   const tx = await CashTransaction.findById(id);
   if (!tx || tx.type !== 'card_deposit') throw new Error('واریز یافت نشد');
   // فقط موجودی کارت را برمی‌گرداند — بدهی‌های قبلاً کم‌شده دستی قابل برگشت نیست در این نسخه
@@ -224,7 +232,7 @@ export async function deleteCardDeposit(id: string, password?: string) {
 }
 
 export async function deleteCompanyPayment(id: string, password?: string) {
-  assertDeletePassword(password);
+  await assertDeletePassword(password);
   const payment = await CompanyPayment.findById(id);
   if (!payment) throw new Error('پرداخت یافت نشد');
   const txs = await CashTransaction.find({

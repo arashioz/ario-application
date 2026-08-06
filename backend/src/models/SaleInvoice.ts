@@ -3,8 +3,8 @@ import mongoose, { Schema, Document, Types } from 'mongoose';
 export type PaymentMethod = 'cash' | 'card' | 'card_to_card' | 'credit' | 'mixed';
 export type QtyUnit = 'kg' | 'package';
 export type PriceTier = 'retail' | 'supermarket' | 'wholesale';
-/** pending = بازاریاب ثبت کرده، منتظر تأیید | approved = ادمین تأیید | shipped = ارسال شد | delivered = تحویل شد */
-export type SaleStatus = 'pending' | 'approved' | 'shipped' | 'delivered' | 'cancelled';
+/** pending = بازاریاب | approved = تأیید | shipped = ارسال | delivered = تحویل | cancelled = لغو | inactive = غیرفعال (در محاسبات نیست، در تاریخچه هست) */
+export type SaleStatus = 'pending' | 'approved' | 'shipped' | 'delivered' | 'cancelled' | 'inactive';
 
 export interface IPaymentBreakdown {
   cash: number;
@@ -177,7 +177,7 @@ const SaleInvoiceSchema = new Schema<ISaleInvoice>(
     isGolden: { type: Boolean, default: false },
     status: {
       type: String,
-      enum: ['pending', 'approved', 'shipped', 'delivered', 'cancelled'],
+      enum: ['pending', 'approved', 'shipped', 'delivered', 'cancelled', 'inactive'],
       default: 'approved',
       index: true,
     },

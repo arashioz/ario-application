@@ -1,12 +1,10 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   IonPage,
   IonHeader,
   IonToolbar,
   IonTitle,
   IonContent,
-  IonCard,
-  IonCardContent,
   IonItem,
   IonLabel,
   IonInput,
@@ -15,43 +13,192 @@ import {
   IonToast,
   IonRefresher,
   IonRefresherContent,
+  IonModal,
+  IonButtons,
+  IonSearchbar,
   useIonViewWillEnter,
   RefresherEventDetail,
 } from '@ionic/react';
+import { useHistory } from 'react-router-dom';
 import { wsClient, newMutationId } from '../api/ws';
-import { formatRial, formatDate, parseAmount, formatMoneyInput, sanitizeNumberInput } from '../utils/format';
+import {
+  formatToman,
+  formatKg,
+  formatDate,
+  parseAmount,
+  formatMoneyInput,
+} from '../utils/format';
+import { PersianDateField } from '../components/PersianDateField';
+import { useAuth } from '../auth/AuthContext';
 
-interface Debtor {
+interface DebtRow {
   _id: string;
   name: string;
   phone?: string;
   amount: number;
   paidAmount: number;
+  remaining: number;
   dueDate: string;
+  description?: string;
+  customerId?: string;
+  customerName?: string;
+  customerPhone?: string;
+  customerAddress?: string;
+  saleInvoiceId?: string;
+  invoiceNumber?: string;
+  invoiceTotal?: number;
+  invoiceKg?: number;
+  invoiceDate?: string;
+  invoiceStatus?: string;
+  invoiceItems?: Array<{
+    productName: string;
+    qtyKg: number;
+    totalPrice: number;
+    unitPricePerKg?: number;
+  }>;
+}
+
+interface CustomerDebtGroup {
+  key: string;
+  customerId?: string;
+  name: string;
+  phone?: string;
+  address?: string;
+  totalRemaining: number;
+  totalAmount: number;
+  totalPaid: number;
+  invoiceCount: number;
+  overdueCount: number;
+  nearestDue: string;
+  debts: DebtRow[];
+}
+
+function groupKey(d: DebtRow) {
+  if (d.customerId) return `c:${d.customerId}`;
+  return `n:${(d.customerName || d.name || '').trim()}|${(d.customerPhone || d.phone || '').trim()}`;
 }
 
 const Debtors: React.FC = () => {
-  const [debtors, setDebtors] = useState<Debtor[]>([]);
-  const [payAmounts, setPayAmounts] = useState<Record<string, string>>({});
-  const [payMethods, setPayMethods] = useState<Record<string, 'cash' | 'card'>>({});
+  const history = useHistory();
+  const { isAdmin } = useAuth();
+  const [debtors, setDebtors] = useState<DebtRow[]>([]);
+  const [search, setSearch] = useState('');
+  const [selected, setSelected] = useState<CustomerDebtGroup | null>(null);
+  const [payAmount, setPayAmount] = useState('');
+  const [payMethod, setPayMethod] = useState<'cash' | 'card'>('cash');
+  const [linePay, setLinePay] = useState<Record<string, string>>({});
+  const [lineMethod, setLineMethod] = useState<Record<string, 'cash' | 'card'>>({});
+  const [editDebt, setEditDebt] = useState<DebtRow | null>(null);
+  const [editDue, setEditDue] = useState('');
+  const [editDesc, setEditDesc] = useState('');
   const [toast, setToast] = useState({ open: false, msg: '', color: 'success' });
 
   const load = useCallback(async () => {
-    setDebtors(await wsClient.request<Debtor[]>('debtor.list', { settled: false }));
+    const list = await wsClient.request<DebtRow[]>('debtor.list', { settled: false });
+    setDebtors(Array.isArray(list) ? list : []);
   }, []);
 
   useIonViewWillEnter(() => {
     void load().catch(console.warn);
   });
 
+  const groups = useMemo(() => {
+    const map = new Map<string, CustomerDebtGroup>();
+    const now = Date.now();
+    for (const d of debtors) {
+      const rem = d.remaining ?? Math.max(0, d.amount - (d.paidAmount || 0));
+      if (rem <= 0) continue;
+      const key = groupKey(d);
+      const overdue = new Date(d.dueDate).getTime() < now;
+      const prev = map.get(key);
+      if (!prev) {
+        map.set(key, {
+          key,
+          customerId: d.customerId,
+          name: d.customerName || d.name,
+          phone: d.customerPhone || d.phone,
+          address: d.customerAddress,
+          totalRemaining: rem,
+          totalAmount: d.amount,
+          totalPaid: d.paidAmount || 0,
+          invoiceCount: 1,
+          overdueCount: overdue ? 1 : 0,
+          nearestDue: d.dueDate,
+          debts: [d],
+        });
+      } else {
+        prev.totalRemaining += rem;
+        prev.totalAmount += d.amount;
+        prev.totalPaid += d.paidAmount || 0;
+        prev.invoiceCount += 1;
+        if (overdue) prev.overdueCount += 1;
+        if (new Date(d.dueDate) < new Date(prev.nearestDue)) prev.nearestDue = d.dueDate;
+        prev.debts.push(d);
+        if (!prev.phone && (d.customerPhone || d.phone)) prev.phone = d.customerPhone || d.phone;
+        if (!prev.customerId && d.customerId) prev.customerId = d.customerId;
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => b.totalRemaining - a.totalRemaining);
+  }, [debtors]);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return groups;
+    return groups.filter(
+      (g) =>
+        g.name.toLowerCase().includes(q) ||
+        (g.phone || '').includes(q) ||
+        (g.address || '').toLowerCase().includes(q)
+    );
+  }, [groups, search]);
+
+  const openGroup = (g: CustomerDebtGroup) => {
+    setSelected(g);
+    setPayAmount('');
+    setPayMethod('cash');
+    setLinePay({});
+    setLineMethod({});
+  };
+
+  const goNewInvoice = (g: CustomerDebtGroup) => {
+    if (g.customerId) {
+      history.push('/sale', { followUpCustomerId: g.customerId });
+      return;
+    }
+    history.push('/sale');
+    setToast({
+      open: true,
+      msg: 'مشتری را در فروش انتخاب کنید (شناسه مشتری ثبت نشده)',
+      color: 'warning',
+    });
+  };
+
+  const goEditInvoice = (saleInvoiceId?: string) => {
+    if (!saleInvoiceId) {
+      setToast({ open: true, msg: 'فاکتور مرتبط پیدا نشد', color: 'warning' });
+      return;
+    }
+    history.push('/invoices');
+    setToast({
+      open: true,
+      msg: 'از لیست فاکتورها همان شماره را باز کنید و ویرایش بزنید',
+      color: 'success',
+    });
+  };
+
+  const active = useMemo(() => {
+    if (!selected) return null;
+    return groups.find((g) => g.key === selected.key) || null;
+  }, [groups, selected]);
+
   return (
     <IonPage>
-      <IonHeader>
-        <IonToolbar color="primary">
-          <IonTitle>نسیه</IonTitle>
+      <IonHeader translucent className="ios-header">
+        <IonToolbar>
+          <IonTitle>نسیه — بدهکاران</IonTitle>
         </IonToolbar>
       </IonHeader>
-      <IonContent className="page-content">
+      <IonContent fullscreen className="page-content ios-content">
         <IonRefresher
           slot="fixed"
           onIonRefresh={async (e: CustomEvent<RefresherEventDetail>) => {
@@ -61,92 +208,365 @@ const Debtors: React.FC = () => {
         >
           <IonRefresherContent />
         </IonRefresher>
+
         <div className="ion-padding compact">
-          {debtors.length === 0 && <div className="empty-state">بدهکار فعالی نیست</div>}
-          {debtors.map((d) => {
-            const remaining = d.amount - d.paidAmount;
-            const overdue = new Date(d.dueDate) < new Date();
-            const method = payMethods[d._id] || 'cash';
-            return (
-              <IonCard key={d._id} className="tight-card">
-                <IonCardContent>
-                  <div className="stat-row">
-                    <span className={`stat-value bold ${overdue ? 'danger' : ''}`}>
-                      {overdue ? '⚠ ' : ''}
-                      {d.name}
-                    </span>
-                    <span className="stat-label">{d.phone}</span>
+          <div className="ios-kpi-grid">
+            <div className="ios-kpi rose">
+              <div className="k-label">جمع بدهی</div>
+              <div className="k-value">
+                {formatToman(groups.reduce((s, g) => s + g.totalRemaining, 0))}
+              </div>
+            </div>
+            <div className="ios-kpi">
+              <div className="k-label">تعداد مشتری</div>
+              <div className="k-value">{groups.length}</div>
+            </div>
+          </div>
+
+          <IonSearchbar
+            value={search}
+            placeholder="جستجوی مشتری…"
+            className="ios-search"
+            onIonInput={(e) => setSearch(e.detail.value || '')}
+          />
+
+          {filtered.length === 0 && <p className="hint">بدهکار فعالی نیست</p>}
+
+          {filtered.map((g) => (
+            <div
+              key={g.key}
+              className={`ios-glass-card tap${active?.key === g.key ? ' selected-card' : ''}`}
+              onClick={() => openGroup(g)}
+              role="button"
+              tabIndex={0}
+            >
+              <div className="ios-row">
+                <div>
+                  <strong>
+                    {g.overdueCount > 0 ? '⚠ ' : ''}
+                    {g.name}
+                  </strong>
+                  <div className="ios-caption">
+                    {g.phone || '—'}
+                    {g.invoiceCount > 1 ? ` · ${g.invoiceCount} فاکتور بدهی` : ' · ۱ فاکتور'}
+                    {' · سررسید '}
+                    {formatDate(g.nearestDue)}
                   </div>
-                  <div className="stat-row">
-                    <span className="stat-label">مانده</span>
-                    <span className="stat-value danger">{formatRial(remaining)}</span>
+                </div>
+                <div className="inv-card-amount">
+                  <div className="inv-card-money" style={{ color: 'var(--ion-color-danger)' }}>
+                    {formatToman(g.totalRemaining)}
                   </div>
-                  <div className="stat-row">
-                    <span className="stat-label">سررسید</span>
-                    <span className="stat-value">{formatDate(d.dueDate)}</span>
+                  {g.overdueCount > 0 && (
+                    <div className="ios-caption" style={{ color: 'var(--ion-color-danger)' }}>
+                      {g.overdueCount} معوق
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <IonModal
+          isOpen={!!active}
+          onDidDismiss={() => {
+            setSelected(null);
+            setEditDebt(null);
+          }}
+        >
+          <IonHeader>
+            <IonToolbar>
+              <IonTitle>{active?.name || 'بدهی مشتری'}</IonTitle>
+              <IonButtons slot="end">
+                <IonButton onClick={() => setSelected(null)}>بستن</IonButton>
+              </IonButtons>
+            </IonToolbar>
+          </IonHeader>
+          <IonContent className="ion-padding">
+            {active && (
+              <>
+                <div className="ios-kpi-grid">
+                  <div className="ios-kpi rose">
+                    <div className="k-label">کل بدهی مشتری</div>
+                    <div className="k-value">{formatToman(active.totalRemaining)}</div>
                   </div>
+                  <div className="ios-kpi">
+                    <div className="k-label">تعداد فاکتور</div>
+                    <div className="k-value">{active.invoiceCount}</div>
+                  </div>
+                </div>
+                <p className="hint">
+                  {active.phone || 'بدون تلفن'}
+                  {active.address ? ` · ${active.address}` : ''}
+                </p>
+
+                <div className="chip-row">
+                  <IonButton size="small" onClick={() => goNewInvoice(active)}>
+                    فاکتور جدید
+                  </IonButton>
+                  <IonButton
+                    size="small"
+                    fill="outline"
+                    routerLink="/customers"
+                    onClick={() => setSelected(null)}
+                  >
+                    صفحه مشتری
+                  </IonButton>
+                </div>
+
+                <div className="ios-section-title">دریافت روی کل بدهی</div>
+                <div className="ios-glass-card">
+                  <p className="hint">از قدیمی‌ترین فاکتور شروع می‌شود و کم می‌کند</p>
                   <div className="chip-row">
                     <IonChip
-                      color={method === 'cash' ? 'success' : 'medium'}
-                      outline={method !== 'cash'}
-                      onClick={() => setPayMethods({ ...payMethods, [d._id]: 'cash' })}
+                      className={payMethod === 'cash' ? 'ios-chip-active' : 'ios-chip'}
+                      onClick={() => setPayMethod('cash')}
                     >
                       نقد
                     </IonChip>
                     <IonChip
-                      color={method === 'card' ? 'primary' : 'medium'}
-                      outline={method !== 'card'}
-                      onClick={() => setPayMethods({ ...payMethods, [d._id]: 'card' })}
+                      className={payMethod === 'card' ? 'ios-chip-active' : 'ios-chip'}
+                      onClick={() => setPayMethod('card')}
                     >
                       کارت
                     </IonChip>
                   </div>
                   <IonItem>
-                    <IonLabel position="stacked">مبلغ دریافت (تومان)</IonLabel>
+                    <IonLabel position="stacked">مبلغ (تومان)</IonLabel>
                     <IonInput
-                      type="text"
                       inputMode="numeric"
-                      pattern="[0-9]*"
-                      value={payAmounts[d._id] || ''}
-                      onIonInput={(e) =>
-                        setPayAmounts({ ...payAmounts, [d._id]: formatMoneyInput(e.detail.value || '') })
-                      }
+                      value={payAmount}
+                      onIonInput={(e) => setPayAmount(formatMoneyInput(e.detail.value || ''))}
                     />
                   </IonItem>
                   <IonButton
                     expand="block"
-                    size="small"
+                    className="ios-primary-btn"
+                    disabled={!payAmount}
                     onClick={async () => {
-                      const amount = parseAmount(payAmounts[d._id] || '');
-                      if (!amount) {
-                        setToast({ open: true, msg: 'مبلغ را وارد کنید', color: 'danger' });
-                        return;
-                      }
+                      const amount = parseAmount(payAmount);
+                      if (!amount) return;
                       try {
-                        await wsClient.request(
-                          'debtor.pay',
-                          { id: d._id, amount, method },
+                        const res = await wsClient.request<{ applied: number }>(
+                          'debtor.payCustomer',
+                          {
+                            customerId: active.customerId,
+                            name: active.customerId ? undefined : active.name,
+                            phone: active.customerId ? undefined : active.phone,
+                            amount,
+                            method: payMethod,
+                          },
                           { clientMutationId: newMutationId(), queueIfOffline: true }
                         );
-                        setToast({ open: true, msg: 'ثبت شد', color: 'success' });
+                        setPayAmount('');
+                        setToast({
+                          open: true,
+                          msg: `${formatToman(res.applied)} از بدهی کم شد`,
+                          color: 'success',
+                        });
                         await load();
                       } catch (e) {
-                        setToast({ open: true, msg: e instanceof Error ? e.message : 'خطا', color: 'danger' });
+                        setToast({
+                          open: true,
+                          msg: e instanceof Error ? e.message : 'خطا',
+                          color: 'danger',
+                        });
                       }
                     }}
                   >
-                    ثبت دریافت
+                    ثبت دریافت کلی
                   </IonButton>
-                </IonCardContent>
-              </IonCard>
-            );
-          })}
-        </div>
+                </div>
+
+                <div className="ios-section-title">فاکتورهای بدهی</div>
+                {active.debts.map((d) => {
+                  const rem = d.remaining ?? Math.max(0, d.amount - (d.paidAmount || 0));
+                  const overdue = new Date(d.dueDate) < new Date();
+                  const method = lineMethod[d._id] || 'cash';
+                  return (
+                    <div key={d._id} className="ios-glass-card" style={{ marginTop: 10 }}>
+                      <div className="ios-row">
+                        <div>
+                          <strong>
+                            {overdue ? '⚠ ' : ''}
+                            {d.invoiceNumber || 'بدون شماره فاکتور'}
+                          </strong>
+                          <div className="ios-caption">
+                            سررسید {formatDate(d.dueDate)}
+                            {d.invoiceDate ? ` · فاکتور ${formatDate(d.invoiceDate)}` : ''}
+                            {d.invoiceKg ? ` · ${formatKg(d.invoiceKg)}` : ''}
+                          </div>
+                        </div>
+                        <div className="inv-card-amount">
+                          <div className="stat-value danger">{formatToman(rem)}</div>
+                          <div className="ios-caption">
+                            از {formatToman(d.amount)}
+                            {(d.paidAmount || 0) > 0 ? ` · پرداختی ${formatToman(d.paidAmount)}` : ''}
+                          </div>
+                        </div>
+                      </div>
+
+                      {(d.invoiceItems || []).length > 0 && (
+                        <div style={{ marginTop: 8 }}>
+                          {(d.invoiceItems || []).map((it, i) => {
+                            const perKg =
+                              it.unitPricePerKg ||
+                              (it.qtyKg > 0 ? Math.round(it.totalPrice / it.qtyKg) : 0);
+                            return (
+                              <div key={i} className="ios-caption" style={{ marginTop: 2 }}>
+                                {it.productName} · {formatKg(it.qtyKg)} · فی{' '}
+                                {formatToman(perKg)}/کیلو · {formatToman(it.totalPrice)}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                      {d.description && <p className="hint">{d.description}</p>}
+
+                      <div className="chip-row" style={{ marginTop: 8 }}>
+                        <IonButton
+                          size="small"
+                          fill="outline"
+                          onClick={() => goEditInvoice(d.saleInvoiceId)}
+                        >
+                          فاکتور / ویرایش
+                        </IonButton>
+                        {isAdmin && (
+                          <IonButton
+                            size="small"
+                            fill="clear"
+                            color="warning"
+                            onClick={() => {
+                              setEditDebt(d);
+                              setEditDue(d.dueDate ? String(d.dueDate).slice(0, 10) : '');
+                              setEditDesc(d.description || '');
+                            }}
+                          >
+                            ویرایش سررسید
+                          </IonButton>
+                        )}
+                      </div>
+
+                      <div className="chip-row">
+                        <IonChip
+                          className={method === 'cash' ? 'ios-chip-active' : 'ios-chip'}
+                          onClick={() => setLineMethod({ ...lineMethod, [d._id]: 'cash' })}
+                        >
+                          نقد
+                        </IonChip>
+                        <IonChip
+                          className={method === 'card' ? 'ios-chip-active' : 'ios-chip'}
+                          onClick={() => setLineMethod({ ...lineMethod, [d._id]: 'card' })}
+                        >
+                          کارت
+                        </IonChip>
+                      </div>
+                      <IonItem>
+                        <IonLabel position="stacked">دریافت این فاکتور (تومان)</IonLabel>
+                        <IonInput
+                          inputMode="numeric"
+                          value={linePay[d._id] || ''}
+                          onIonInput={(e) =>
+                            setLinePay({
+                              ...linePay,
+                              [d._id]: formatMoneyInput(e.detail.value || ''),
+                            })
+                          }
+                        />
+                      </IonItem>
+                      <IonButton
+                        expand="block"
+                        size="small"
+                        onClick={async () => {
+                          const amount = parseAmount(linePay[d._id] || '');
+                          if (!amount) {
+                            setToast({ open: true, msg: 'مبلغ را وارد کنید', color: 'danger' });
+                            return;
+                          }
+                          try {
+                            await wsClient.request(
+                              'debtor.pay',
+                              { id: d._id, amount, method },
+                              { clientMutationId: newMutationId(), queueIfOffline: true }
+                            );
+                            setLinePay({ ...linePay, [d._id]: '' });
+                            setToast({ open: true, msg: 'ثبت شد', color: 'success' });
+                            await load();
+                          } catch (e) {
+                            setToast({
+                              open: true,
+                              msg: e instanceof Error ? e.message : 'خطا',
+                              color: 'danger',
+                            });
+                          }
+                        }}
+                      >
+                        ثبت دریافت این فاکتور
+                      </IonButton>
+                    </div>
+                  );
+                })}
+              </>
+            )}
+          </IonContent>
+        </IonModal>
+
+        <IonModal isOpen={!!editDebt} onDidDismiss={() => setEditDebt(null)}>
+          <IonHeader>
+            <IonToolbar>
+              <IonTitle>ویرایش بدهی</IonTitle>
+              <IonButtons slot="end">
+                <IonButton onClick={() => setEditDebt(null)}>انصراف</IonButton>
+              </IonButtons>
+            </IonToolbar>
+          </IonHeader>
+          <IonContent className="ion-padding">
+            {editDebt && (
+              <>
+                <p className="hint">{editDebt.invoiceNumber || editDebt.name}</p>
+                <PersianDateField label="سررسید" value={editDue} onChange={setEditDue} />
+                <IonItem>
+                  <IonLabel position="stacked">توضیح</IonLabel>
+                  <IonInput
+                    value={editDesc}
+                    onIonInput={(e) => setEditDesc(e.detail.value || '')}
+                  />
+                </IonItem>
+                <IonButton
+                  expand="block"
+                  className="ios-primary-btn ion-margin-top"
+                  onClick={async () => {
+                    try {
+                      await wsClient.request('debtor.update', {
+                        id: editDebt._id,
+                        dueDate: editDue || undefined,
+                        description: editDesc,
+                      });
+                      setToast({ open: true, msg: 'ذخیره شد', color: 'success' });
+                      setEditDebt(null);
+                      await load();
+                    } catch (e) {
+                      setToast({
+                        open: true,
+                        msg: e instanceof Error ? e.message : 'خطا',
+                        color: 'danger',
+                      });
+                    }
+                  }}
+                >
+                  ذخیره
+                </IonButton>
+              </>
+            )}
+          </IonContent>
+        </IonModal>
+
         <IonToast
           isOpen={toast.open}
           message={toast.msg}
           color={toast.color}
-          duration={2200}
+          duration={2400}
           onDidDismiss={() => setToast((t) => ({ ...t, open: false }))}
           position="top"
         />

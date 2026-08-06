@@ -1,7 +1,7 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { Server } from 'http';
 import { MutationLog } from '../models';
-import { getSession, login, logout, listUsers, listMarketers, createUser } from '../services/authService';
+import { getSession, login, logout, listUsers, listMarketers, createUser, changeOwnCredentials, adminSetUserCredentials } from '../services/authService';
 import { getDashboard, getPeriodSummary, updateShopSettings, listDebtors, getProductAnalytics } from '../services/dashboardService';
 import {
   listProducts,
@@ -11,11 +11,13 @@ import {
   deleteCategory,
   calculateSalePrice,
   updateProduct,
+  deleteProduct,
+  adjustProductStock,
   saveProductImage,
   getPublicCatalog,
 } from '../services/productService';
 import { createPurchaseInvoice, listPurchaseInvoices, deletePurchaseInvoice, updatePurchaseInvoice } from '../services/purchaseService';
-import { createSaleInvoice, listSaleInvoices, recordDebtPayment, approveSale, shipSale, cancelSale, getSalePdfHtml, deleteSaleInvoice, updateSaleInvoice } from '../services/saleService';
+import { createSaleInvoice, listSaleInvoices, recordDebtPayment, recordCustomerDebtPayment, updateDebtor, approveSale, shipSale, cancelSale, getSalePdfHtml, deleteSaleInvoice, updateSaleInvoice, deactivateSaleInvoice, deactivateUnshippedSales } from '../services/saleService';
 import { createExpense, recordCardDeposit, listExpenses, listCardDeposits, deleteExpense, deleteCardDeposit, deleteCompanyPayment, listCashTransactions } from '../services/expenseService';
 import { wipeDevData, listWipeSections, getMongoCompassHint } from '../services/devWipeService';
 import { createCustomer, listCustomers, getCustomer, getCustomerInvoices, updateCustomer, getCustomerSuggestedPricing, quickFindCustomer, getCustomerCrmInsights, listCustomerDirectory, getCustomersMap } from '../services/customerService';
@@ -229,11 +231,40 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
       return { type: 'auth.me', payload: { user } };
     }
 
+    case 'auth.changePassword': {
+      const user = await requireAuth(ws, msg);
+      const result = await changeOwnCredentials(user.userId, {
+        currentPassword: String(p.currentPassword || ''),
+        newPassword: p.newPassword as string | undefined,
+        newUsername: p.newUsername as string | undefined,
+        newName: p.newName as string | undefined,
+      });
+      return { type: 'auth.changePassword', payload: result };
+    }
+
+    case 'auth.adminSetUser': {
+      const user = await requireAuth(ws, msg);
+      requireAdmin(user);
+      const result = await adminSetUserCredentials(user.userId, {
+        userId: String(p.userId),
+        password: p.password as string | undefined,
+        username: p.username as string | undefined,
+        name: p.name as string | undefined,
+        adminPassword: String(p.adminPassword || ''),
+      });
+      notifyDataChange('user', 'update', result);
+      return { type: 'auth.adminSetUser', payload: result };
+    }
+
     case 'dashboard.get': {
       const user = await requireAuth(ws, msg);
       const marketerId = user.role === 'marketer' ? user.userId : (p.marketerId as string | undefined);
       const date = p.date ? new Date(String(p.date)) : undefined;
-      return { type: 'dashboard.get', payload: await getDashboard(date, marketerId) };
+      const period =
+        p.period === 'week' || p.period === 'month' || p.period === 'today'
+          ? (p.period as 'today' | 'week' | 'month')
+          : 'today';
+      return { type: 'dashboard.get', payload: await getDashboard(date, marketerId, period) };
     }
 
     case 'dashboard.period': {
@@ -293,6 +324,8 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
         goldenSuggestGiftName: p.goldenSuggestGiftName as string | undefined,
         goldenSuggestGiftQty: p.goldenSuggestGiftQty as number | undefined,
         goldenSuggestDiscountPercent: p.goldenSuggestDiscountPercent as number | undefined,
+        actionPassword: p.actionPassword as string | undefined,
+        wipePassword: p.wipePassword as string | undefined,
       });
       notifyDataChange('settings', 'update', result);
       return { type: 'settings.update', payload: result };
@@ -356,6 +389,26 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
       });
       notifyDataChange('product', 'update', result);
       return { type: 'product.update', payload: result };
+    }
+
+    case 'product.delete': {
+      const user = await requireAuth(ws, msg);
+      requireAdmin(user);
+      const result = await deleteProduct(String(p.id), p.password as string | undefined);
+      notifyDataChange('product', 'delete', result);
+      return { type: 'product.delete', payload: result };
+    }
+
+    case 'product.stock.adjust': {
+      const user = await requireAuth(ws, msg);
+      requireAdmin(user);
+      const result = await adjustProductStock(String(p.id), p.password as string | undefined, {
+        mode: (p.mode as 'set' | 'delta') || 'set',
+        qtyKg: Number(p.qtyKg),
+        notes: p.notes as string | undefined,
+      });
+      notifyDataChange('product', 'stock', result);
+      return { type: 'product.stock.adjust', payload: result };
     }
 
     case 'product.uploadImage': {
@@ -672,6 +725,24 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
       return { type: 'sale.delete', payload: result };
     }
 
+    case 'sale.deactivate': {
+      const user = await requireAuth(ws, msg);
+      requireAdmin(user);
+      const result = await deactivateSaleInvoice(String(p.id), p.password as string | undefined);
+      notifyDataChange('sale', 'deactivate', result);
+      notifyDataChange('product', 'update', result);
+      return { type: 'sale.deactivate', payload: result };
+    }
+
+    case 'sale.deactivateUnshipped': {
+      const user = await requireAuth(ws, msg);
+      requireAdmin(user);
+      const result = await deactivateUnshippedSales(p.password as string | undefined);
+      notifyDataChange('sale', 'deactivateUnshipped', result);
+      notifyDataChange('product', 'update', result);
+      return { type: 'sale.deactivateUnshipped', payload: result };
+    }
+
     case 'sale.update': {
       const user = await requireAuth(ws, msg);
       requireAdmin(user);
@@ -935,6 +1006,34 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
       );
       notifyDataChange('debtor', 'pay', result);
       return { type: 'debtor.pay', payload: result };
+    }
+
+    case 'debtor.payCustomer': {
+      const user = await requireAuth(ws, msg);
+      const result = await withIdempotency(msg.clientMutationId, msg.type, user.userId, () =>
+        recordCustomerDebtPayment({
+          customerId: p.customerId as string | undefined,
+          name: p.name as string | undefined,
+          phone: p.phone as string | undefined,
+          amount: Number(p.amount),
+          method: (p.method as 'cash' | 'card') || 'cash',
+        })
+      );
+      notifyDataChange('debtor', 'payCustomer', result);
+      return { type: 'debtor.payCustomer', payload: result };
+    }
+
+    case 'debtor.update': {
+      const user = await requireAuth(ws, msg);
+      requireAdmin(user);
+      const result = await updateDebtor(String(p.id), {
+        dueDate: p.dueDate ? new Date(String(p.dueDate)) : undefined,
+        description: p.description as string | undefined,
+        name: p.name as string | undefined,
+        phone: p.phone as string | undefined,
+      });
+      notifyDataChange('debtor', 'update', result);
+      return { type: 'debtor.update', payload: result };
     }
 
     case 'target.upsert': {

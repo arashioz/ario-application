@@ -214,22 +214,20 @@ const More: React.FC = () => {
         label: 'هزینه',
         desc: 'شرکت و واریز',
       });
-    }
-    if (isAdmin && driverPanelEnabled) {
-      ops.push(
-        {
-          href: '/drivers-map',
-          icon: navigateOutline,
-          label: 'نقشه راننده',
-          desc: 'موقعیت زنده',
-        },
-        {
+      ops.push({
+        href: '/drivers-map',
+        icon: navigateOutline,
+        label: 'نقشه تیم',
+        desc: 'راننده و بازاریاب',
+      });
+      if (driverPanelEnabled) {
+        ops.push({
           href: '/driver-payouts',
           icon: bicycleOutline,
           label: 'پرداخت راننده',
           desc: 'کارت و کیف',
-        }
-      );
+        });
+      }
     }
 
     const out: MoreGroup[] = [

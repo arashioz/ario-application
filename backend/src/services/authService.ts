@@ -97,6 +97,77 @@ export async function logout(token: string) {
   await Session.deleteOne({ token }).catch(() => undefined);
 }
 
+export async function changeOwnCredentials(
+  userId: string,
+  data: {
+    currentPassword: string;
+    newPassword?: string;
+    newUsername?: string;
+    newName?: string;
+  }
+) {
+  const user = await User.findById(userId);
+  if (!user) throw new Error('کاربر یافت نشد');
+  if (!user.verifyPassword(data.currentPassword)) {
+    throw new Error('رمز فعلی اشتباه است');
+  }
+  if (data.newUsername?.trim()) {
+    const u = data.newUsername.trim().toLowerCase();
+    const clash = await User.findOne({ username: u, _id: { $ne: userId } }).select('_id');
+    if (clash) throw new Error('این نام کاربری قبلاً ثبت شده');
+    user.username = u;
+  }
+  if (data.newName?.trim()) user.name = data.newName.trim();
+  if (data.newPassword) {
+    if (data.newPassword.length < 4) throw new Error('رمز جدید حداقل ۴ کاراکتر');
+    user.passwordHash = hashPassword(data.newPassword);
+  }
+  await user.save();
+  return {
+    id: user._id.toString(),
+    username: user.username,
+    name: user.name,
+    role: user.role,
+  };
+}
+
+export async function adminSetUserCredentials(
+  adminId: string,
+  data: {
+    userId: string;
+    password?: string;
+    username?: string;
+    name?: string;
+    adminPassword: string;
+  }
+) {
+  const admin = await User.findById(adminId);
+  if (!admin || admin.role !== 'admin') throw new Error('فقط مدیر');
+  if (!admin.verifyPassword(data.adminPassword)) {
+    throw new Error('رمز مدیر اشتباه است');
+  }
+  const user = await User.findById(data.userId);
+  if (!user) throw new Error('کاربر یافت نشد');
+  if (data.username?.trim()) {
+    const u = data.username.trim().toLowerCase();
+    const clash = await User.findOne({ username: u, _id: { $ne: data.userId } }).select('_id');
+    if (clash) throw new Error('این نام کاربری قبلاً ثبت شده');
+    user.username = u;
+  }
+  if (data.name?.trim()) user.name = data.name.trim();
+  if (data.password) {
+    if (data.password.length < 4) throw new Error('رمز حداقل ۴ کاراکتر');
+    user.passwordHash = hashPassword(data.password);
+  }
+  await user.save();
+  return {
+    id: user._id.toString(),
+    username: user.username,
+    name: user.name,
+    role: user.role,
+  };
+}
+
 export async function createUser(data: {
   username: string;
   password: string;
