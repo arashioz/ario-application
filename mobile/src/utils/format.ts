@@ -126,8 +126,30 @@ export function parseAmount(text: string): number | null {
   return isNaN(num) ? null : num;
 }
 
+/** تاریخ محلی امروز به‌صورت YYYY-MM-DD (نه UTC — در ایران یک روز عقب نمی‌افتد) */
 export function todayIso(): string {
-  return new Date().toISOString().split('T')[0];
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/** اول ماه جاری محلی */
+export function monthStartIso(ref = new Date()): string {
+  const y = ref.getFullYear();
+  const m = String(ref.getMonth() + 1).padStart(2, '0');
+  return `${y}-${m}-01`;
+}
+
+/** N روز قبل از امروز (محلی) */
+export function daysAgoIso(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - Math.max(0, days));
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 
 export function resolveQty(unit: 'kg' | 'package', qty: number, kgPerPackage: number) {

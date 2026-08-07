@@ -19,17 +19,30 @@ import {
   RefresherEventDetail,
 } from '@ionic/react';
 import { wsClient } from '../api/ws';
-import { formatToman, formatKg, formatDate, todayIso, formatMoneyInput, parseAmount } from '../utils/format';
+import {
+  formatToman,
+  formatKg,
+  formatDate,
+  todayIso,
+  monthStartIso,
+  daysAgoIso,
+  formatMoneyInput,
+  parseAmount,
+} from '../utils/format';
 import { PersianDateField } from '../components/PersianDateField';
 import { MoneyInput } from '../components/MoneyInput';
 import { useAuth } from '../auth/AuthContext';
+import { expenseTypes } from '../theme/colors';
 
 interface Period {
   totalSales: number;
   soldKg: number;
   soldTons?: number;
   totalProfit: number;
+  totalCost?: number;
   totalExpenses: number;
+  excludedExpenses?: number;
+  expenseByType?: Record<string, number>;
   netProfit?: number;
   invoiceCount?: number;
   payment?: { cash: number; card: number; credit: number };
@@ -110,9 +123,13 @@ type CashTx = {
   paymentMethod?: 'cash' | 'card' | 'card_to_card';
 };
 
+const EXPENSE_LABELS: Record<string, string> = Object.fromEntries(
+  expenseTypes.map((t) => [t.value, t.label])
+);
+
 const History: React.FC = () => {
   const { isAdmin } = useAuth();
-  const [from, setFrom] = useState('');
+  const [from, setFrom] = useState(monthStartIso());
   const [to, setTo] = useState(todayIso());
   const [shopName, setShopName] = useState('');
   const [openingDate, setOpeningDate] = useState('');
@@ -132,27 +149,30 @@ const History: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [showReportExtras, setShowReportExtras] = useState(false);
 
-  const runReport = useCallback(async (f?: string, t?: string) => {
-    const fromDate = f || from;
-    const toDate = t || to;
-    if (!fromDate || !toDate) return;
-    setLoading(true);
-    try {
-      const data = await wsClient.request<Period>('dashboard.period', {
-        from: fromDate,
-        to: toDate,
-      });
-      setPeriod(data);
-      if (data.balances) {
-        setLiveCash(data.balances.cashBalance);
-        setLiveCard(data.balances.cardBalance);
+  const runReport = useCallback(
+    async (f?: string, t?: string) => {
+      const fromDate = f || from;
+      const toDate = t || to;
+      if (!fromDate || !toDate) return;
+      setLoading(true);
+      try {
+        const data = await wsClient.request<Period>('dashboard.period', {
+          from: fromDate,
+          to: toDate,
+        });
+        setPeriod(data);
+        if (data.balances) {
+          setLiveCash(data.balances.cashBalance);
+          setLiveCard(data.balances.cardBalance);
+        }
+      } catch (e) {
+        setToast({ open: true, msg: e instanceof Error ? e.message : 'خطا', color: 'danger' });
+      } finally {
+        setLoading(false);
       }
-    } catch (e) {
-      setToast({ open: true, msg: e instanceof Error ? e.message : 'خطا', color: 'danger' });
-    } finally {
-      setLoading(false);
-    }
-  }, [from, to]);
+    },
+    [from, to]
+  );
 
   const loadSettings = useCallback(async () => {
     const s = await wsClient.request<{
@@ -168,22 +188,25 @@ const History: React.FC = () => {
     setCardBalance(formatMoneyInput(String(s.cardBalance || 0)));
     setLiveCash(s.cashBalance || 0);
     setLiveCard(s.cardBalance || 0);
-    const nextFrom = from || openDay;
-    const nextTo = to || todayIso();
-    if (!from) setFrom(nextFrom);
-    if (!to) setTo(nextTo);
-    return { from: nextFrom, to: nextTo };
+    return { from, to };
   }, [from, to]);
 
-  const loadCashTxs = useCallback(async () => {
-    if (!isAdmin) return;
-    try {
-      const list = await wsClient.request<CashTx[]>('cash.list', { limit: 40 });
-      setCashTxs(Array.isArray(list) ? list : []);
-    } catch {
-      setCashTxs([]);
-    }
-  }, [isAdmin]);
+  const loadCashTxs = useCallback(
+    async (f = from, t = to) => {
+      if (!isAdmin) return;
+      try {
+        const list = await wsClient.request<CashTx[]>('cash.list', {
+          limit: 40,
+          from: f || undefined,
+          to: t || undefined,
+        });
+        setCashTxs(Array.isArray(list) ? list : []);
+      } catch {
+        setCashTxs([]);
+      }
+    },
+    [isAdmin, from, to]
+  );
 
   const loadCompanyDebt = useCallback(async () => {
     if (!isAdmin) return;
@@ -195,23 +218,36 @@ const History: React.FC = () => {
     }
   }, [isAdmin]);
 
+  const refreshAll = useCallback(
+    async (f = from, t = to) => {
+      await loadSettings().catch(() => null);
+      await Promise.all([loadCashTxs(f, t), loadCompanyDebt()]);
+      await runReport(f, t);
+    },
+    [from, to, loadSettings, loadCashTxs, loadCompanyDebt, runReport]
+  );
+
   useEffect(() => {
-    void (async () => {
-      try {
-        const range = await loadSettings();
-        await Promise.all([loadCashTxs(), loadCompanyDebt()]);
-        await runReport(range.from, range.to);
-      } catch (e) {
-        console.warn(e);
-      }
-    })();
+    void refreshAll().catch(console.warn);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const applyPreset = (preset: 'today' | 'week' | 'month' | 'all') => {
+    const nextTo = todayIso();
+    let nextFrom = monthStartIso();
+    if (preset === 'today') nextFrom = nextTo;
+    else if (preset === 'week') nextFrom = daysAgoIso(6);
+    else if (preset === 'all') nextFrom = openingDate || monthStartIso();
+    setFrom(nextFrom);
+    setTo(nextTo);
+    void refreshAll(nextFrom, nextTo);
+  };
 
   const profit = period?.totalProfit ?? 0;
   const expenses = period?.totalExpenses ?? 0;
   const net = period?.netProfit ?? profit - expenses;
   const inLoss = net < 0;
+  const cost = period?.totalCost ?? 0;
 
   return (
     <IonPage>
@@ -224,10 +260,7 @@ const History: React.FC = () => {
         <IonRefresher
           slot="fixed"
           onIonRefresh={async (e: CustomEvent<RefresherEventDetail>) => {
-            const range = await loadSettings().catch(() => ({ from, to }));
-            await loadCashTxs();
-            await loadCompanyDebt();
-            await runReport(range.from, range.to);
+            await refreshAll();
             e.detail.complete();
           }}
         >
@@ -235,6 +268,38 @@ const History: React.FC = () => {
         </IonRefresher>
 
         <div className="ion-padding cashbox-page">
+          {/* بازه — اول صفحه */}
+          <div className="cash-section-title">بازه گزارش</div>
+          <div className="cash-range-card">
+            <div className="chip-row" style={{ marginBottom: 8 }}>
+              <IonChip className="ios-chip" onClick={() => applyPreset('today')}>
+                امروز
+              </IonChip>
+              <IonChip className="ios-chip" onClick={() => applyPreset('week')}>
+                ۷ روز
+              </IonChip>
+              <IonChip className="ios-chip" onClick={() => applyPreset('month')}>
+                این ماه
+              </IonChip>
+              {openingDate && (
+                <IonChip className="ios-chip" onClick={() => applyPreset('all')}>
+                  از اول مغازه
+                </IonChip>
+              )}
+            </div>
+            <PersianDateField label="از تاریخ" value={from} onChange={setFrom} />
+            <PersianDateField label="تا تاریخ" value={to} onChange={setTo} />
+            <IonButton
+              expand="block"
+              className="ios-primary-btn"
+              size="small"
+              disabled={loading || !from || !to}
+              onClick={() => void refreshAll()}
+            >
+              {loading ? <IonSpinner name="crescent" /> : 'به‌روز کردن گزارش'}
+            </IonButton>
+          </div>
+
           {/* موجودی زنده */}
           <div className="cash-hero">
             <div className="cash-hero-label">موجودی صندوق</div>
@@ -256,31 +321,127 @@ const History: React.FC = () => {
             <div className="cash-profit-label">سود فروش (بازه انتخابی)</div>
             <div className="cash-profit-value">{formatToman(profit)}</div>
             <div className="cash-profit-meta">
-              {from && to
-                ? `${formatDate(from)} تا ${formatDate(to)}`
-                : 'بازه را انتخاب کنید'}
+              {from && to ? `${formatDate(from)} تا ${formatDate(to)}` : 'بازه را انتخاب کنید'}
               {period?.invoiceCount != null ? ` · ${period.invoiceCount} فاکتور` : ''}
               {period ? ` · فروش ${formatToman(period.totalSales)}` : ''}
             </div>
           </div>
 
           <div className="cash-summary-card">
+            <div className="cash-sum-row">
+              <span>هزینه خرید کالا</span>
+              <strong>{formatToman(cost)}</strong>
+            </div>
             <div className="cash-sum-row good">
-              <span>اینقدر سود کردی</span>
+              <span>اینقدر سود کردی (فروش − بهای کالا)</span>
               <strong>{formatToman(profit)}</strong>
             </div>
             <div className="cash-sum-row cost">
-              <span>اینقدر هزینه کردی</span>
+              <span>اینقدر هزینه عملیاتی کردی</span>
               <strong>{formatToman(expenses)}</strong>
             </div>
+            {(period?.excludedExpenses || 0) > 0 && (
+              <div className="cash-sum-row">
+                <span>برداشت/قرض (جزو هزینه عملیاتی نیست)</span>
+                <strong>{formatToman(period?.excludedExpenses || 0)}</strong>
+              </div>
+            )}
             <div className={`cash-sum-row result ${inLoss ? 'loss' : 'win'}`}>
               <span>{inLoss ? 'الان اینقدر تو ضرری' : 'الان اینقدر سود خالص داری'}</span>
               <strong>{formatToman(Math.abs(net))}</strong>
             </div>
             <p className="hint" style={{ margin: '10px 0 0' }}>
-              سود فروش = فروش بعد از تخفیف − هزینه خرید کالا. هزینه مغازه جدا کم می‌شود.
+              هزینه‌ها فقط در بازه انتخابی جمع می‌شوند. برداشت شخصی و قرض جزو «هزینه عملیاتی» نیست.
+              واریز کارت هم جداست.
             </p>
+            {profit < 0 && (
+              <p className="hint" style={{ margin: '8px 0 0', color: '#b91c1c' }}>
+                سود منفی معمولاً یعنی فی خرید کالا از قیمت فروش بیشتر است — فاکتورهای خرید و قیمت
+                محصولات را بررسی کنید.
+              </p>
+            )}
           </div>
+
+          {period?.expenseByType && Object.keys(period.expenseByType).length > 0 && (
+            <div className="ios-glass-card">
+              <div className="ios-section-title" style={{ marginTop: 0 }}>
+                جزئیات هزینه عملیاتی
+              </div>
+              {Object.entries(period.expenseByType)
+                .sort((a, b) => b[1] - a[1])
+                .map(([k, v]) => (
+                  <div key={k} className="stat-row">
+                    <span>{EXPENSE_LABELS[k] || k}</span>
+                    <span>{formatToman(v)}</span>
+                  </div>
+                ))}
+            </div>
+          )}
+
+          {period && (
+            <>
+              <div className="cash-kpi-row" style={{ marginTop: 8 }}>
+                <div>
+                  <div className="ios-caption">فروش</div>
+                  <strong>{formatToman(period.totalSales)}</strong>
+                </div>
+                <div>
+                  <div className="ios-caption">تناژ</div>
+                  <strong>{formatKg(period.soldKg)}</strong>
+                </div>
+                <div>
+                  <div className="ios-caption">فاکتور</div>
+                  <strong>{period.invoiceCount ?? '—'}</strong>
+                </div>
+              </div>
+
+              <IonButton
+                size="small"
+                fill="clear"
+                onClick={() => setShowReportExtras((v) => !v)}
+              >
+                {showReportExtras ? 'بستن جزئیات' : 'جزئیات بیشتر'}
+              </IonButton>
+
+              {showReportExtras && (
+                <div className="cash-extras">
+                  {period.payment && (
+                    <>
+                      <div className="stat-row">
+                        <span>نقد</span>
+                        <span>{formatToman(period.payment.cash)}</span>
+                      </div>
+                      <div className="stat-row">
+                        <span>کارت</span>
+                        <span>{formatToman(period.payment.card)}</span>
+                      </div>
+                      <div className="stat-row">
+                        <span>نسیه</span>
+                        <span>{formatToman(period.payment.credit)}</span>
+                      </div>
+                    </>
+                  )}
+                  {period.daily.slice(-7).map((d) => (
+                    <div key={d.date} className="cash-day-line">
+                      <span>{formatDate(d.date)}</span>
+                      <span>{formatToman(d.sales)}</span>
+                      <span className={(d.profit ?? d.netProfit) >= 0 ? 'success' : 'danger'}>
+                        {formatToman(d.profit ?? d.netProfit)}
+                      </span>
+                    </div>
+                  ))}
+                  {(period.soldByProduct || []).slice(0, 6).map((it) => (
+                    <div key={it.productId} className="stat-row">
+                      <span className="stat-label">
+                        {it.name} · {formatKg(it.soldKg)}
+                      </span>
+                      <span className="stat-value">{formatToman(it.revenue)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
 
           {/* بدهی شرکت */}
           {isAdmin && companyDebt && (
@@ -372,9 +533,9 @@ const History: React.FC = () => {
           {/* گردش */}
           {isAdmin && (
             <>
-              <div className="cash-section-title">گردش صندوق</div>
+              <div className="cash-section-title">گردش صندوق (بازه)</div>
               <div className="cash-ledger">
-                {cashTxs.length === 0 && <p className="hint">تراکنشی ثبت نشده</p>}
+                {cashTxs.length === 0 && <p className="hint">تراکنشی در این بازه نیست</p>}
                 {cashTxs.slice(0, 12).map((tx) => (
                   <button
                     type="button"
@@ -408,87 +569,6 @@ const History: React.FC = () => {
               </div>
             </>
           )}
-
-          {/* گزارش بازه */}
-          <div className="cash-section-title">بازه گزارش</div>
-          <div className="cash-range-card">
-            <PersianDateField label="از تاریخ" value={from} onChange={setFrom} />
-            <PersianDateField label="تا تاریخ" value={to} onChange={setTo} />
-            <IonButton
-              expand="block"
-              className="ios-primary-btn"
-              size="small"
-              disabled={loading || !from || !to}
-              onClick={() => void runReport()}
-            >
-              {loading ? <IonSpinner name="crescent" /> : 'به‌روز کردن گزارش'}
-            </IonButton>
-
-            {period && (
-              <>
-                <div className="cash-kpi-row">
-                  <div>
-                    <div className="ios-caption">فروش</div>
-                    <strong>{formatToman(period.totalSales)}</strong>
-                  </div>
-                  <div>
-                    <div className="ios-caption">تناژ</div>
-                    <strong>{formatKg(period.soldKg)}</strong>
-                  </div>
-                  <div>
-                    <div className="ios-caption">فاکتور</div>
-                    <strong>{period.invoiceCount ?? '—'}</strong>
-                  </div>
-                </div>
-
-                <IonButton
-                  size="small"
-                  fill="clear"
-                  onClick={() => setShowReportExtras((v) => !v)}
-                >
-                  {showReportExtras ? 'بستن جزئیات' : 'جزئیات بیشتر'}
-                </IonButton>
-
-                {showReportExtras && (
-                  <div className="cash-extras">
-                    {period.payment && (
-                      <>
-                        <div className="stat-row">
-                          <span>نقد</span>
-                          <span>{formatToman(period.payment.cash)}</span>
-                        </div>
-                        <div className="stat-row">
-                          <span>کارت</span>
-                          <span>{formatToman(period.payment.card)}</span>
-                        </div>
-                        <div className="stat-row">
-                          <span>نسیه</span>
-                          <span>{formatToman(period.payment.credit)}</span>
-                        </div>
-                      </>
-                    )}
-                    {period.daily.slice(-7).map((d) => (
-                      <div key={d.date} className="cash-day-line">
-                        <span>{formatDate(d.date)}</span>
-                        <span>{formatToman(d.sales)}</span>
-                        <span className={(d.profit ?? d.netProfit) >= 0 ? 'success' : 'danger'}>
-                          {formatToman(d.profit ?? d.netProfit)}
-                        </span>
-                      </div>
-                    ))}
-                    {(period.soldByProduct || []).slice(0, 6).map((it) => (
-                      <div key={it.productId} className="stat-row">
-                        <span className="stat-label">
-                          {it.name} · {formatKg(it.soldKg)}
-                        </span>
-                        <span className="stat-value">{formatToman(it.revenue)}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </>
-            )}
-          </div>
 
           {/* تنظیمات */}
           {isAdmin && (

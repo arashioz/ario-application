@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import {
   IonPage,
   IonHeader,
@@ -26,7 +26,7 @@ import {
 import { addOutline, trashOutline, copyOutline } from 'ionicons/icons';
 import { wsClient } from '../api/ws';
 import { useAuth } from '../auth/AuthContext';
-import { formatToman, formatKg, formatDate, todayIso, sanitizeNumberInput } from '../utils/format';
+import { sanitizeNumberInput } from '../utils/format';
 import { copyText } from '../utils/invoiceShare';
 
 type BankCard = {
@@ -34,13 +34,7 @@ type BankCard = {
   cardNumber: string;
   accountHolder?: string;
   bankName?: string;
-};
-
-type DailyPoint = {
-  date: string;
-  sales: number;
-  soldKg: number;
-  netProfit: number;
+  isDefault?: boolean;
 };
 
 /** تنظیمات عمومی مغازه — برند و کاتالوگ در «مدیریت کاتالوگ» */
@@ -85,33 +79,6 @@ const AppSettings: React.FC = () => {
   const [adminSetUsername, setAdminSetUsername] = useState('');
   const [adminSetPw, setAdminSetPw] = useState('');
   const [adminConfirmPw, setAdminConfirmPw] = useState('');
-
-  const [chartDays, setChartDays] = useState<DailyPoint[]>([]);
-  const [chartLoading, setChartLoading] = useState(false);
-  const [chartRange, setChartRange] = useState<'7' | '30' | '90'>('30');
-
-  const loadChart = useCallback(async (range: '7' | '30' | '90' = chartRange) => {
-    setChartLoading(true);
-    try {
-      const days = parseInt(range, 10);
-      const to = new Date();
-      to.setHours(23, 59, 59, 999);
-      const from = new Date();
-      from.setDate(from.getDate() - (days - 1));
-      from.setHours(0, 0, 0, 0);
-      const data = await wsClient.request<{
-        daily?: DailyPoint[];
-      }>('dashboard.period', {
-        from: from.toISOString(),
-        to: to.toISOString(),
-      });
-      setChartDays(Array.isArray(data.daily) ? data.daily : []);
-    } catch {
-      setChartDays([]);
-    } finally {
-      setChartLoading(false);
-    }
-  }, [chartRange]);
 
   const load = useCallback(async () => {
     const s = await wsClient.request<{
@@ -161,8 +128,7 @@ const AppSettings: React.FC = () => {
         /* ignore */
       }
     }
-    await loadChart(chartRange);
-  }, [isAdmin, loadChart, chartRange]);
+  }, [isAdmin]);
 
   const skipToggleSave = useRef(true);
   useIonViewWillEnter(() => {
@@ -175,22 +141,6 @@ const AppSettings: React.FC = () => {
         }, 400);
       });
   });
-
-  const maxSales = useMemo(
-    () => Math.max(1, ...chartDays.map((d) => d.sales || 0)),
-    [chartDays]
-  );
-  const chartTotals = useMemo(() => {
-    let sales = 0;
-    let kg = 0;
-    let profit = 0;
-    for (const d of chartDays) {
-      sales += d.sales || 0;
-      kg += d.soldKg || 0;
-      profit += d.netProfit || 0;
-    }
-    return { sales, kg, profit };
-  }, [chartDays]);
 
   const copyUri = async () => {
     const text = mongoCompassUri || mongoUriHint;
@@ -266,15 +216,23 @@ const AppSettings: React.FC = () => {
       return;
     }
     const next = [
-      ...bankCards,
+      ...bankCards.map((c) => ({ ...c, isDefault: bankCards.length === 0 ? true : !!c.isDefault })),
       {
         label: newCard.label.trim(),
         cardNumber: newCard.cardNumber.replace(/\s+/g, ''),
         accountHolder: newCard.accountHolder?.trim() || undefined,
         bankName: newCard.bankName?.trim() || undefined,
+        isDefault: bankCards.length === 0,
       },
     ];
+    // اگر لیست قبلی پیش‌فرض نداشت، اولی را پیش‌فرض کن
+    if (!next.some((c) => c.isDefault) && next.length) next[0].isDefault = true;
     setNewCard({ label: '', cardNumber: '', accountHolder: '', bankName: '' });
+    void saveBankCards(next);
+  };
+
+  const setDefaultCard = (index: number) => {
+    const next = bankCards.map((c, i) => ({ ...c, isDefault: i === index }));
     void saveBankCards(next);
   };
 
@@ -319,68 +277,7 @@ const AppSettings: React.FC = () => {
         </IonRefresher>
 
         <div className="ion-padding compact">
-          <div className="ios-glass-card">
-            <div className="ios-section-title" style={{ marginTop: 0 }}>
-              نمودار فروش
-            </div>
-            <div className="chip-row">
-              {(['7', '30', '90'] as const).map((r) => (
-                <IonChip
-                  key={r}
-                  className={chartRange === r ? 'ios-chip-active' : 'ios-chip'}
-                  onClick={() => {
-                    setChartRange(r);
-                    void loadChart(r);
-                  }}
-                >
-                  {r === '7' ? '۷ روز' : r === '30' ? '۳۰ روز' : '۹۰ روز'}
-                </IonChip>
-              ))}
-            </div>
-            {chartLoading && <p className="hint">در حال بارگذاری…</p>}
-            {!chartLoading && (
-              <>
-                <div className="stat-row">
-                  <span className="stat-label">فروش بازه</span>
-                  <span className="stat-value">{formatToman(chartTotals.sales)}</span>
-                </div>
-                <div className="stat-row">
-                  <span className="stat-label">تناژ</span>
-                  <span className="stat-value">{formatKg(chartTotals.kg)}</span>
-                </div>
-                <div className="stat-row">
-                  <span className="stat-label">سود خالص</span>
-                  <span className="stat-value success">{formatToman(chartTotals.profit)}</span>
-                </div>
-                {chartDays.length === 0 ? (
-                  <p className="hint">در این بازه فروشی نیست</p>
-                ) : (
-                  <div className="pa-trend" style={{ marginTop: 10 }}>
-                    {chartDays.map((d) => (
-                      <div key={d.date} className="pa-trend-row">
-                        <span className="pa-trend-label">{formatDate(d.date).replace(/\/\d{4}$/, '')}</span>
-                        <div className="pa-trend-bar-wrap">
-                          <div
-                            className="pa-trend-bar"
-                            style={{
-                              width: `${Math.max(4, ((d.sales || 0) / maxSales) * 100)}%`,
-                            }}
-                            title={todayIso()}
-                          />
-                        </div>
-                        <span className="pa-trend-val">{formatToman(d.sales)}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </>
-            )}
-            <p className="hint" style={{ marginBottom: 0 }}>
-              گزارش جزئی‌تر در بخش «گزارشات / صندوق» هم هست
-            </p>
-          </div>
-
-          <div className="ios-glass-card" style={{ marginTop: 12 }}>
+          <div className="ios-glass-card" style={{ marginTop: 0 }}>
             <p className="hint">
               لینک کاتالوگ، برند، لوگو، عکس محصول و پله‌های قیمت در{' '}
               <a href="/catalog-admin">مدیریت کاتالوگ</a> است.
@@ -398,17 +295,27 @@ const AppSettings: React.FC = () => {
           {isAdmin && (
             <div className="ios-glass-card" style={{ marginTop: 12 }}>
               <div className="ios-section-title" style={{ marginTop: 0 }}>
-                کارت‌به‌کارت (حساب‌های من)
+                حساب‌های من (شماره کارت)
               </div>
               <p className="hint">
-                این کارت‌ها موقع انتخاب «کارت به کارت» در فروش نمایش داده می‌شوند تا برای مشتری کپی
-                کنید
+                کارت‌های فروشگاه را اینجا ثبت کنید. کارت «پیش‌فرض» همیشه پایین متن کپی فاکتور فروش
+                برای مشتری می‌آید.
               </p>
+              {bankCards.length === 0 && (
+                <p className="hint convert-hint">هنوز کارتی ثبت نشده — یکی اضافه کنید</p>
+              )}
               {bankCards.map((c, i) => (
-                <div key={`${c.cardNumber}-${i}`} className="ios-glass-card" style={{ marginBottom: 8 }}>
+                <div
+                  key={`${c.cardNumber}-${i}`}
+                  className={`ios-glass-card${c.isDefault ? ' in-cart' : ''}`}
+                  style={{ marginBottom: 8 }}
+                >
                   <div className="ios-row">
                     <div>
-                      <strong>{c.label}</strong>
+                      <strong>
+                        {c.label}
+                        {c.isDefault ? ' · پیش‌فرض' : ''}
+                      </strong>
                       <div className="ios-caption">
                         {c.bankName ? `${c.bankName} · ` : ''}
                         {c.accountHolder || ''}
@@ -417,7 +324,17 @@ const AppSettings: React.FC = () => {
                         {c.cardNumber.replace(/(\d{4})(?=\d)/g, '$1 ')}
                       </div>
                     </div>
-                    <div className="chip-row">
+                    <div className="chip-row" style={{ flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                      {!c.isDefault && (
+                        <IonButton size="small" fill="solid" onClick={() => setDefaultCard(i)}>
+                          پیش‌فرض
+                        </IonButton>
+                      )}
+                      {c.isDefault && (
+                        <IonChip className="ios-chip-active" style={{ margin: 0 }}>
+                          پیش‌فرض
+                        </IonChip>
+                      )}
                       <IonButton
                         size="small"
                         fill="outline"
@@ -438,7 +355,11 @@ const AppSettings: React.FC = () => {
                         size="small"
                         fill="clear"
                         color="danger"
-                        onClick={() => void saveBankCards(bankCards.filter((_, j) => j !== i))}
+                        onClick={() => {
+                          const next = bankCards.filter((_, j) => j !== i);
+                          if (next.length && !next.some((x) => x.isDefault)) next[0].isDefault = true;
+                          void saveBankCards(next);
+                        }}
                       >
                         <IonIcon icon={trashOutline} />
                       </IonButton>
@@ -483,7 +404,13 @@ const AppSettings: React.FC = () => {
                   onIonInput={(e) => setNewCard({ ...newCard, bankName: e.detail.value || '' })}
                 />
               </IonItem>
-              <IonButton expand="block" fill="outline" size="small" className="ion-margin-top" onClick={addBankCard}>
+              <IonButton
+                expand="block"
+                fill="outline"
+                size="small"
+                className="ion-margin-top"
+                onClick={addBankCard}
+              >
                 <IonIcon slot="start" icon={addOutline} />
                 افزودن کارت
               </IonButton>
@@ -955,7 +882,7 @@ const AppSettings: React.FC = () => {
 
           {!isAdmin && (
             <div className="ios-glass-card" style={{ marginTop: 12 }}>
-              <p className="hint">فقط مدیر می‌تواند تنظیمات را تغییر دهد — نمودار فروش برای همه قابل مشاهده است</p>
+              <p className="hint">فقط مدیر می‌تواند تنظیمات را تغییر دهد</p>
             </div>
           )}
         </div>

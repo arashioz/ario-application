@@ -69,6 +69,7 @@ import {
   buildInvoiceShareText,
   buildCardTransferText,
   copyText,
+  pickDefaultBankCard,
 } from '../utils/invoiceShare';
 
 type PriceTier = 'retail' | 'supermarket' | 'wholesale';
@@ -144,6 +145,7 @@ type BankCard = {
   cardNumber: string;
   accountHolder?: string;
   bankName?: string;
+  isDefault?: boolean;
 };
 
 type DiscountMode = 'invoice' | 'per_kg' | 'product';
@@ -476,7 +478,11 @@ const Sale: React.FC = () => {
             /* ignore */
           }
         }
-        if (Array.isArray(s.bankCards)) setBankCards(s.bankCards);
+        if (Array.isArray(s.bankCards)) {
+          setBankCards(s.bankCards);
+          const di = s.bankCards.findIndex((c) => c.isDefault);
+          setSelectedBankCard(di >= 0 ? di : 0);
+        }
         if (s.goldenAutoEnabled !== undefined) setGoldenAutoEnabled(s.goldenAutoEnabled !== false);
         if (s.goldenMinKg != null) setGoldenMinKg(s.goldenMinKg);
         if (s.goldenSuggestGiftName) setGoldenGiftName(s.goldenSuggestGiftName);
@@ -1394,14 +1400,26 @@ const Sale: React.FC = () => {
       setProdModalUnit(unit);
       return;
     }
+    if (unit === prodModalUnit) return;
+
+    const kgPer = p.kgPerPackage || 5;
+    const currentPrice = parseAmount(prodModalPrice) || 0;
+    setProdModalUnit(unit);
+
+    // قیمت فعلی را بین کیلو ↔ بسته تبدیل کن (نه برگشت به قیمت پیشنهادی)
+    if (currentPrice > 0) {
+      const { perKg, perPackage } = resolvePrices(prodModalUnit, currentPrice, kgPer);
+      const next = unit === 'package' ? Math.round(perPackage) : Math.round(perKg);
+      setProdModalPrice(formatMoneyInput(String(Math.max(0, next))));
+      return;
+    }
+
+    // اگر هنوز قیمت نزده، از پیشنهاد شروع کن
     const percent = tierPercent(p, calcTier);
     const cost = productCost(p, costBasis);
     const suggested = priceFromPercent(cost, percent);
-    setProdModalUnit(unit);
     setProdModalPrice(
-      formatMoneyInput(
-        String(Math.round(unit === 'package' ? suggested * (p.kgPerPackage || 5) : suggested))
-      )
+      formatMoneyInput(String(Math.round(unit === 'package' ? suggested * kgPer : suggested)))
     );
   };
 
@@ -1623,53 +1641,51 @@ const Sale: React.FC = () => {
       if ((invoice as { queued?: boolean }).queued) {
         setToast({ open: true, msg: 'آفلاین در صف قرار گرفت — بعد از وصل ثبت می‌شود', color: 'warning' });
       } else {
-        const shareText = buildInvoiceShareText({
-          invoiceNumber: invoice.invoiceNumber,
-          customerName: customerName || undefined,
-          customerPhone: customerPhone || undefined,
-          date,
-          totalAmount: totals.net,
-          totalKg: totals.kg,
-          discount: totals.disc,
-          paymentMethod,
-          isGolden,
-          appliedOffer: appliedOffer || undefined,
-          shopName: shopName || undefined,
-          items: lines.map((l) => {
-            const qty = parseFloat(l.qtyInput) || 0;
-            const price = parseAmount(l.unitPrice) || 0;
-            const { qtyKg, perKg, lineAmount } = resolveLineAmount(
-              l.unit,
-              price,
-              qty,
-              l.kgPerPackage
-            );
-            return {
-              productName: l.productName,
-              qtyKg,
-              qtyInput: qty,
-              unit: l.unit,
-              unitPricePerKg: Math.round(perKg),
-              totalPrice: lineAmount,
-            };
-          }),
-        });
-        let cardText = '';
-        if (paymentMethod === 'card_to_card' && bankCards[selectedBankCard]) {
-          const c = bankCards[selectedBankCard];
-          cardText =
-            '\n\n' +
-            buildCardTransferText({
-              cardLabel: c.label,
-              cardNumber: c.cardNumber,
-              accountHolder: c.accountHolder,
-              bankName: c.bankName,
-              amount: totals.net,
-              invoiceNumber: invoice.invoiceNumber,
-              customerName: customerName || undefined,
-            });
-        }
-        await copyText(shareText + cardText);
+        const defaultCard = pickDefaultBankCard(bankCards);
+        const shareText = buildInvoiceShareText(
+          {
+            invoiceNumber: invoice.invoiceNumber,
+            customerName: customerName || undefined,
+            customerPhone: customerPhone || undefined,
+            date,
+            totalAmount: totals.net,
+            totalKg: totals.kg,
+            discount: totals.disc,
+            paymentMethod,
+            isGolden,
+            appliedOffer: appliedOffer || undefined,
+            shopName: shopName || undefined,
+            items: lines.map((l) => {
+              const qty = parseFloat(l.qtyInput) || 0;
+              const price = parseAmount(l.unitPrice) || 0;
+              const { qtyKg, perKg, lineAmount } = resolveLineAmount(
+                l.unit,
+                price,
+                qty,
+                l.kgPerPackage
+              );
+              return {
+                productName: l.productName,
+                qtyKg,
+                qtyInput: qty,
+                unit: l.unit,
+                unitPricePerKg: Math.round(perKg),
+                totalPrice: lineAmount,
+              };
+            }),
+          },
+          defaultCard
+            ? {
+                defaultCard: {
+                  label: defaultCard.label,
+                  cardNumber: defaultCard.cardNumber,
+                  accountHolder: defaultCard.accountHolder,
+                  bankName: defaultCard.bankName,
+                },
+              }
+            : undefined
+        );
+        await copyText(shareText);
         const msg =
           invoice.status === 'pending'
             ? `فاکتور ${invoice.invoiceNumber} ثبت شد — متن برای مشتری کپی شد`
@@ -1710,6 +1726,7 @@ const Sale: React.FC = () => {
         setBulkCount((c) => c + 1);
       } else {
         setBulkCount(0);
+        setDate(todayIso());
       }
       setSuggestedDiscount(0);
       setOffers([]);
@@ -1717,7 +1734,6 @@ const Sale: React.FC = () => {
       setSuggestedInvoices([]);
       setPowerLabel('');
       setDueDate('');
-      setDate(todayIso());
       setDeliveryMode('company');
       setPriceTier(null);
       setCreditIsCheck(false);
@@ -1803,7 +1819,7 @@ const Sale: React.FC = () => {
           <div className={`ios-glass-card sale-navy-card sale-toolbar ${isGolden ? 'golden-card' : ''}`}>
             {saleTab === 'bulk' && (
               <p className="hint convert-hint" style={{ marginTop: 0 }}>
-                حالت سریع روزانه — بعد از ثبت فقط مشتری و اقلام پاک می‌شود
+                حالت سریع روزانه — تاریخ ثابت می‌ماند؛ بعد از ثبت فقط مشتری و اقلام پاک می‌شود
                 {bulkCount > 0 ? ` · امروز ${bulkCount.toLocaleString('fa-IR')} فاکتور ثبت شد` : ''}
               </p>
             )}
@@ -2814,20 +2830,18 @@ const Sale: React.FC = () => {
                 {(() => {
                   const qty = parseFloat(prodModalQty) || 0;
                   const price = parseAmount(prodModalPrice) || 0;
-                  const { qtyKg, qtyPackages } = resolveQty(
-                    prodModalUnit,
-                    qty,
-                    prodModalProduct.kgPerPackage || 5
-                  );
-                  const { perKg } = resolvePrices(
-                    prodModalUnit,
-                    price,
-                    prodModalProduct.kgPerPackage || 5
-                  );
+                  const kgPer = prodModalProduct.kgPerPackage || 5;
+                  const { qtyKg, qtyPackages } = resolveQty(prodModalUnit, qty, kgPer);
+                  const { perKg, perPackage } = resolvePrices(prodModalUnit, price, kgPer);
                   return (
                     <p className="hint convert-hint">
                       {formatKg(qtyKg)} · {Math.round(qtyPackages).toLocaleString('fa-IR')} بسته · جمع{' '}
-                      {formatToman(perKg * qtyKg)}
+                      {formatToman(Math.round(perKg * qtyKg))}
+                      {price > 0
+                        ? prodModalUnit === 'package'
+                          ? ` · معادل ${formatToman(Math.round(perKg))}/کیلو`
+                          : ` · معادل ${formatToman(Math.round(perPackage))}/بسته`
+                        : ''}
                     </p>
                   );
                 })()}

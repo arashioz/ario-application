@@ -3,6 +3,15 @@ import { Server } from 'http';
 import { MutationLog } from '../models';
 import { getSession, login, logout, listUsers, listMarketers, createUser, changeOwnCredentials, adminSetUserCredentials } from '../services/authService';
 import { getDashboard, getPeriodSummary, updateShopSettings, listDebtors, getProductAnalytics } from '../services/dashboardService';
+import { endOfDay, parseLocalDateInput, startOfDay } from '../utils/persian';
+import {
+  listShopNotes,
+  createShopNote,
+  updateShopNote,
+  toggleShopNote,
+  deleteShopNote,
+} from '../services/shopNoteService';
+import type { NoteColor } from '../models/ShopNote';
 import {
   listProducts,
   getCategories,
@@ -270,10 +279,52 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
 
     case 'dashboard.period': {
       const user = await requireAuth(ws, msg);
-      const from = new Date(String(p.from));
-      const to = new Date(String(p.to));
+      const from = startOfDay(parseLocalDateInput(String(p.from)));
+      const to = endOfDay(parseLocalDateInput(String(p.to)));
       const marketerId = user.role === 'marketer' ? user.userId : (p.marketerId as string | undefined);
       return { type: 'dashboard.period', payload: await getPeriodSummary(from, to, marketerId) };
+    }
+
+    case 'note.list': {
+      await requireAuth(ws, msg);
+      const includeDone = p.includeDone === true;
+      return { type: 'note.list', payload: await listShopNotes({ includeDone }) };
+    }
+
+    case 'note.create': {
+      const user = await requireAuth(ws, msg);
+      const result = await createShopNote({
+        text: String(p.text || ''),
+        color: p.color as NoteColor | undefined,
+        createdBy: user.userId,
+      });
+      notifyDataChange('note', 'create', result);
+      return { type: 'note.create', payload: result };
+    }
+
+    case 'note.toggle': {
+      await requireAuth(ws, msg);
+      const result = await toggleShopNote(String(p.id));
+      notifyDataChange('note', 'update', result);
+      return { type: 'note.toggle', payload: result };
+    }
+
+    case 'note.update': {
+      await requireAuth(ws, msg);
+      const result = await updateShopNote(String(p.id), {
+        text: p.text as string | undefined,
+        done: p.done as boolean | undefined,
+        color: p.color as NoteColor | undefined,
+      });
+      notifyDataChange('note', 'update', result);
+      return { type: 'note.update', payload: result };
+    }
+
+    case 'note.delete': {
+      await requireAuth(ws, msg);
+      const result = await deleteShopNote(String(p.id));
+      notifyDataChange('note', 'delete', result);
+      return { type: 'note.delete', payload: result };
     }
 
     case 'settings.get': {
@@ -318,7 +369,13 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
         costBasis: p.costBasis as 'weighted' | 'last' | undefined,
         mongoCompassUri: p.mongoCompassUri as string | undefined,
         bankCards: p.bankCards as
-          | Array<{ label: string; cardNumber: string; accountHolder?: string; bankName?: string }>
+          | Array<{
+              label: string;
+              cardNumber: string;
+              accountHolder?: string;
+              bankName?: string;
+              isDefault?: boolean;
+            }>
           | undefined,
         goldenAutoEnabled: p.goldenAutoEnabled as boolean | undefined,
         goldenMinKg: p.goldenMinKg as number | undefined,
@@ -788,8 +845,8 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
       return {
         type: 'cash.list',
         payload: await listCashTransactions({
-          from: p.from ? new Date(String(p.from)) : undefined,
-          to: p.to ? new Date(String(p.to)) : undefined,
+          from: p.from ? startOfDay(parseLocalDateInput(String(p.from))) : undefined,
+          to: p.to ? endOfDay(parseLocalDateInput(String(p.to))) : undefined,
           limit: p.limit as number | undefined,
         }),
       };

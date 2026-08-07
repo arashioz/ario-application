@@ -30,7 +30,7 @@ import {
   periodRange,
   InvoicePeriod,
 } from '../utils/format';
-import { buildInvoiceShareText, copyText } from '../utils/invoiceShare';
+import { buildInvoiceShareText, copyText, pickDefaultBankCard } from '../utils/invoiceShare';
 import { useAuth } from '../auth/AuthContext';
 import { DigitInput } from './DigitInput';
 import { QtyStepper } from './QtyStepper';
@@ -681,21 +681,58 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
                 fill="outline"
                 onClick={() => {
                   const inv = detail as SaleInvRow;
-                  const text = buildInvoiceShareText({
-                    invoiceNumber: inv.invoiceNumber,
-                    customerName: inv.customerName,
-                    customerPhone: inv.customerPhone,
-                    date: inv.date,
-                    totalAmount: inv.totalAmount,
-                    totalKg: inv.totalKg,
-                    discount: inv.discount,
-                    paymentMethod: inv.paymentMethod,
-                    isGolden: inv.isGolden,
-                    items: inv.items,
-                  });
-                  void copyText(text).then((ok) =>
-                    onToast?.(ok ? 'متن فاکتور کپی شد — برای مشتری بفرستید' : 'کپی نشد', ok ? 'success' : 'danger')
-                  );
+                  void (async () => {
+                    let defaultCard:
+                      | {
+                          label: string;
+                          cardNumber: string;
+                          accountHolder?: string;
+                          bankName?: string;
+                        }
+                      | undefined;
+                    try {
+                      const s = await wsClient.request<{
+                        bankCards?: Array<{
+                          label: string;
+                          cardNumber: string;
+                          accountHolder?: string;
+                          bankName?: string;
+                          isDefault?: boolean;
+                        }>;
+                      }>('settings.get');
+                      const picked = pickDefaultBankCard(s.bankCards || []);
+                      if (picked) {
+                        defaultCard = {
+                          label: picked.label,
+                          cardNumber: picked.cardNumber,
+                          accountHolder: picked.accountHolder,
+                          bankName: picked.bankName,
+                        };
+                      }
+                    } catch {
+                      /* ignore */
+                    }
+                    const text = buildInvoiceShareText(
+                      {
+                        invoiceNumber: inv.invoiceNumber,
+                        customerName: inv.customerName,
+                        customerPhone: inv.customerPhone,
+                        date: inv.date,
+                        totalAmount: inv.totalAmount,
+                        totalKg: inv.totalKg,
+                        discount: inv.discount,
+                        paymentMethod: inv.paymentMethod,
+                        isGolden: inv.isGolden,
+                        items: inv.items,
+                      },
+                      defaultCard ? { defaultCard } : undefined
+                    );
+                    const ok = await copyText(text);
+                    onToast?.(
+                      ok ? 'متن فاکتور با کارت پیش‌فرض کپی شد' : 'کپی نشد',
+                      ok ? 'success' : 'danger'
+                    );
+                  })();
                 }}
               >
                 کپی متن برای مشتری

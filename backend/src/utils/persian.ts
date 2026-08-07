@@ -70,6 +70,20 @@ export function endOfDay(date: Date): Date {
   return d;
 }
 
+/**
+ * پارس YYYY-MM-DD به‌صورت تاریخ محلی.
+ * `new Date('2024-01-15')` یونیکد UTC است و در ایران یک روز عقب می‌افتد.
+ */
+export function parseLocalDateInput(input: string | Date): Date {
+  if (input instanceof Date) return new Date(input);
+  const raw = String(input).trim();
+  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) {
+    return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, 0, 0);
+  }
+  return new Date(raw);
+}
+
 /** رند مبلغ تومان به پلهٔ تمیز */
 export function roundToman(amount: number, step?: number): number {
   const n = Math.max(0, Math.round(Number(amount) || 0));

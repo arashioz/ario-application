@@ -34,7 +34,17 @@ const PAY_LABEL: Record<string, string> = {
 };
 
 /** متن قابل کپی برای ارسال فاکتور به مشتری */
-export function buildInvoiceShareText(inv: ShareInvoiceInput): string {
+export function buildInvoiceShareText(
+  inv: ShareInvoiceInput,
+  opts?: {
+    defaultCard?: {
+      label: string;
+      cardNumber: string;
+      accountHolder?: string;
+      bankName?: string;
+    };
+  }
+): string {
   const lines: string[] = [];
   const title = inv.isGolden ? '⭐ فاکتور طلایی' : 'فاکتور فروش';
   lines.push(`${title} ${inv.invoiceNumber || ''}`.trim());
@@ -67,7 +77,26 @@ export function buildInvoiceShareText(inv: ShareInvoiceInput): string {
   lines.push(`مبلغ نهایی: ${formatToman(inv.totalAmount)}`);
   lines.push('────────────');
   lines.push('با تشکر 🙏');
+
+  const card = opts?.defaultCard;
+  if (card?.cardNumber) {
+    const spaced = card.cardNumber.replace(/(\d{4})(?=\d)/g, '$1 ').trim();
+    lines.push('');
+    lines.push('💳 کارت مقصد برای واریز');
+    if (card.bankName) lines.push(`بانک: ${card.bankName}`);
+    lines.push(`به نام: ${card.accountHolder || card.label}`);
+    lines.push(`شماره کارت: ${spaced}`);
+    lines.push(`مبلغ: ${formatToman(inv.totalAmount)}`);
+    lines.push('لطفاً پس از واریز رسید را ارسال کنید.');
+  }
+
   return lines.join('\n');
+}
+
+/** اولین کارت پیش‌فرض تنظیمات (یا اولین کارت) */
+export function pickDefaultBankCard<T extends { isDefault?: boolean }>(cards: T[]): T | undefined {
+  if (!cards?.length) return undefined;
+  return cards.find((c) => c.isDefault) || cards[0];
 }
 
 /** متن کارت‌به‌کارت برای ارسال به مشتری */

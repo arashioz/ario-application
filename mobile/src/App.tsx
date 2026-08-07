@@ -30,6 +30,7 @@ import Expense from './pages/Expense';
 import Chat from './pages/Chat';
 import Debtors from './pages/Debtors';
 import History from './pages/History';
+import Reports from './pages/Reports';
 import Customers from './pages/Customers';
 import Categories from './pages/Categories';
 import Targets from './pages/Targets';
@@ -147,6 +148,7 @@ const AuthedApp: React.FC = () => {
         <Route exact path="/chat" component={Chat} />
         <Route exact path="/debtors" component={Debtors} />
         <Route exact path="/history" component={History} />
+        <Route exact path="/reports" component={Reports} />
         <Route exact path="/customers" component={Customers} />
         <Route exact path="/categories" component={Categories} />
         <Route exact path="/targets" component={Targets} />

@@ -18,7 +18,7 @@ import {
   documentTextOutline,
   navigateOutline,
   listOutline,
-  mapOutline,
+  locationOutline,
   giftOutline,
   bicycleOutline,
   pricetagOutline,
@@ -28,8 +28,10 @@ import {
   flashOutline,
   cloudOfflineOutline,
   cloudDoneOutline,
-  statsChartOutline,
-  cartOutline,
+  bagHandleOutline,
+  cashOutline,
+  pieChartOutline,
+  personOutline,
 } from 'ionicons/icons';
 import { useAuth } from '../auth/AuthContext';
 import { wsClient } from '../api/ws';
@@ -131,35 +133,61 @@ const More: React.FC = () => {
       },
     ];
 
-    const sales: MoreLink[] = [
+    const opsDaily: MoreLink[] = [
+      { href: '/orders', icon: fileTrayFullOutline, label: 'سفارش‌ها', desc: 'تأیید و ارسال' },
+    ];
+    if (isAdmin) {
+      opsDaily.unshift({
+        href: '/purchase',
+        icon: bagHandleOutline,
+        label: 'خرید',
+        desc: 'فاکتور خرید',
+      });
+    }
+
+    const salesReports: MoreLink[] = [
       {
         href: '/invoices',
         icon: listOutline,
         label: 'فاکتورها',
         desc: 'فروش و خرید',
       },
-      { href: '/orders', icon: fileTrayFullOutline, label: 'سفارش‌ها', desc: 'تأیید و ارسال' },
+      {
+        href: '/customers',
+        icon: personOutline,
+        label: 'مشتریان',
+        desc: 'لیست و گزارش',
+      },
       {
         href: '/customers-map',
-        icon: mapOutline,
-        label: 'نقشه مشتریان',
-        desc: 'موقعیت ویزیت',
+        icon: locationOutline,
+        label: 'نقشه',
+        desc: 'موقعیت مشتری',
       },
       { href: '/debtors', icon: peopleOutline, label: 'نسیه', desc: 'بدهکاران' },
-      { href: '/checks', icon: documentTextOutline, label: 'چک', desc: 'یادآور سررسید' },
+    ];
+
+    const financeReports: MoreLink[] = [
       {
         href: '/history',
-        icon: statsChartOutline,
-        label: 'گزارشات',
-        desc: 'صندوق و بازه',
+        icon: cashOutline,
+        label: 'صندوق',
+        desc: 'موجودی و بازه',
       },
+      {
+        href: '/reports',
+        icon: pieChartOutline,
+        label: 'گزارش مالی',
+        desc: 'سود و هزینه',
+      },
+      { href: '/checks', icon: documentTextOutline, label: 'چک', desc: 'یادآور سررسید' },
     ];
     if (isAdmin) {
-      sales.unshift({
-        href: '/purchase',
-        icon: cartOutline,
-        label: 'خرید',
-        desc: 'فاکتور خرید از شرکت',
+      financeReports.splice(1, 0, {
+        href: '/expense',
+        icon: walletOutline,
+        label: 'هزینه',
+        desc: 'شرکت و واریز',
       });
     }
 
@@ -216,12 +244,6 @@ const More: React.FC = () => {
     const ops: MoreLink[] = [];
     if (isAdmin) {
       ops.push({
-        href: '/expense',
-        icon: walletOutline,
-        label: 'هزینه',
-        desc: 'شرکت و واریز',
-      });
-      ops.push({
         href: '/drivers-map',
         icon: navigateOutline,
         label: 'نقشه تیم',
@@ -238,7 +260,9 @@ const More: React.FC = () => {
     }
 
     const out: MoreGroup[] = [
-      { title: 'فروش و مشتری', items: sales },
+      { title: 'خرید و سفارش', items: opsDaily },
+      { title: 'گزارش فروش', items: salesReports },
+      { title: 'گزارش مالی', items: financeReports },
       { title: 'کاتالوگ و تنظیمات', items: catalog },
     ];
     if (partner.length) out.push({ title: 'همکاران و جشنواره', items: partner });
@@ -307,7 +331,7 @@ const More: React.FC = () => {
               <div className="more-square-grid">
                 {g.items.map((l) => (
                   <IonRouterLink key={l.href} routerLink={l.href} className="more-square">
-                    <span className="more-square-icon">
+                    <span className="more-square-icon" aria-hidden>
                       <IonIcon icon={l.icon} />
                     </span>
                     <span className="more-square-label">{l.label}</span>

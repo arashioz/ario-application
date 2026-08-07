@@ -120,15 +120,21 @@ export async function getDashboard(
   const totalSales = sales.reduce((s, inv) => s + inv.totalAmount, 0);
   const soldKg = sales.reduce((s, inv) => s + (inv.totalKg || 0), 0);
   const totalProfit = sales.reduce((s, inv) => s + (inv.totalProfit || 0), 0);
+  const totalCost = sales.reduce((s, inv) => s + (inv.totalCost || 0), 0);
 
   const expenseByType: Record<string, number> = {};
   let totalExpenses = 0;
+  let excludedExpenses = 0;
   for (const e of expenses) {
-    const amt = operatingExpenseAmount(e.type, e.amount);
-    if (amt <= 0) continue;
-    totalExpenses += amt;
+    const amt = e.amount || 0;
+    const op = operatingExpenseAmount(e.type, amt);
+    if (op <= 0) {
+      if (amt > 0) excludedExpenses += amt;
+      continue;
+    }
+    totalExpenses += op;
     const key = e.type || 'other';
-    expenseByType[key] = (expenseByType[key] || 0) + amt;
+    expenseByType[key] = (expenseByType[key] || 0) + op;
   }
   const netProfit = totalProfit - totalExpenses;
 
@@ -166,8 +172,10 @@ export async function getDashboard(
     totalSalesToman: totalSales,
     soldKg,
     soldTons: Math.round((soldKg / 1000) * 1000) / 1000,
+    totalCost,
     totalProfit,
     totalExpenses,
+    excludedExpenses,
     netProfit,
     expenseByType,
     cashSales,
@@ -255,13 +263,15 @@ export async function getDashboard(
 }
 
 export async function getPeriodSummary(from: Date, to: Date, marketerId?: string) {
-  const saleFilter: Record<string, unknown> = { date: { $gte: from, $lte: to } };
+  const rangeFrom = startOfDay(from);
+  const rangeTo = endOfDay(to);
+  const saleFilter: Record<string, unknown> = { date: { $gte: rangeFrom, $lte: rangeTo } };
   if (marketerId) saleFilter.marketerId = marketerId;
 
   const activeStatuses = { $in: ['approved', 'shipped', 'delivered'] };
   const [sales, expenses, settings] = await Promise.all([
     SaleInvoice.find({ ...saleFilter, status: activeStatuses }),
-    Expense.find({ date: { $gte: from, $lte: to } }),
+    Expense.find({ date: { $gte: rangeFrom, $lte: rangeTo } }),
     getOrCreateSettings(),
   ]);
 
@@ -315,10 +325,21 @@ export async function getPeriodSummary(from: Date, to: Date, marketerId?: string
   const totalSales = sales.reduce((s, i) => s + i.totalAmount, 0);
   const soldKg = sales.reduce((s, i) => s + (i.totalKg || 0), 0);
   const totalProfit = sales.reduce((s, i) => s + (i.totalProfit || 0), 0);
-  const totalExpenses = expenses.reduce(
-    (s, e) => s + operatingExpenseAmount(e.type, e.amount),
-    0
-  );
+  const totalCost = sales.reduce((s, i) => s + (i.totalCost || 0), 0);
+  const expenseByType: Record<string, number> = {};
+  let totalExpenses = 0;
+  let excludedExpenses = 0;
+  for (const e of expenses) {
+    const amt = e.amount || 0;
+    const op = operatingExpenseAmount(e.type, amt);
+    if (op <= 0) {
+      if (amt > 0) excludedExpenses += amt;
+      continue;
+    }
+    totalExpenses += op;
+    const key = e.type || 'other';
+    expenseByType[key] = (expenseByType[key] || 0) + op;
+  }
 
   const products = await Product.find().sort({ stockKg: -1 });
   const inventory = {
@@ -447,14 +468,17 @@ export async function getPeriodSummary(from: Date, to: Date, marketerId?: string
     .sort((a, b) => b.credit - a.credit);
 
   return {
-    from: from.toISOString(),
-    to: to.toISOString(),
+    from: rangeFrom.toISOString(),
+    to: rangeTo.toISOString(),
     totalSales,
     totalSalesToman: totalSales,
     soldKg,
     soldTons: Math.round((soldKg / 1000) * 1000) / 1000,
+    totalCost,
     totalProfit,
     totalExpenses,
+    excludedExpenses,
+    expenseByType,
     netProfit: totalProfit - totalExpenses,
     invoiceCount,
     payment: { cash: cashSales, card: cardSales, credit: creditSales },
@@ -505,6 +529,7 @@ export async function updateShopSettings(data: {
     cardNumber: string;
     accountHolder?: string;
     bankName?: string;
+    isDefault?: boolean;
   }>;
   goldenAutoEnabled?: boolean;
   goldenMinKg?: number;
@@ -547,14 +572,21 @@ export async function updateShopSettings(data: {
   if (data.costBasis === 'weighted' || data.costBasis === 'last') settings.costBasis = data.costBasis;
   if (data.mongoCompassUri !== undefined) settings.mongoCompassUri = data.mongoCompassUri;
   if (data.bankCards !== undefined) {
-    settings.bankCards = data.bankCards
+    const cleaned = data.bankCards
       .filter((c) => c.label?.trim() && c.cardNumber?.trim())
       .map((c) => ({
         label: c.label.trim(),
         cardNumber: c.cardNumber.replace(/\s+/g, '').trim(),
         accountHolder: c.accountHolder?.trim() || undefined,
         bankName: c.bankName?.trim() || undefined,
+        isDefault: !!c.isDefault,
       }));
+    // دقیقاً یک پیش‌فرض؛ اگر هیچ‌کدام نبود اولی پیش‌فرض می‌شود
+    const defaultIdx = cleaned.findIndex((c) => c.isDefault);
+    settings.bankCards = cleaned.map((c, i) => ({
+      ...c,
+      isDefault: defaultIdx >= 0 ? i === defaultIdx : i === 0,
+    }));
   }
   if (data.goldenAutoEnabled !== undefined) settings.goldenAutoEnabled = data.goldenAutoEnabled;
   if (data.goldenMinKg !== undefined) settings.goldenMinKg = Math.max(0, data.goldenMinKg);

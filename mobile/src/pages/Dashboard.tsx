@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   IonPage,
   IonHeader,
@@ -12,6 +12,9 @@ import {
   IonButton,
   IonIcon,
   IonChip,
+  IonModal,
+  IonInput,
+  IonToast,
   useIonViewWillEnter,
   RefresherEventDetail,
 } from '@ionic/react';
@@ -22,19 +25,21 @@ import {
   walletOutline,
   fileTrayFullOutline,
   documentTextOutline,
-  navigateOutline,
   personOutline,
-  chatbubbleEllipsesOutline,
   cubeOutline,
   alertCircleOutline,
   checkmarkDoneOutline,
   bicycleOutline,
   eyeOutline,
   eyeOffOutline,
+  addOutline,
+  trashOutline,
+  closeOutline,
+  pieChartOutline,
 } from 'ionicons/icons';
 import { wsClient } from '../api/ws';
 import { useAuth } from '../auth/AuthContext';
-import { formatKg, formatToman, formatRial, formatDate } from '../utils/format';
+import { formatKg, formatToman } from '../utils/format';
 import { useHistory } from 'react-router-dom';
 
 const PROFIT_KEY = 'ario_dash_show_profit';
@@ -61,15 +66,9 @@ interface Dash {
   totalProfit?: number;
   netProfit: number;
   totalExpenses: number;
-  expenseByType?: Record<string, number>;
   period?: 'today' | 'week' | 'month';
   periodLabel?: string;
-  cashBalance: number;
-  cardBalance: number;
   salesCount: number;
-  cashSales?: number;
-  cardSales?: number;
-  creditSales?: number;
   pendingApprovals?: number;
   inventory?: {
     totalKg: number;
@@ -81,76 +80,22 @@ interface Dash {
     lowStock: InvProduct[];
     products: InvProduct[];
   };
-  month?: {
-    totalSales: number;
-    soldKg: number;
-    totalProfit: number;
-    salesCount: number;
-  };
   companyDebt?: { total: number; count: number };
-  checks?: {
-    pendingCount: number;
-    overdueCount: number;
-    overdue: Array<{
-      id: string;
-      payerName: string;
-      amount: number;
-      invoiceNumber?: string;
-      dueDate: string;
-      followUpDate: string;
-    }>;
-    upcoming: Array<{
-      id: string;
-      payerName: string;
-      amount: number;
-      invoiceNumber?: string;
-      dueDate: string;
-      followUpDate: string;
-    }>;
-  };
-  shipping?: {
-    count: number;
-    ready: Array<{
-      id: string;
-      invoiceNumber: string;
-      customerName?: string;
-      customerAddress?: string;
-      totalKg: number;
-      totalAmount: number;
-      date: string;
-    }>;
-  };
-  crm?: {
-    followUpSameDayLastMonth: Array<{
-      customerId: string;
-      name: string;
-      phone?: string;
-      lastAmount: number;
-      lastKg?: number;
-      lastDate: string;
-      suggestedDiscount?: number;
-      suggestReason?: string;
-      preferredTier?: string;
-    }>;
-    followUpDue?: Array<{
-      customerId: string;
-      name: string;
-      phone?: string;
-      lastAmount: number;
-      lastKg?: number;
-      lastDate: string;
-      suggestedDiscount?: number;
-      suggestReason?: string;
-      preferredTier?: string;
-      daysSince?: number;
-    }>;
-  };
+  checks?: { overdueCount: number };
+  shipping?: { count: number };
   debtors: {
     total: number;
     count: number;
-    overdue: Array<{ name: string; remaining: number; dueDate: string; phone?: string }>;
+    overdue: Array<{ name: string; remaining: number }>;
   };
 }
+
+type ShopNote = {
+  id: string;
+  text: string;
+  done: boolean;
+  color: 'yellow' | 'mint' | 'peach' | 'sky' | 'lavender';
+};
 
 const Dashboard: React.FC = () => {
   const { user, isAdmin, logout, online, queueLen } = useAuth();
@@ -158,25 +103,53 @@ const Dashboard: React.FC = () => {
   const [data, setData] = useState<Dash | null>(null);
   const [error, setError] = useState('');
   const [kpiPeriod, setKpiPeriod] = useState<'today' | 'week' | 'month'>('today');
-  /** پیش‌فرض مخفی — برای نشان‌دادن به مشتری؛ با دکمه پایین روشن می‌شود */
   const [showProfit, setShowProfit] = useState(loadShowProfit);
+  const [invOpen, setInvOpen] = useState(false);
+  const [notes, setNotes] = useState<ShopNote[]>([]);
+  const [noteDraft, setNoteDraft] = useState('');
+  const [noteSaving, setNoteSaving] = useState(false);
+  const [toast, setToast] = useState({ open: false, msg: '', color: 'success' });
 
-  const load = useCallback(async (period: 'today' | 'week' | 'month' = kpiPeriod) => {
+  const loadNotes = useCallback(async () => {
     try {
-      const d = await wsClient.request<Dash>('dashboard.get', { period });
-      setData(d);
-      setError('');
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'خطا');
+      const list = await wsClient.request<ShopNote[]>('note.list', { includeDone: true });
+      setNotes(Array.isArray(list) ? list.filter((n) => !n.done).concat(list.filter((n) => n.done).slice(0, 4)) : []);
+    } catch {
+      setNotes([]);
     }
-  }, [kpiPeriod]);
+  }, []);
+
+  const load = useCallback(
+    async (period: 'today' | 'week' | 'month' = kpiPeriod) => {
+      try {
+        const d = await wsClient.request<Dash>('dashboard.get', { period });
+        setData(d);
+        setError('');
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'خطا');
+      }
+    },
+    [kpiPeriod]
+  );
 
   useIonViewWillEnter(() => {
     void load(kpiPeriod);
+    void loadNotes();
   });
 
+  useEffect(() => {
+    const unsub = wsClient.onEvent('data_changed', (payload: unknown) => {
+      const p = payload as { entity?: string };
+      if (p?.entity === 'note') void loadNotes();
+      if (p?.entity === 'sale' || p?.entity === 'purchase' || p?.entity === 'product') {
+        void load(kpiPeriod);
+      }
+    });
+    return unsub;
+  }, [loadNotes, load, kpiPeriod]);
+
   const onRefresh = async (ev: CustomEvent<RefresherEventDetail>) => {
-    await load(kpiPeriod);
+    await Promise.all([load(kpiPeriod), loadNotes()]);
     ev.detail.complete();
   };
 
@@ -185,24 +158,63 @@ const Dashboard: React.FC = () => {
     void load(p);
   };
 
+  const addNote = async () => {
+    const text = noteDraft.trim();
+    if (!text || noteSaving) return;
+    setNoteSaving(true);
+    try {
+      await wsClient.request('note.create', { text });
+      setNoteDraft('');
+      await loadNotes();
+    } catch (e) {
+      setToast({
+        open: true,
+        msg: e instanceof Error ? e.message : 'یادداشت ذخیره نشد',
+        color: 'danger',
+      });
+    } finally {
+      setNoteSaving(false);
+    }
+  };
+
+  const toggleNote = async (id: string) => {
+    try {
+      await wsClient.request('note.toggle', { id });
+      await loadNotes();
+    } catch (e) {
+      setToast({
+        open: true,
+        msg: e instanceof Error ? e.message : 'خطا',
+        color: 'danger',
+      });
+    }
+  };
+
+  const removeNote = async (id: string) => {
+    try {
+      await wsClient.request('note.delete', { id });
+      await loadNotes();
+    } catch (e) {
+      setToast({
+        open: true,
+        msg: e instanceof Error ? e.message : 'حذف نشد',
+        color: 'danger',
+      });
+    }
+  };
+
   const quick = [
     { href: '/sale', icon: receiptOutline, label: 'فروش', color: 'qa-teal' },
     ...(isAdmin
       ? [{ href: '/purchase', icon: cartOutline, label: 'خرید', color: 'qa-amber' }]
       : []),
-    { href: '/orders', icon: fileTrayFullOutline, label: 'سفارش‌ها', color: 'qa-blue' },
+    { href: '/orders', icon: fileTrayFullOutline, label: 'سفارش', color: 'qa-blue' },
     { href: '/customers', icon: personOutline, label: 'مشتری', color: 'qa-indigo' },
     { href: '/debtors', icon: peopleOutline, label: 'نسیه', color: 'qa-rose' },
     ...(isAdmin
-      ? [
-          { href: '/expense', icon: walletOutline, label: 'هزینه', color: 'qa-slate' },
-          { href: '/drivers-map', icon: navigateOutline, label: 'نقشه تیم', color: 'qa-cyan' },
-          { href: '/checks', icon: documentTextOutline, label: 'چک', color: 'qa-violet' },
-        ]
-      : [
-          { href: '/checks', icon: documentTextOutline, label: 'چک', color: 'qa-violet' },
-          { href: '/chat', icon: chatbubbleEllipsesOutline, label: 'چت', color: 'qa-cyan' },
-        ]),
+      ? [{ href: '/expense', icon: walletOutline, label: 'هزینه', color: 'qa-slate' }]
+      : [{ href: '/checks', icon: documentTextOutline, label: 'چک', color: 'qa-violet' }]),
+    { href: '/reports', icon: pieChartOutline, label: 'گزارش', color: 'qa-violet' },
   ];
 
   const inv = data?.inventory;
@@ -211,6 +223,7 @@ const Dashboard: React.FC = () => {
     (data?.pendingApprovals || 0) +
     (data?.debtors?.overdue?.length || 0) +
     (data?.checks?.overdueCount || 0);
+  const openNotes = notes.filter((n) => !n.done);
 
   return (
     <IonPage>
@@ -237,6 +250,72 @@ const Dashboard: React.FC = () => {
             </div>
           </div>
 
+          {/* یادداشت چسبان */}
+          <div className="sticky-board">
+            <div className="sticky-board-head">
+              <strong>یادداشت‌ها</strong>
+              <span className="ios-caption">
+                {openNotes.length > 0
+                  ? `${openNotes.length.toLocaleString('fa-IR')} باز`
+                  : 'هنوز چیزی نیست'}
+              </span>
+            </div>
+            <div className="sticky-add">
+              <IonInput
+                className="sticky-input"
+                value={noteDraft}
+                placeholder="مثلاً: فردا چک آقای …"
+                maxlength={200}
+                onIonInput={(e) => setNoteDraft(e.detail.value || '')}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    void addNote();
+                  }
+                }}
+              />
+              <button
+                type="button"
+                className="sticky-add-btn"
+                disabled={noteSaving || !noteDraft.trim()}
+                onClick={() => void addNote()}
+                aria-label="افزودن یادداشت"
+              >
+                <IonIcon icon={addOutline} />
+              </button>
+            </div>
+            <div className="sticky-grid">
+              {notes.length === 0 && (
+                <div className="sticky-empty">یادداشت بزن تا اینجا بچسبه — برای همه مدیرها دیده می‌شود</div>
+              )}
+              {notes.map((n, i) => (
+                <div
+                  key={n.id}
+                  className={`sticky-note color-${n.color}${n.done ? ' done' : ''}`}
+                  style={{ transform: `rotate(${((i % 5) - 2) * 1.2}deg)` }}
+                >
+                  <button
+                    type="button"
+                    className="sticky-check"
+                    onClick={() => void toggleNote(n.id)}
+                    aria-label={n.done ? 'باز کردن' : 'انجام شد'}
+                  >
+                    {n.done ? '✓' : '○'}
+                  </button>
+                  <p className="sticky-text">{n.text}</p>
+                  <button
+                    type="button"
+                    className="sticky-del"
+                    onClick={() => void removeNote(n.id)}
+                    aria-label="حذف"
+                  >
+                    <IonIcon icon={trashOutline} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+
           {!data && !error && (
             <div className="ion-text-center ion-padding">
               <IonSpinner name="crescent" />
@@ -246,69 +325,41 @@ const Dashboard: React.FC = () => {
 
           {data && (
             <>
-              {/* انبار قند */}
-              <div className="warehouse-hero">
-                <div className="wh-top">
-                  <div>
-                    <div className="wh-eyebrow">
-                      <IonIcon icon={cubeOutline} /> موجودی انبار
-                    </div>
-                    <div className="wh-kg">{formatKg(inv?.totalKg || 0)}</div>
-                    <div className="wh-sub">
-                      {inv?.totalTons != null ? `${inv.totalTons.toLocaleString('fa-IR')} تن` : '—'} · حدود{' '}
-                      {(inv?.totalPackages || 0).toLocaleString('fa-IR')} بسته
-                    </div>
-                  </div>
-                  <div className="wh-side">
-                    <div className="wh-pill">{inv?.productCount || 0} محصول</div>
-                    {(inv?.emptyCount || 0) > 0 && (
-                      <div className="wh-pill danger">{inv?.emptyCount} تمام‌شده</div>
-                    )}
-                    {isAdmin && showProfit && (
-                      <div className="wh-value">ارزش ≈ {formatToman(inv?.totalValue || 0)}</div>
-                    )}
-                    {isAdmin && !showProfit && (
-                      <div className="wh-value wh-value-hidden">ارزش · مخفی</div>
-                    )}
-                  </div>
+              {/* دکمه موجودی انبار */}
+              <button type="button" className="warehouse-btn" onClick={() => setInvOpen(true)}>
+                <div className="wh-btn-main">
+                  <span className="wh-btn-eye">
+                    <IonIcon icon={cubeOutline} /> موجودی انبار
+                  </span>
+                  <strong className="wh-btn-kg">{formatKg(inv?.totalKg || 0)}</strong>
+                  <span className="wh-btn-sub">
+                    {(inv?.totalPackages || 0).toLocaleString('fa-IR')} بسته · {inv?.productCount || 0}{' '}
+                    محصول
+                    {(inv?.emptyCount || 0) > 0 ? ` · ${inv?.emptyCount} تمام` : ''}
+                  </span>
                 </div>
-                {(inv?.products || []).length > 0 && (
-                  <div className="wh-products">
-                    {(inv?.products || []).map((p) => (
-                      <button
-                        key={p.id}
-                        type="button"
-                        className={`wh-prod${p.stockKg <= 0 ? ' empty' : p.stockKg < 200 ? ' low' : ''}`}
-                        onClick={() => history.push(`/product-analytics/${p.id}`)}
-                      >
-                        <span className="wh-prod-name">{p.name}</span>
-                        <span className="wh-prod-kg">{formatKg(p.stockKg)}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-                {(inv?.lowStock || []).length > 0 && (
-                  <div className="wh-low">
-                    <IonIcon icon={alertCircleOutline} />
-                    کم‌موجود:{' '}
-                    {(inv?.lowStock || [])
-                      .slice(0, 3)
-                      .map((p) => `${p.name} (${formatKg(p.stockKg)})`)
-                      .join(' · ')}
-                  </div>
-                )}
-                {isAdmin && (
-                  <IonButton size="small" fill="clear" routerLink="/purchase" className="wh-cta">
-                    ثبت خرید انبار
-                  </IonButton>
-                )}
-              </div>
+                <span className="wh-btn-cta">مشاهده</span>
+              </button>
+              {(inv?.lowStock || []).length > 0 && (
+                <div className="wh-low-hint">
+                  <IonIcon icon={alertCircleOutline} />
+                  کم‌موجود:{' '}
+                  {(inv?.lowStock || [])
+                    .slice(0, 2)
+                    .map((p) => p.name)
+                    .join(' · ')}
+                </div>
+              )}
 
-              {/* دسترسی سریع */}
               <div className="ios-section-title">دسترسی سریع</div>
               <div className="quick-grid">
                 {quick.map((q) => (
-                  <IonButton key={q.href} routerLink={q.href} fill="clear" className={`quick-tile ${q.color}`}>
+                  <IonButton
+                    key={q.href}
+                    routerLink={q.href}
+                    fill="clear"
+                    className={`quick-tile ${q.color}`}
+                  >
                     <div className="qt-inner">
                       <IonIcon icon={q.icon} />
                       <span>{q.label}</span>
@@ -317,7 +368,6 @@ const Dashboard: React.FC = () => {
                 ))}
               </div>
 
-              {/* اکشن‌های فوری */}
               <div className="ios-section-title">نیاز به اقدام</div>
               <div className="action-strip">
                 <IonButton routerLink="/orders" fill="solid" className="action-chip warn">
@@ -338,9 +388,7 @@ const Dashboard: React.FC = () => {
                 </IonButton>
               </div>
 
-              <div className="ios-section-title">
-                خلاصه فروش — {data.periodLabel || 'امروز'}
-              </div>
+              <div className="ios-section-title">خلاصه — {data.periodLabel || 'امروز'}</div>
               <div className="chip-row" style={{ marginBottom: 8 }}>
                 <IonChip
                   className={kpiPeriod === 'today' ? 'ios-chip-active' : 'ios-chip'}
@@ -367,7 +415,7 @@ const Dashboard: React.FC = () => {
                   <div className="k-value">{formatToman(data.totalSales)}</div>
                 </div>
                 <div className="ios-kpi orange">
-                  <div className="k-label">تناژ فروخته</div>
+                  <div className="k-label">تناژ</div>
                   <div className="k-value">{formatKg(data.soldKg)}</div>
                 </div>
                 {showProfit ? (
@@ -387,211 +435,31 @@ const Dashboard: React.FC = () => {
                 </div>
               </div>
 
-              {showProfit ? (
+              {showProfit && (
                 <div className="ios-glass-card dash-money-summary">
-                  <div className="ios-section-title" style={{ marginTop: 0 }}>
-                    خلاصه مالی — {data.periodLabel || 'امروز'}
-                  </div>
-                  <p className="hint" style={{ marginTop: 0 }}>
-                    سود فروش از هزینه خرید و تخفیف می‌آید؛ هزینه مغازه و بدهی شرکت جدا حساب می‌شوند.
-                  </p>
                   <div className="stat-row">
-                    <span className="stat-label">اینقدر سود کردی (فروش)</span>
-                    <span className="stat-value success">{formatToman(data.totalProfit || 0)}</span>
-                  </div>
-                  <div className="stat-row">
-                    <span className="stat-label">اینقدر هزینه کردی</span>
-                    <span className="stat-value danger">{formatToman(data.totalExpenses || 0)}</span>
-                  </div>
-                  <div className="stat-row">
-                    <span className="stat-label">بدهکاری به شرکت</span>
-                    <span className="stat-value warning">
-                      {formatToman(data.companyDebt?.total || 0)}
-                    </span>
-                  </div>
-                  <div className="stat-row">
-                    <span className="stat-label">سود خالص (سود − هزینه)</span>
+                    <span className="stat-label">سود خالص</span>
                     <span
                       className={`stat-value ${(data.netProfit || 0) >= 0 ? 'success' : 'danger'}`}
                     >
                       {formatToman(data.netProfit || 0)}
                     </span>
                   </div>
-                </div>
-              ) : (
-                <div className="ios-glass-card dash-privacy-hint">
-                  <div className="ios-caption">
-                    سود، هزینه و بدهی شرکت مخفی است — آخر صفحه «نمایش سود» را بزن.
-                  </div>
-                </div>
-              )}
-
-              {(data.cashSales != null || data.cardSales != null || data.creditSales != null) && (
-                <div className="ios-glass-card">
-                  <div className="ios-section-title" style={{ marginTop: 0 }}>
-                    ترکیب پرداخت — {data.periodLabel || 'امروز'}
-                  </div>
                   <div className="stat-row">
-                    <span className="stat-label">نقد</span>
-                    <span className="stat-value">{formatToman(data.cashSales || 0)}</span>
+                    <span className="stat-label">هزینه عملیاتی</span>
+                    <span className="stat-value danger">{formatToman(data.totalExpenses || 0)}</span>
                   </div>
-                  <div className="stat-row">
-                    <span className="stat-label">کارت / پوز</span>
-                    <span className="stat-value">{formatToman(data.cardSales || 0)}</span>
-                  </div>
-                  <div className="stat-row">
-                    <span className="stat-label">نسیه</span>
-                    <span className="stat-value warning">{formatToman(data.creditSales || 0)}</span>
-                  </div>
-                </div>
-              )}
-
-              <div className="ios-section-title">بارهای آماده ارسال</div>
-              <div className="ios-glass-card">
-                {(data.shipping?.ready || []).length === 0 && <p className="hint">باری در صف ارسال نیست</p>}
-                {(data.shipping?.ready || []).slice(0, 5).map((s) => (
-                  <div key={s.id} className="day-row">
-                    <strong>{s.invoiceNumber}</strong> · {s.customerName || '—'} · {formatKg(s.totalKg)} ·{' '}
-                    {formatToman(s.totalAmount)}
-                    {s.customerAddress ? (
-                      <>
-                        <br />
-                        <span className="ios-caption">📍 {s.customerAddress}</span>
-                      </>
-                    ) : null}
-                  </div>
-                ))}
-                {(data.shipping?.count || 0) > 0 && (
-                  <IonButton size="small" fill="outline" routerLink="/orders" expand="block">
-                    مدیریت ارسال
-                  </IonButton>
-                )}
-              </div>
-
-              <div className="ios-section-title">بدهکاران فوری</div>
-              <div className="ios-glass-card">
-                {data.debtors.overdue.length === 0 && <p className="hint">معوقه‌ای نیست</p>}
-                {data.debtors.overdue.slice(0, 5).map((d, i) => (
-                  <div key={i} className="stat-row">
-                    <span className="overdue-badge">
-                      {d.name} · {formatDate(d.dueDate)}
-                    </span>
-                    <span className="stat-value danger">{formatRial(d.remaining)}</span>
-                  </div>
-                ))}
-                <div className="stat-row">
-                  <span className="stat-label">جمع بدهی باز</span>
-                  <span className="stat-value danger">{formatRial(data.debtors.total)}</span>
-                </div>
-              </div>
-
-              <div className="ios-section-title">پیگیری مشتری</div>
-              <div className="ios-glass-card">
-                {(() => {
-                  const same = data.crm?.followUpSameDayLastMonth || [];
-                  const due = data.crm?.followUpDue || [];
-                  const list = [
-                    ...same.map((c) => ({ ...c, tag: 'همین روز ماه قبل' })),
-                    ...due.map((c) => ({
-                      ...c,
-                      tag: c.daysSince ? `${c.daysSince} روز گذشته` : 'موعد فالوآپ',
-                    })),
-                  ];
-                  if (!list.length) {
-                    return <p className="hint">امروز فالوآپی نیست</p>;
-                  }
-                  return list.slice(0, 8).map((c) => (
-                    <div key={`${c.customerId}-${c.tag}`} className="follow-card">
-                      <div className="ios-row">
-                        <strong>{c.name}</strong>
-                        <span className="ios-caption">{c.phone || ''}</span>
-                      </div>
-                      <div className="ios-caption">{c.tag}</div>
-                      <div className="ios-caption">
-                        خرید قبلی {formatToman(c.lastAmount)}
-                        {c.lastKg != null ? ` · ${formatKg(c.lastKg)}` : ''} · {formatDate(c.lastDate)}
-                      </div>
-                      <p className="hint convert-hint">
-                        {c.suggestReason || 'پیشنهاد'} · تخفیف {formatToman(c.suggestedDiscount || 0)}
-                      </p>
-                      <IonButton
-                        size="small"
-                        onClick={() =>
-                          history.push('/sale', {
-                            followUpCustomerId: c.customerId,
-                            followUpDiscount: c.suggestedDiscount || 0,
-                            followUpTier: c.preferredTier,
-                          })
-                        }
-                      >
-                        فاکتور پیشنهادی
-                      </IonButton>
-                    </div>
-                  ));
-                })()}
-              </div>
-
-              {data.month && (
-                <div className="ios-glass-card">
-                  <div className="ios-section-title" style={{ marginTop: 0 }}>
-                    این ماه
-                  </div>
-                  <div className="stat-row">
-                    <span className="stat-label">فروش</span>
-                    <span className="stat-value">{formatToman(data.month.totalSales)}</span>
-                  </div>
-                  <div className="stat-row">
-                    <span className="stat-label">تناژ</span>
-                    <span className="stat-value">{formatKg(data.month.soldKg)}</span>
-                  </div>
-                  {showProfit && (
+                  {isAdmin && (
                     <div className="stat-row">
-                      <span className="stat-label">سود</span>
-                      <span className="stat-value success">{formatToman(data.month.totalProfit)}</span>
+                      <span className="stat-label">بدهی شرکت</span>
+                      <span className="stat-value warning">
+                        {formatToman(data.companyDebt?.total || 0)}
+                      </span>
                     </div>
                   )}
-                  <div className="stat-row">
-                    <span className="stat-label">تعداد فاکتور</span>
-                    <span className="stat-value">{data.month.salesCount}</span>
-                  </div>
-                </div>
-              )}
-
-              {isAdmin && showProfit && (
-                <div className="ios-glass-card">
-                  <div className="ios-section-title" style={{ marginTop: 0 }}>
-                    صندوق و شرکت
-                  </div>
-                  <div className="stat-row">
-                    <span className="stat-label">نقد</span>
-                    <span className="stat-value">{formatRial(data.cashBalance)}</span>
-                  </div>
-                  <div className="stat-row">
-                    <span className="stat-label">کارت</span>
-                    <span className="stat-value">{formatRial(data.cardBalance)}</span>
-                  </div>
-                  <div className="stat-row">
-                    <span className="stat-label">بدهی شرکت</span>
-                    <span className="stat-value danger">{formatRial(data.companyDebt?.total || 0)}</span>
-                  </div>
-                </div>
-              )}
-
-              {data.checks && (data.checks.overdueCount > 0 || (data.checks.upcoming?.length || 0) > 0) && (
-                <div className="ios-glass-card">
-                  <div className="ios-section-title" style={{ marginTop: 0 }}>
-                    چک‌ها
-                  </div>
-                  {(data.checks.overdue || [])
-                    .concat(data.checks.upcoming || [])
-                    .slice(0, 4)
-                    .map((c) => (
-                      <div key={c.id} className="day-row">
-                        {c.payerName}
-                        {c.invoiceNumber ? ` · ${c.invoiceNumber}` : ''} · {formatToman(c.amount)} ·{' '}
-                        {formatDate(c.followUpDate)}
-                      </div>
-                    ))}
+                  <IonButton expand="block" fill="outline" size="small" routerLink="/reports">
+                    جزئیات گزارش مالی و فروش
+                  </IonButton>
                 </div>
               )}
             </>
@@ -614,10 +482,82 @@ const Dashboard: React.FC = () => {
               }}
             >
               <IonIcon slot="start" icon={showProfit ? eyeOffOutline : eyeOutline} />
-              {showProfit ? 'مخفی کردن سود' : 'نمایش سود و زیان'}
+              {showProfit ? 'مخفی کردن سود' : 'نمایش سود'}
             </IonButton>
           </div>
         </div>
+
+        {/* مودال موجودی */}
+        <IonModal isOpen={invOpen} onDidDismiss={() => setInvOpen(false)}>
+          <IonHeader>
+            <IonToolbar>
+              <IonTitle>موجودی انبار</IonTitle>
+              <IonButtons slot="end">
+                <IonButton onClick={() => setInvOpen(false)}>
+                  <IonIcon icon={closeOutline} />
+                </IonButton>
+              </IonButtons>
+            </IonToolbar>
+          </IonHeader>
+          <IonContent className="ion-padding">
+            <div className="inv-modal-hero">
+              <div className="inv-modal-kg">{formatKg(inv?.totalKg || 0)}</div>
+              <div className="ios-caption">
+                {(inv?.totalTons || 0).toLocaleString('fa-IR')} تن ·{' '}
+                {(inv?.totalPackages || 0).toLocaleString('fa-IR')} بسته · {inv?.productCount || 0}{' '}
+                محصول
+              </div>
+              {isAdmin && showProfit && (
+                <div className="ios-caption" style={{ marginTop: 6 }}>
+                  ارزش تقریبی {formatToman(inv?.totalValue || 0)}
+                </div>
+              )}
+            </div>
+            {(inv?.products || []).length === 0 && <p className="hint">محصولی در انبار نیست</p>}
+            <div className="inv-modal-list">
+              {(inv?.products || []).map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  className={`inv-modal-row${p.stockKg <= 0 ? ' empty' : p.stockKg < 200 ? ' low' : ''}`}
+                  onClick={() => {
+                    setInvOpen(false);
+                    history.push(`/product-analytics/${p.id}`);
+                  }}
+                >
+                  <div>
+                    <strong>{p.name}</strong>
+                    <div className="ios-caption">
+                      {p.packages.toLocaleString('fa-IR')} بسته
+                      {p.stockKg < 200 && p.stockKg > 0 ? ' · کم‌موجود' : ''}
+                      {p.stockKg <= 0 ? ' · تمام‌شده' : ''}
+                    </div>
+                  </div>
+                  <span className="stat-value">{formatKg(p.stockKg)}</span>
+                </button>
+              ))}
+            </div>
+            {isAdmin && (
+              <IonButton
+                expand="block"
+                className="ios-primary-btn ion-margin-top"
+                routerLink="/purchase"
+                onClick={() => setInvOpen(false)}
+              >
+                ثبت خرید انبار
+              </IonButton>
+            )}
+          </IonContent>
+        </IonModal>
+
+        <IonToast
+          isOpen={toast.open}
+          message={toast.msg}
+          color={toast.color}
+          duration={1800}
+          onDidDismiss={() => setToast((t) => ({ ...t, open: false }))}
+          position="top"
+        />
       </IonContent>
     </IonPage>
   );

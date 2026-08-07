@@ -19,4 +19,5 @@ export { Session, ISession } from './Session';
 export { Campaign, ICampaign, ICampaignRule, CampaignRuleType } from './Campaign';
 export { PlatformOrder, IPlatformOrder, DeliveryMode, PlatformOrderStatus } from './PlatformOrder';
 export { WalletTransaction, IWalletTransaction, WalletTxType } from './WalletTransaction';
+export { ShopNote, IShopNote, NoteColor } from './ShopNote';
 export type { ApprovalStatus } from './User';

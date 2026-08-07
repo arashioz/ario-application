@@ -5,6 +5,8 @@ export interface IBankCard {
   cardNumber: string;
   accountHolder?: string;
   bankName?: string;
+  /** کارت پیش‌فرض برای کپی فاکتور فروش */
+  isDefault?: boolean;
 }
 
 export interface IShopSettings extends Document {
@@ -62,6 +64,7 @@ const BankCardSchema = new Schema<IBankCard>(
     cardNumber: { type: String, required: true, trim: true },
     accountHolder: { type: String, trim: true },
     bankName: { type: String, trim: true },
+    isDefault: { type: Boolean, default: false },
   },
   { _id: false }
 );
