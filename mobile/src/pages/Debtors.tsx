@@ -30,6 +30,7 @@ import {
 } from '../utils/format';
 import { PersianDateField } from '../components/PersianDateField';
 import { useAuth } from '../auth/AuthContext';
+import { InvoiceListPanel, SaleInvRow } from '../components/InvoiceListPanel';
 
 interface DebtRow {
   _id: string;
@@ -50,11 +51,21 @@ interface DebtRow {
   invoiceKg?: number;
   invoiceDate?: string;
   invoiceStatus?: string;
+  invoiceShippedAt?: string;
+  invoicePaidAt?: string;
+  invoiceLastPaymentAt?: string;
+  invoiceIsPaid?: boolean;
   invoiceItems?: Array<{
+    productId?: string;
     productName: string;
     qtyKg: number;
     totalPrice: number;
+    unit?: 'kg' | 'package';
+    qtyInput?: number;
+    unitPrice?: number;
     unitPricePerKg?: number;
+    discount?: number;
+    kgPerPackage?: number;
   }>;
 }
 
@@ -67,15 +78,26 @@ interface CustomerDebtGroup {
   totalRemaining: number;
   totalAmount: number;
   totalPaid: number;
+  overdueRemaining: number;
   invoiceCount: number;
   overdueCount: number;
   nearestDue: string;
+  riskLevel: 'low' | 'medium' | 'high' | 'critical';
+  riskLabel: string;
   debts: DebtRow[];
 }
 
 function groupKey(d: DebtRow) {
   if (d.customerId) return `c:${d.customerId}`;
   return `n:${(d.customerName || d.name || '').trim()}|${(d.customerPhone || d.phone || '').trim()}`;
+}
+
+function riskOf(open: number, overdue: number): { riskLevel: CustomerDebtGroup['riskLevel']; riskLabel: string } {
+  const ratio = open > 0 ? overdue / open : 0;
+  if (overdue > 0 && ratio >= 0.5) return { riskLevel: 'critical', riskLabel: 'ریسک خیلی بالا' };
+  if (overdue > 0 || ratio >= 0.35) return { riskLevel: 'high', riskLabel: 'ریسک بالا' };
+  if (open > 0) return { riskLevel: 'medium', riskLabel: 'ریسک متوسط' };
+  return { riskLevel: 'low', riskLabel: 'ریسک کم' };
 }
 
 const Debtors: React.FC = () => {
@@ -85,12 +107,14 @@ const Debtors: React.FC = () => {
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<CustomerDebtGroup | null>(null);
   const [payAmount, setPayAmount] = useState('');
-  const [payMethod, setPayMethod] = useState<'cash' | 'card'>('cash');
+  const [payMethod, setPayMethod] = useState<'cash' | 'card' | 'card_to_card'>('cash');
   const [linePay, setLinePay] = useState<Record<string, string>>({});
-  const [lineMethod, setLineMethod] = useState<Record<string, 'cash' | 'card'>>({});
+  const [lineMethod, setLineMethod] = useState<Record<string, 'cash' | 'card' | 'card_to_card'>>({});
   const [editDebt, setEditDebt] = useState<DebtRow | null>(null);
   const [editDue, setEditDue] = useState('');
   const [editDesc, setEditDesc] = useState('');
+  const [debtDetail, setDebtDetail] = useState<DebtRow | null>(null);
+  const [seedEdit, setSeedEdit] = useState<SaleInvRow | null>(null);
   const [toast, setToast] = useState({ open: false, msg: '', color: 'success' });
 
   const load = useCallback(async () => {
@@ -112,6 +136,7 @@ const Debtors: React.FC = () => {
       const overdue = new Date(d.dueDate).getTime() < now;
       const prev = map.get(key);
       if (!prev) {
+        const risk = riskOf(rem, overdue ? rem : 0);
         map.set(key, {
           key,
           customerId: d.customerId,
@@ -121,9 +146,12 @@ const Debtors: React.FC = () => {
           totalRemaining: rem,
           totalAmount: d.amount,
           totalPaid: d.paidAmount || 0,
+          overdueRemaining: overdue ? rem : 0,
           invoiceCount: 1,
           overdueCount: overdue ? 1 : 0,
           nearestDue: d.dueDate,
+          riskLevel: risk.riskLevel,
+          riskLabel: risk.riskLabel,
           debts: [d],
         });
       } else {
@@ -131,11 +159,17 @@ const Debtors: React.FC = () => {
         prev.totalAmount += d.amount;
         prev.totalPaid += d.paidAmount || 0;
         prev.invoiceCount += 1;
-        if (overdue) prev.overdueCount += 1;
+        if (overdue) {
+          prev.overdueCount += 1;
+          prev.overdueRemaining += rem;
+        }
         if (new Date(d.dueDate) < new Date(prev.nearestDue)) prev.nearestDue = d.dueDate;
         prev.debts.push(d);
         if (!prev.phone && (d.customerPhone || d.phone)) prev.phone = d.customerPhone || d.phone;
         if (!prev.customerId && d.customerId) prev.customerId = d.customerId;
+        const risk = riskOf(prev.totalRemaining, prev.overdueRemaining);
+        prev.riskLevel = risk.riskLevel;
+        prev.riskLabel = risk.riskLabel;
       }
     }
     return Array.from(map.values()).sort((a, b) => b.totalRemaining - a.totalRemaining);
@@ -173,17 +207,29 @@ const Debtors: React.FC = () => {
     });
   };
 
-  const goEditInvoice = (saleInvoiceId?: string) => {
+  const openInvoiceEdit = async (saleInvoiceId?: string) => {
     if (!saleInvoiceId) {
       setToast({ open: true, msg: 'فاکتور مرتبط پیدا نشد', color: 'warning' });
       return;
     }
-    history.push('/invoices');
-    setToast({
-      open: true,
-      msg: 'از لیست فاکتورها همان شماره را باز کنید و ویرایش بزنید',
-      color: 'success',
-    });
+    try {
+      const inv = await wsClient.request<SaleInvRow>('sale.get', { id: saleInvoiceId });
+      setDebtDetail(null);
+      setSeedEdit({
+        ...inv,
+        _id: String(inv._id),
+        items: (inv.items || []).map((it) => ({
+          ...it,
+          productId: it.productId ? String(it.productId) : undefined,
+        })),
+      });
+    } catch (e) {
+      setToast({
+        open: true,
+        msg: e instanceof Error ? e.message : 'فاکتور لود نشد',
+        color: 'danger',
+      });
+    }
   };
 
   const active = useMemo(() => {
@@ -263,6 +309,12 @@ const Debtors: React.FC = () => {
                       : ' · ۱ فاکتور'}
                   </div>
                   <div className="ios-caption">سررسید نزدیک: {formatDate(g.nearestDue)}</div>
+                  <div className="ios-caption" style={{ color: g.overdueCount > 0 ? 'var(--ion-color-danger)' : undefined }}>
+                    {g.riskLabel}
+                    {g.overdueRemaining > 0
+                      ? ` · معوقه ${formatToman(g.overdueRemaining)}`
+                      : ''}
+                  </div>
                 </div>
                 <div className="debtor-amount">
                   <div className="debtor-money">{formatToman(g.totalRemaining)}</div>
@@ -302,6 +354,16 @@ const Debtors: React.FC = () => {
                     <div className="k-label">تعداد فاکتور</div>
                     <div className="k-value">{active.invoiceCount}</div>
                   </div>
+                  <div className="ios-kpi orange">
+                    <div className="k-label">ریسک فروش</div>
+                    <div className="k-value" style={{ fontSize: 14 }}>
+                      {active.riskLabel}
+                    </div>
+                  </div>
+                  <div className="ios-kpi">
+                    <div className="k-label">معوقه</div>
+                    <div className="k-value">{formatToman(active.overdueRemaining)}</div>
+                  </div>
                 </div>
                 <p className="hint">
                   {active.phone || 'بدون تلفن'}
@@ -336,7 +398,13 @@ const Debtors: React.FC = () => {
                       className={payMethod === 'card' ? 'ios-chip-active' : 'ios-chip'}
                       onClick={() => setPayMethod('card')}
                     >
-                      کارت
+                      پوز
+                    </IonChip>
+                    <IonChip
+                      className={payMethod === 'card_to_card' ? 'ios-chip-active' : 'ios-chip'}
+                      onClick={() => setPayMethod('card_to_card')}
+                    >
+                      کارت به کارت
                     </IonChip>
                   </div>
                   <IonItem>
@@ -432,13 +500,19 @@ const Debtors: React.FC = () => {
                       {d.description && <p className="hint">{d.description}</p>}
 
                       <div className="chip-row" style={{ marginTop: 8 }}>
-                        <IonButton
-                          size="small"
-                          fill="outline"
-                          onClick={() => goEditInvoice(d.saleInvoiceId)}
-                        >
-                          فاکتور / ویرایش
+                        <IonButton size="small" fill="outline" onClick={() => setDebtDetail(d)}>
+                          جزئیات
                         </IonButton>
+                        {isAdmin && (
+                          <IonButton
+                            size="small"
+                            fill="outline"
+                            color="warning"
+                            onClick={() => void openInvoiceEdit(d.saleInvoiceId)}
+                          >
+                            ویرایش فاکتور
+                          </IonButton>
+                        )}
                         {isAdmin && (
                           <IonButton
                             size="small"
@@ -466,7 +540,15 @@ const Debtors: React.FC = () => {
                           className={method === 'card' ? 'ios-chip-active' : 'ios-chip'}
                           onClick={() => setLineMethod({ ...lineMethod, [d._id]: 'card' })}
                         >
-                          کارت
+                          پوز
+                        </IonChip>
+                        <IonChip
+                          className={method === 'card_to_card' ? 'ios-chip-active' : 'ios-chip'}
+                          onClick={() =>
+                            setLineMethod({ ...lineMethod, [d._id]: 'card_to_card' })
+                          }
+                        >
+                          کارت به کارت
                         </IonChip>
                       </div>
                       <IonItem>
@@ -550,7 +632,7 @@ const Debtors: React.FC = () => {
                         dueDate: editDue || undefined,
                         description: editDesc,
                       });
-                      setToast({ open: true, msg: 'ذخیره شد', color: 'success' });
+                      setToast({ open: true, msg: 'سررسید در بدهکاران و نسیه ذخیره شد', color: 'success' });
                       setEditDebt(null);
                       await load();
                     } catch (e) {
@@ -568,6 +650,129 @@ const Debtors: React.FC = () => {
             )}
           </IonContent>
         </IonModal>
+
+        <IonModal isOpen={!!debtDetail} onDidDismiss={() => setDebtDetail(null)}>
+          <IonHeader>
+            <IonToolbar>
+              <IonTitle>جزئیات فاکتور بدهی</IonTitle>
+              <IonButtons slot="end">
+                <IonButton onClick={() => setDebtDetail(null)}>بستن</IonButton>
+              </IonButtons>
+            </IonToolbar>
+          </IonHeader>
+          <IonContent className="ion-padding">
+            {debtDetail && (
+              <>
+                <p>
+                  <b>شماره:</b> {debtDetail.invoiceNumber || '—'}
+                </p>
+                <p>
+                  <b>مشتری:</b> {debtDetail.customerName || debtDetail.name}
+                  {debtDetail.customerPhone || debtDetail.phone
+                    ? ` · ${debtDetail.customerPhone || debtDetail.phone}`
+                    : ''}
+                </p>
+                {debtDetail.customerAddress && (
+                  <p>
+                    <b>آدرس:</b> {debtDetail.customerAddress}
+                  </p>
+                )}
+                <p>
+                  <b>تاریخ فاکتور:</b>{' '}
+                  {debtDetail.invoiceDate ? formatDate(debtDetail.invoiceDate) : '—'}
+                </p>
+                <p>
+                  <b>سررسید:</b> {formatDate(debtDetail.dueDate)}
+                </p>
+                {debtDetail.invoiceShippedAt && (
+                  <p>
+                    <b>ارسال شده:</b> {formatDate(debtDetail.invoiceShippedAt)}
+                  </p>
+                )}
+                {(debtDetail.invoicePaidAt || debtDetail.invoiceLastPaymentAt) && (
+                  <p>
+                    <b>پرداخت شده:</b>{' '}
+                    {formatDate(debtDetail.invoicePaidAt || debtDetail.invoiceLastPaymentAt!)}
+                  </p>
+                )}
+                <p>
+                  <b>مبلغ فاکتور:</b> {formatToman(debtDetail.invoiceTotal || debtDetail.amount)}
+                </p>
+                <p>
+                  <b>بدهی اولیه:</b> {formatToman(debtDetail.amount)}
+                </p>
+                <p>
+                  <b>پرداختی:</b> {formatToman(debtDetail.paidAmount || 0)}
+                </p>
+                <p>
+                  <b>مانده نسیه:</b>{' '}
+                  <span className="warning">
+                    {formatToman(
+                      debtDetail.remaining ??
+                        Math.max(0, debtDetail.amount - (debtDetail.paidAmount || 0))
+                    )}
+                  </span>
+                </p>
+                {debtDetail.invoiceKg != null && (
+                  <p>
+                    <b>تناژ:</b> {formatKg(debtDetail.invoiceKg)}
+                  </p>
+                )}
+                {debtDetail.invoiceStatus && (
+                  <p>
+                    <b>وضعیت فاکتور:</b> {debtDetail.invoiceStatus}
+                  </p>
+                )}
+                {debtDetail.description && (
+                  <p>
+                    <b>توضیح:</b> {debtDetail.description}
+                  </p>
+                )}
+                {(debtDetail.invoiceItems || []).length > 0 && (
+                  <div className="ios-glass-card">
+                    <div className="ios-section-title" style={{ marginTop: 0 }}>
+                      اقلام
+                    </div>
+                    {(debtDetail.invoiceItems || []).map((it, i) => {
+                      const perKg =
+                        it.unitPricePerKg ||
+                        (it.qtyKg > 0 ? Math.round(it.totalPrice / it.qtyKg) : 0);
+                      return (
+                        <div key={i} className="ios-caption" style={{ marginTop: 4 }}>
+                          {it.productName} · {formatKg(it.qtyKg)} · فی {formatToman(perKg)}/کیلو ·{' '}
+                          {formatToman(it.totalPrice)}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                {isAdmin && debtDetail.saleInvoiceId && (
+                  <IonButton
+                    expand="block"
+                    color="warning"
+                    className="ion-margin-top"
+                    onClick={() => void openInvoiceEdit(debtDetail.saleInvoiceId)}
+                  >
+                    ویرایش فاکتور
+                  </IonButton>
+                )}
+              </>
+            )}
+          </IonContent>
+        </IonModal>
+
+        {seedEdit && (
+          <InvoiceListPanel
+            kind="sale"
+            editOnly
+            seedEdit={seedEdit}
+            onSeedEditDone={() => {
+              setSeedEdit(null);
+              void load();
+            }}
+            onToast={(msg, color) => setToast({ open: true, msg, color: color || 'success' })}
+          />
+        )}
 
         <IonToast
           isOpen={toast.open}

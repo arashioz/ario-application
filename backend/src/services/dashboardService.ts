@@ -1,4 +1,4 @@
-import { SaleInvoice, Expense, Debtor, CashTransaction, Product } from '../models';
+import { SaleInvoice, Expense, Debtor, CashTransaction, Product, PurchaseInvoice } from '../models';
 import { startOfDay, endOfDay } from '../utils/persian';
 import { getOrCreateSettings } from './productService';
 import { getCompanyDebtSummary } from './companyService';
@@ -6,12 +6,51 @@ import { getTargetProgress } from './targetService';
 import { getDueChecksSummary } from './checkService';
 import { getCustomerCrmInsights, normalizePhoneDigits } from './customerService';
 
+/** فقط بار ارسال/تحویل‌شده در فروش و سود روز می‌آید (ثبت‌شدهٔ ارسال‌نشده نه) */
+const REVENUE_STATUSES = { $in: ['shipped', 'delivered'] as const };
+
 /** این‌ها روی صندوق اثر دارند ولی هزینهٔ عملیاتی نیستند — نباید از سود کم شوند */
 const NON_OPERATING_EXPENSE_TYPES = new Set(['loan_received', 'loan_given', 'withdrawal']);
 
 function operatingExpenseAmount(type: string | undefined, amount: number): number {
   if (type && NON_OPERATING_EXPENSE_TYPES.has(type)) return 0;
   return amount || 0;
+}
+
+/**
+ * نسیهٔ تسویه‌نشده در فروش/سود/تناژ روز حساب نمی‌شود.
+ * بعد از تسویه، مبلغ به نقد/کارت منتقل شده و روی همان تاریخ فاکتور می‌نشیند.
+ */
+export function recognizedSaleMetrics(inv: {
+  totalAmount?: number;
+  totalProfit?: number;
+  totalCost?: number;
+  totalKg?: number;
+  payment?: { cash?: number; card?: number; credit?: number } | null;
+}) {
+  const total = Math.max(0, Math.round(inv.totalAmount || 0));
+  const credit = Math.max(0, Math.round(inv.payment?.credit || 0));
+  const cash = Math.max(0, Math.round(inv.payment?.cash || 0));
+  const card = Math.max(0, Math.round(inv.payment?.card || 0));
+  let recognized = cash + card;
+  // محافظت اگر payment ناقص باشد ولی اعتبار مانده باشد
+  if (recognized <= 0 && credit > 0 && credit < total) {
+    recognized = Math.max(0, total - credit);
+  } else if (recognized <= 0 && credit <= 0) {
+    recognized = total;
+  } else if (recognized > total) {
+    recognized = total;
+  }
+  const ratio = total > 0 ? Math.min(1, recognized / total) : 0;
+  return {
+    amount: Math.round(recognized),
+    profit: Math.round((inv.totalProfit || 0) * ratio),
+    cost: Math.round((inv.totalCost || 0) * ratio),
+    kg: Math.round((inv.totalKg || 0) * ratio * 100) / 100,
+    creditOpen: credit,
+    cash,
+    card,
+  };
 }
 async function getInventorySnapshot() {
   const products = await Product.find().sort({ stockKg: -1 }).select('name stockKg stock kgPerPackage avgCostPerKg');
@@ -93,7 +132,7 @@ export async function getDashboard(
     saleFilterMonth.marketerId = marketerId;
   }
 
-  const ACTIVE = { $in: ['approved', 'shipped', 'delivered'] };
+  const ACTIVE = REVENUE_STATUSES;
 
   const [sales, monthSales, expenses, settings, debtors, cardDeposits, company, checks, crm, readyShip, pendingCount, inventory] =
     await Promise.all([
@@ -117,10 +156,10 @@ export async function getDashboard(
       getInventorySnapshot(),
     ]);
 
-  const totalSales = sales.reduce((s, inv) => s + inv.totalAmount, 0);
-  const soldKg = sales.reduce((s, inv) => s + (inv.totalKg || 0), 0);
-  const totalProfit = sales.reduce((s, inv) => s + (inv.totalProfit || 0), 0);
-  const totalCost = sales.reduce((s, inv) => s + (inv.totalCost || 0), 0);
+  const totalSales = sales.reduce((s, inv) => s + recognizedSaleMetrics(inv).amount, 0);
+  const soldKg = sales.reduce((s, inv) => s + recognizedSaleMetrics(inv).kg, 0);
+  const totalProfit = sales.reduce((s, inv) => s + recognizedSaleMetrics(inv).profit, 0);
+  const totalCost = sales.reduce((s, inv) => s + recognizedSaleMetrics(inv).cost, 0);
 
   const expenseByType: Record<string, number> = {};
   let totalExpenses = 0;
@@ -138,13 +177,13 @@ export async function getDashboard(
   }
   const netProfit = totalProfit - totalExpenses;
 
-  const monthSalesAmount = monthSales.reduce((s, inv) => s + inv.totalAmount, 0);
-  const monthSoldKg = monthSales.reduce((s, inv) => s + (inv.totalKg || 0), 0);
-  const monthProfit = monthSales.reduce((s, inv) => s + inv.totalProfit, 0);
+  const monthSalesAmount = monthSales.reduce((s, inv) => s + recognizedSaleMetrics(inv).amount, 0);
+  const monthSoldKg = monthSales.reduce((s, inv) => s + recognizedSaleMetrics(inv).kg, 0);
+  const monthProfit = monthSales.reduce((s, inv) => s + recognizedSaleMetrics(inv).profit, 0);
 
-  const cashSales = sales.reduce((s, inv) => s + inv.payment.cash, 0);
-  const cardSales = sales.reduce((s, inv) => s + inv.payment.card, 0);
-  const creditSales = sales.reduce((s, inv) => s + inv.payment.credit, 0);
+  const cashSales = sales.reduce((s, inv) => s + recognizedSaleMetrics(inv).cash, 0);
+  const cardSales = sales.reduce((s, inv) => s + recognizedSaleMetrics(inv).card, 0);
+  const creditSales = sales.reduce((s, inv) => s + recognizedSaleMetrics(inv).creditOpen, 0);
   const cardDepositTotal = cardDeposits.reduce((s, t) => s + t.amount, 0);
 
   const overdueDebtors = debtors.filter((d) => new Date(d.dueDate) < new Date());
@@ -268,7 +307,7 @@ export async function getPeriodSummary(from: Date, to: Date, marketerId?: string
   const saleFilter: Record<string, unknown> = { date: { $gte: rangeFrom, $lte: rangeTo } };
   if (marketerId) saleFilter.marketerId = marketerId;
 
-  const activeStatuses = { $in: ['approved', 'shipped', 'delivered'] };
+  const activeStatuses = REVENUE_STATUSES;
   const [sales, expenses, settings] = await Promise.all([
     SaleInvoice.find({ ...saleFilter, status: activeStatuses }),
     Expense.find({ date: { $gte: rangeFrom, $lte: rangeTo } }),
@@ -291,18 +330,19 @@ export async function getPeriodSummary(from: Date, to: Date, marketerId?: string
   for (const sale of sales) {
     const key = startOfDay(sale.date).toISOString().split('T')[0];
     const entry = dailyMap.get(key) || { sales: 0, profit: 0, expenses: 0, soldKg: 0 };
-    entry.sales += sale.totalAmount;
-    entry.profit += sale.totalProfit;
-    entry.soldKg += sale.totalKg || 0;
+    const rec = recognizedSaleMetrics(sale);
+    entry.sales += rec.amount;
+    entry.profit += rec.profit;
+    entry.soldKg += rec.kg;
     dailyMap.set(key, entry);
 
-    cashSales += sale.payment?.cash || 0;
-    cardSales += sale.payment?.card || 0;
-    creditSales += sale.payment?.credit || 0;
+    cashSales += rec.cash;
+    cardSales += rec.card;
+    creditSales += rec.creditOpen;
     if (sale.isGolden) {
       goldenCount += 1;
-      goldenAmount += sale.totalAmount;
-      goldenKg += sale.totalKg || 0;
+      goldenAmount += rec.amount;
+      goldenKg += rec.kg;
     }
   }
 
@@ -322,10 +362,10 @@ export async function getPeriodSummary(from: Date, to: Date, marketerId?: string
     }))
     .sort((a, b) => a.date.localeCompare(b.date));
 
-  const totalSales = sales.reduce((s, i) => s + i.totalAmount, 0);
-  const soldKg = sales.reduce((s, i) => s + (i.totalKg || 0), 0);
-  const totalProfit = sales.reduce((s, i) => s + (i.totalProfit || 0), 0);
-  const totalCost = sales.reduce((s, i) => s + (i.totalCost || 0), 0);
+  const totalSales = sales.reduce((s, i) => s + recognizedSaleMetrics(i).amount, 0);
+  const soldKg = sales.reduce((s, i) => s + recognizedSaleMetrics(i).kg, 0);
+  const totalProfit = sales.reduce((s, i) => s + recognizedSaleMetrics(i).profit, 0);
+  const totalCost = sales.reduce((s, i) => s + recognizedSaleMetrics(i).cost, 0);
   const expenseByType: Record<string, number> = {};
   let totalExpenses = 0;
   let excludedExpenses = 0;
@@ -357,12 +397,16 @@ export async function getPeriodSummary(from: Date, to: Date, marketerId?: string
     })),
   };
 
-  /** فروش انبار در بازه — به تفکیک محصول (تناژ / بسته / مبلغ) */
+  /** فروش انبار در بازه — به تفکیک محصول (تناژ / بسته / مبلغ) — فقط سهم شناساییشده */
   const soldMap = new Map<
     string,
     { productId: string; name: string; soldKg: number; soldPackages: number; revenue: number }
   >();
   for (const sale of sales) {
+    const rec = recognizedSaleMetrics(sale);
+    const ratio =
+      (sale.totalAmount || 0) > 0 ? Math.min(1, rec.amount / (sale.totalAmount || 1)) : 0;
+    if (ratio <= 0) continue;
     for (const it of sale.items || []) {
       const pid = it.productId ? String(it.productId) : it.productName || 'unknown';
       const cur = soldMap.get(pid) || {
@@ -372,14 +416,21 @@ export async function getPeriodSummary(from: Date, to: Date, marketerId?: string
         soldPackages: 0,
         revenue: 0,
       };
-      cur.soldKg += it.qtyKg || 0;
-      cur.soldPackages += it.qtyPackages || 0;
-      cur.revenue += it.totalPrice || 0;
+      cur.soldKg += (it.qtyKg || 0) * ratio;
+      cur.soldPackages += (it.qtyPackages || 0) * ratio;
+      cur.revenue += (it.totalPrice || 0) * ratio;
       if (it.productName) cur.name = it.productName;
       soldMap.set(pid, cur);
     }
   }
-  const soldByProduct = Array.from(soldMap.values()).sort((a, b) => b.soldKg - a.soldKg);
+  const soldByProduct = Array.from(soldMap.values())
+    .map((x) => ({
+      ...x,
+      soldKg: Math.round(x.soldKg * 100) / 100,
+      soldPackages: Math.round(x.soldPackages * 10) / 10,
+      revenue: Math.round(x.revenue),
+    }))
+    .sort((a, b) => b.soldKg - a.soldKg);
 
   /** بدهکاران باز — تجمیع به تفکیک نفر */
   const openDebtors = await Debtor.find({ isSettled: false }).sort({ dueDate: 1 });
@@ -467,6 +518,45 @@ export async function getPeriodSummary(from: Date, to: Date, marketerId?: string
     }))
     .sort((a, b) => b.credit - a.credit);
 
+  // خرید از شرکت در بازه + برداشت شخصی + درصد میانگین روی فاکتورها
+  const [purchases, allWithdrawals] = await Promise.all([
+    PurchaseInvoice.find({ date: { $gte: rangeFrom, $lte: rangeTo } }),
+    Expense.find({ type: 'withdrawal' }).select('amount date'),
+  ]);
+  const purchaseTotal = purchases.reduce((s, p) => s + (p.totalAmount || 0), 0);
+  const purchaseKg = purchases.reduce((s, p) => s + (p.totalKg || 0), 0);
+  const purchaseCount = purchases.length;
+
+  let markupSum = 0;
+  let markupN = 0;
+  let marginSum = 0;
+  let marginN = 0;
+  for (const sale of sales) {
+    const rec = recognizedSaleMetrics(sale);
+    if (rec.amount <= 0) continue;
+    if (rec.cost > 0) {
+      markupSum += (rec.profit / rec.cost) * 100;
+      markupN += 1;
+    }
+    marginSum += (rec.profit / rec.amount) * 100;
+    marginN += 1;
+  }
+  const avgMarkupPercent = markupN > 0 ? Math.round((markupSum / markupN) * 10) / 10 : 0;
+  const avgMarginPercent = marginN > 0 ? Math.round((marginSum / marginN) * 10) / 10 : 0;
+
+  let withdrawalPeriod = 0;
+  let withdrawalAllTime = 0;
+  for (const w of allWithdrawals) {
+    const amt = Math.round(w.amount || 0);
+    withdrawalAllTime += amt;
+    const d = new Date(w.date);
+    if (d >= rangeFrom && d <= rangeTo) withdrawalPeriod += amt;
+  }
+
+  const company = await getCompanyDebtSummary();
+  const purchaseDebtOpen = Math.round(company.remainingDebt || 0);
+  const myDebtToCompany = purchaseDebtOpen + withdrawalAllTime;
+
   return {
     from: rangeFrom.toISOString(),
     to: rangeTo.toISOString(),
@@ -496,6 +586,20 @@ export async function getPeriodSummary(from: Date, to: Date, marketerId?: string
       byPerson: debtorsByPerson,
     },
     creditByCustomer,
+    companyBox: {
+      purchaseTotal: Math.round(purchaseTotal),
+      purchaseKg: Math.round(purchaseKg * 100) / 100,
+      purchaseCount,
+      salesTotal: totalSales,
+      salesProfit: totalProfit,
+      avgMarkupPercent,
+      avgMarginPercent,
+      withdrawalPeriod: Math.round(withdrawalPeriod),
+      withdrawalAllTime: Math.round(withdrawalAllTime),
+      purchaseDebtOpen,
+      myDebtToCompany: Math.round(myDebtToCompany),
+      paidToCompany: Math.round(company.totalPaidToCompany || 0),
+    },
     daily,
   };
 }
@@ -616,7 +720,7 @@ export async function listDebtors(settled?: boolean) {
   const rows = await Debtor.find(filter)
     .populate(
       'saleInvoiceId',
-      'invoiceNumber totalAmount totalKg date paymentMethod status items discount customerName customerPhone'
+      'invoiceNumber totalAmount totalKg date paymentMethod status items discount customerName customerPhone shippedAt paidAt lastPaymentAt isPaid payment dueDate'
     )
     .populate('customerId', 'name phone address totalCredit')
     .sort({ dueDate: 1 })
@@ -632,11 +736,21 @@ export async function listDebtors(settled?: boolean) {
           date?: Date;
           paymentMethod?: string;
           status?: string;
+          shippedAt?: Date;
+          paidAt?: Date;
+          lastPaymentAt?: Date;
+          isPaid?: boolean;
           items?: Array<{
+            productId?: unknown;
             productName: string;
             qtyKg: number;
             totalPrice: number;
+            unit?: string;
+            qtyInput?: number;
+            unitPrice?: number;
             unitPricePerKg?: number;
+            discount?: number;
+            kgPerPackage?: number;
           }>;
           discount?: number;
         }
@@ -676,11 +790,21 @@ export async function listDebtors(settled?: boolean) {
       invoiceKg: inv?.totalKg,
       invoiceDate: inv?.date,
       invoiceStatus: inv?.status,
+      invoiceShippedAt: inv?.shippedAt,
+      invoicePaidAt: inv?.paidAt,
+      invoiceLastPaymentAt: inv?.lastPaymentAt,
+      invoiceIsPaid: inv?.isPaid,
       invoiceItems: inv?.items?.map((it) => ({
+        productId: it.productId ? String(it.productId) : undefined,
         productName: it.productName,
         qtyKg: it.qtyKg,
         totalPrice: it.totalPrice,
+        unit: it.unit,
+        qtyInput: it.qtyInput,
+        unitPrice: it.unitPrice,
         unitPricePerKg: it.unitPricePerKg,
+        discount: it.discount,
+        kgPerPackage: it.kgPerPackage,
       })),
     };
   });

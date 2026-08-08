@@ -1,4 +1,4 @@
-import { Customer, SaleInvoice } from '../models';
+import { Customer, SaleInvoice, Debtor } from '../models';
 import { calculateSalePrice } from './productService';
 import { startOfDay, endOfDay, roundToman } from '../utils/persian';
 
@@ -673,34 +673,83 @@ export async function listCustomerDirectory(search?: string) {
   const now = new Date();
   const monthStart = startOfDay(new Date(now.getFullYear(), now.getMonth(), 1));
   const customers = await listCustomers(search, { all: true, limit: 400 });
-  const sales = await SaleInvoice.find({
-    date: { $gte: monthStart, $lte: now },
-    status: { $in: ['approved', 'shipped'] },
-    customerId: { $ne: null },
-  });
+  const [sales, openDebts] = await Promise.all([
+    SaleInvoice.find({
+      date: { $gte: monthStart, $lte: now },
+      status: { $in: ['approved', 'shipped', 'delivered'] },
+      customerId: { $ne: null },
+    }),
+    Debtor.find({ isSettled: false }).select('customerId amount paidAmount dueDate'),
+  ]);
 
   const stats = new Map<string, { kg: number; amount: number; count: number }>();
   for (const inv of sales) {
     const id = inv.customerId!.toString();
     const cur = stats.get(id) || { kg: 0, amount: 0, count: 0 };
-    cur.kg += inv.totalKg || 0;
-    cur.amount += inv.totalAmount || 0;
+    // فروش ماه برای ریسک: فقط بخش شناسایی‌شده (بدون نسیه باز)
+    const cash = Math.round(inv.payment?.cash || 0);
+    const card = Math.round(inv.payment?.card || 0);
+    const credit = Math.round(inv.payment?.credit || 0);
+    const total = Math.round(inv.totalAmount || 0);
+    let recognized = cash + card;
+    if (recognized <= 0 && credit <= 0) recognized = total;
+    else if (recognized <= 0 && credit < total) recognized = Math.max(0, total - credit);
+    const ratio = total > 0 ? Math.min(1, recognized / total) : 0;
+    cur.kg += (inv.totalKg || 0) * ratio;
+    cur.amount += recognized;
     cur.count += 1;
     stats.set(id, cur);
+  }
+
+  const debtByCustomer = new Map<string, { open: number; overdue: number }>();
+  for (const d of openDebts) {
+    if (!d.customerId) continue;
+    const id = d.customerId.toString();
+    const rem = Math.max(0, (d.amount || 0) - (d.paidAmount || 0));
+    if (rem <= 0) continue;
+    const cur = debtByCustomer.get(id) || { open: 0, overdue: 0 };
+    cur.open += rem;
+    if (new Date(d.dueDate) < now) cur.overdue += rem;
+    debtByCustomer.set(id, cur);
   }
 
   const rows = customers.map((c) => {
     const id = c._id.toString();
     const s = stats.get(id) || { kg: 0, amount: 0, count: 0 };
+    const debt = debtByCustomer.get(id) || { open: 0, overdue: 0 };
+    const openCredit = Math.max(debt.open, c.totalCredit || 0);
+    const salesBase = Math.max(s.amount, 1);
+    const ratio = openCredit / (salesBase + openCredit);
+    let riskLevel: 'low' | 'medium' | 'high' | 'critical' = 'low';
+    if (debt.overdue > 0 && ratio >= 0.35) riskLevel = 'critical';
+    else if (debt.overdue > 0 || ratio >= 0.45) riskLevel = 'high';
+    else if (ratio >= 0.2 || openCredit > 0) riskLevel = 'medium';
+    const riskScore = Math.min(
+      100,
+      Math.round(ratio * 70 + (debt.overdue > 0 ? 30 : 0) + (debt.overdue / Math.max(openCredit, 1)) * 20)
+    );
+
     let tier: CustomerLoyaltyTier = 'new';
     if (s.kg >= 5000) tier = 'gold';
-    else if (s.kg >= 2000) tier = 'silver'; // بالای ۲ تن در ماه
+    else if (s.kg >= 2000) tier = 'silver';
     else if (s.count > 0) tier = 'bronze';
     return {
       ...c.toObject(),
       monthKg: Math.round(s.kg * 100) / 100,
       monthAmount: s.amount,
       monthInvoices: s.count,
+      openCredit,
+      overdueCredit: debt.overdue,
+      riskScore,
+      riskLevel,
+      riskLabel:
+        riskLevel === 'critical'
+          ? 'ریسک خیلی بالا'
+          : riskLevel === 'high'
+            ? 'ریسک بالا'
+            : riskLevel === 'medium'
+              ? 'ریسک متوسط'
+              : 'ریسک کم',
       loyaltyTier: tier,
       tierLabel:
         tier === 'gold'

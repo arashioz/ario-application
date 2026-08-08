@@ -13,8 +13,6 @@ import {
   IonIcon,
   IonChip,
   IonModal,
-  IonInput,
-  IonToast,
   useIonViewWillEnter,
   RefresherEventDetail,
 } from '@ionic/react';
@@ -32,10 +30,10 @@ import {
   bicycleOutline,
   eyeOutline,
   eyeOffOutline,
-  addOutline,
-  trashOutline,
   closeOutline,
   pieChartOutline,
+  createOutline,
+  chevronBackOutline,
 } from 'ionicons/icons';
 import { wsClient } from '../api/ws';
 import { useAuth } from '../auth/AuthContext';
@@ -66,6 +64,7 @@ interface Dash {
   totalProfit?: number;
   netProfit: number;
   totalExpenses: number;
+  creditSales?: number;
   period?: 'today' | 'week' | 'month';
   periodLabel?: string;
   salesCount: number;
@@ -106,14 +105,11 @@ const Dashboard: React.FC = () => {
   const [showProfit, setShowProfit] = useState(loadShowProfit);
   const [invOpen, setInvOpen] = useState(false);
   const [notes, setNotes] = useState<ShopNote[]>([]);
-  const [noteDraft, setNoteDraft] = useState('');
-  const [noteSaving, setNoteSaving] = useState(false);
-  const [toast, setToast] = useState({ open: false, msg: '', color: 'success' });
 
   const loadNotes = useCallback(async () => {
     try {
-      const list = await wsClient.request<ShopNote[]>('note.list', { includeDone: true });
-      setNotes(Array.isArray(list) ? list.filter((n) => !n.done).concat(list.filter((n) => n.done).slice(0, 4)) : []);
+      const list = await wsClient.request<ShopNote[]>('note.list', { includeDone: false });
+      setNotes(Array.isArray(list) ? list.slice(0, 2) : []);
     } catch {
       setNotes([]);
     }
@@ -158,51 +154,6 @@ const Dashboard: React.FC = () => {
     void load(p);
   };
 
-  const addNote = async () => {
-    const text = noteDraft.trim();
-    if (!text || noteSaving) return;
-    setNoteSaving(true);
-    try {
-      await wsClient.request('note.create', { text });
-      setNoteDraft('');
-      await loadNotes();
-    } catch (e) {
-      setToast({
-        open: true,
-        msg: e instanceof Error ? e.message : 'یادداشت ذخیره نشد',
-        color: 'danger',
-      });
-    } finally {
-      setNoteSaving(false);
-    }
-  };
-
-  const toggleNote = async (id: string) => {
-    try {
-      await wsClient.request('note.toggle', { id });
-      await loadNotes();
-    } catch (e) {
-      setToast({
-        open: true,
-        msg: e instanceof Error ? e.message : 'خطا',
-        color: 'danger',
-      });
-    }
-  };
-
-  const removeNote = async (id: string) => {
-    try {
-      await wsClient.request('note.delete', { id });
-      await loadNotes();
-    } catch (e) {
-      setToast({
-        open: true,
-        msg: e instanceof Error ? e.message : 'حذف نشد',
-        color: 'danger',
-      });
-    }
-  };
-
   const quick = [
     { href: '/sale', icon: receiptOutline, label: 'فروش', color: 'qa-teal' },
     ...(isAdmin
@@ -223,7 +174,6 @@ const Dashboard: React.FC = () => {
     (data?.pendingApprovals || 0) +
     (data?.debtors?.overdue?.length || 0) +
     (data?.checks?.overdueCount || 0);
-  const openNotes = notes.filter((n) => !n.done);
 
   return (
     <IonPage>
@@ -250,72 +200,6 @@ const Dashboard: React.FC = () => {
             </div>
           </div>
 
-          {/* یادداشت چسبان */}
-          <div className="sticky-board">
-            <div className="sticky-board-head">
-              <strong>یادداشت‌ها</strong>
-              <span className="ios-caption">
-                {openNotes.length > 0
-                  ? `${openNotes.length.toLocaleString('fa-IR')} باز`
-                  : 'هنوز چیزی نیست'}
-              </span>
-            </div>
-            <div className="sticky-add">
-              <IonInput
-                className="sticky-input"
-                value={noteDraft}
-                placeholder="مثلاً: فردا چک آقای …"
-                maxlength={200}
-                onIonInput={(e) => setNoteDraft(e.detail.value || '')}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    void addNote();
-                  }
-                }}
-              />
-              <button
-                type="button"
-                className="sticky-add-btn"
-                disabled={noteSaving || !noteDraft.trim()}
-                onClick={() => void addNote()}
-                aria-label="افزودن یادداشت"
-              >
-                <IonIcon icon={addOutline} />
-              </button>
-            </div>
-            <div className="sticky-grid">
-              {notes.length === 0 && (
-                <div className="sticky-empty">یادداشت بزن تا اینجا بچسبه — برای همه مدیرها دیده می‌شود</div>
-              )}
-              {notes.map((n, i) => (
-                <div
-                  key={n.id}
-                  className={`sticky-note color-${n.color}${n.done ? ' done' : ''}`}
-                  style={{ transform: `rotate(${((i % 5) - 2) * 1.2}deg)` }}
-                >
-                  <button
-                    type="button"
-                    className="sticky-check"
-                    onClick={() => void toggleNote(n.id)}
-                    aria-label={n.done ? 'باز کردن' : 'انجام شد'}
-                  >
-                    {n.done ? '✓' : '○'}
-                  </button>
-                  <p className="sticky-text">{n.text}</p>
-                  <button
-                    type="button"
-                    className="sticky-del"
-                    onClick={() => void removeNote(n.id)}
-                    aria-label="حذف"
-                  >
-                    <IonIcon icon={trashOutline} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-
           {!data && !error && (
             <div className="ion-text-center ion-padding">
               <IonSpinner name="crescent" />
@@ -325,7 +209,6 @@ const Dashboard: React.FC = () => {
 
           {data && (
             <>
-              {/* دکمه موجودی انبار */}
               <button type="button" className="warehouse-btn" onClick={() => setInvOpen(true)}>
                 <div className="wh-btn-main">
                   <span className="wh-btn-eye">
@@ -388,6 +271,38 @@ const Dashboard: React.FC = () => {
                 </IonButton>
               </div>
 
+              {/* یادداشت‌ها — وسط صفحه؛ فقط ۲ تای باز */}
+              <button
+                type="button"
+                className="sticky-board sticky-board-preview"
+                onClick={() => history.push('/notes')}
+              >
+                <div className="sticky-board-head">
+                  <strong>
+                    <IonIcon icon={createOutline} style={{ verticalAlign: 'middle', marginLeft: 4 }} />
+                    یادداشت‌ها
+                  </strong>
+                  <span className="sticky-preview-more">
+                    همه
+                    <IonIcon icon={chevronBackOutline} />
+                  </span>
+                </div>
+                <div className="sticky-grid sticky-grid-preview">
+                  {notes.length === 0 && (
+                    <div className="sticky-empty">یادداشتی نیست — بزن تا صفحه باز شود</div>
+                  )}
+                  {notes.map((n, i) => (
+                    <div
+                      key={n.id}
+                      className={`sticky-note color-${n.color}`}
+                      style={{ transform: `rotate(${((i % 3) - 1) * 1.1}deg)` }}
+                    >
+                      <p className="sticky-text">{n.text}</p>
+                    </div>
+                  ))}
+                </div>
+              </button>
+
               <div className="ios-section-title">خلاصه — {data.periodLabel || 'امروز'}</div>
               <div className="chip-row" style={{ marginBottom: 8 }}>
                 <IonChip
@@ -413,6 +328,11 @@ const Dashboard: React.FC = () => {
                 <div className="ios-kpi blue">
                   <div className="k-label">فروش</div>
                   <div className="k-value">{formatToman(data.totalSales)}</div>
+                  {(data.creditSales || 0) > 0 && (
+                    <div className="ios-caption" style={{ marginTop: 4 }}>
+                      نسیه باز جدا: {formatToman(Number(data.creditSales || 0))}
+                    </div>
+                  )}
                 </div>
                 <div className="ios-kpi orange">
                   <div className="k-label">تناژ</div>
@@ -487,7 +407,6 @@ const Dashboard: React.FC = () => {
           </div>
         </div>
 
-        {/* مودال موجودی */}
         <IonModal isOpen={invOpen} onDidDismiss={() => setInvOpen(false)}>
           <IonHeader>
             <IonToolbar>
@@ -549,15 +468,6 @@ const Dashboard: React.FC = () => {
             )}
           </IonContent>
         </IonModal>
-
-        <IonToast
-          isOpen={toast.open}
-          message={toast.msg}
-          color={toast.color}
-          duration={1800}
-          onDidDismiss={() => setToast((t) => ({ ...t, open: false }))}
-          position="top"
-        />
       </IonContent>
     </IonPage>
   );

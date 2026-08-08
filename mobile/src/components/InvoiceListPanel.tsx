@@ -65,6 +65,10 @@ export interface SaleInvRow {
   }>;
   notes?: string;
   shippingNotes?: string;
+  shippedAt?: string;
+  paidAt?: string;
+  lastPaymentAt?: string;
+  isPaid?: boolean;
 }
 
 export interface PurchaseInvRow {
@@ -136,9 +140,21 @@ type Props = {
   /** افزایش بده تا لیست رفرش شود (مثلاً بعد از ثبت) */
   refreshKey?: number;
   onToast?: (msg: string, color?: string) => void;
+  /** فقط مودال ویرایش — بدون لیست (برای صفحه مشتری) */
+  editOnly?: boolean;
+  /** فاکتور فروش برای باز کردن فوری ویرایش */
+  seedEdit?: SaleInvRow | null;
+  onSeedEditDone?: () => void;
 };
 
-export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToast }) => {
+export const InvoiceListPanel: React.FC<Props> = ({
+  kind,
+  refreshKey = 0,
+  onToast,
+  editOnly = false,
+  seedEdit = null,
+  onSeedEditDone,
+}) => {
   const { isAdmin } = useAuth();
   const [period, setPeriod] = useState<InvoicePeriod>('today');
   const [sales, setSales] = useState<SaleInvRow[]>([]);
@@ -193,6 +209,7 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
   };
 
   const load = useCallback(async () => {
+    if (editOnly) return;
     setLoading(true);
     try {
       const range = periodRange(period);
@@ -209,7 +226,7 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
       setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- onToast is unstable inline
-  }, [kind, period]);
+  }, [kind, period, editOnly]);
 
   useEffect(() => {
     void load();
@@ -309,6 +326,12 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
     setEditOpen(true);
   };
 
+  useEffect(() => {
+    if (!editOnly || !seedEdit || kind !== 'sale') return;
+    openEdit(seedEdit);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editOnly, seedEdit, kind]);
+
   const confirmDelete = async () => {
     if (!detail) return;
     setDeleting(true);
@@ -400,6 +423,8 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
 
   return (
     <>
+      {!editOnly && (
+        <>
       <div className="ios-section-title" style={{ marginTop: 20 }}>
         فاکتورهای {kind === 'sale' ? 'فروش' : 'خرید'}
         {loading ? ' …' : ''}
@@ -550,6 +575,8 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
           بروزرسانی لیست
         </IonButton>
       </div>
+        </>
+      )}
 
       <IonModal
         isOpen={!!detail && !deleteOpen && !editOpen && !deactivateOpen}
@@ -640,6 +667,20 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
                 <b>وضعیت:</b>{' '}
                 {STATUS[(detail as SaleInvRow).status || ''] || (detail as SaleInvRow).status || '—'}
               </p>
+              {(detail as SaleInvRow).shippedAt ? (
+                <p>
+                  <b>ارسال شده:</b> {formatDate((detail as SaleInvRow).shippedAt!)}
+                </p>
+              ) : null}
+              {(detail as SaleInvRow).paidAt || (detail as SaleInvRow).lastPaymentAt ? (
+                <p>
+                  <b>پرداخت شده:</b>{' '}
+                  {formatDate(
+                    (detail as SaleInvRow).paidAt || (detail as SaleInvRow).lastPaymentAt!
+                  )}
+                  {(detail as SaleInvRow).isPaid === false ? ' (جزئی)' : ''}
+                </p>
+              ) : null}
               {(detail as SaleInvRow).shippingNotes ? (
                 <p>
                   <b>ارسال:</b> {(detail as SaleInvRow).shippingNotes}
@@ -853,7 +894,13 @@ export const InvoiceListPanel: React.FC<Props> = ({ kind, refreshKey = 0, onToas
         </IonContent>
       </IonModal>
 
-      <IonModal isOpen={editOpen} onDidDismiss={() => setEditOpen(false)}>
+      <IonModal
+        isOpen={editOpen}
+        onDidDismiss={() => {
+          setEditOpen(false);
+          if (editOnly) onSeedEditDone?.();
+        }}
+      >
         <IonHeader>
           <IonToolbar>
             <IonTitle>ویرایش فاکتور</IonTitle>

@@ -20,11 +20,23 @@ import {
   IonSelect,
   IonSelectOption,
   IonChip,
+  IonModal,
+  IonButtons,
 } from '@ionic/react';
 import { wsClient, newMutationId } from '../api/ws';
 import { useAuth } from '../auth/AuthContext';
-import { formatToman, formatKg, formatDate, formatMoneyInput, parseAmount } from '../utils/format';
+import {
+  formatToman,
+  formatKg,
+  formatDate,
+  formatMoneyInput,
+  parseAmount,
+  INVOICE_PERIODS,
+  periodRange,
+  InvoicePeriod,
+} from '../utils/format';
 import { MoneyInput } from '../components/MoneyInput';
+import { InvoiceListPanel, SaleInvRow } from '../components/InvoiceListPanel';
 
 interface SaleInv {
   _id: string;
@@ -44,8 +56,27 @@ interface SaleInv {
   driverEarned?: number;
   driverPaid?: boolean;
   date: string;
+  shippedAt?: string;
+  paidAt?: string;
+  lastPaymentAt?: string;
+  isPaid?: boolean;
+  notes?: string;
+  paymentMethod?: string;
+  payment?: { cash?: number; card?: number; credit?: number };
   priceTier?: string;
   driverId?: string;
+  items?: Array<{
+    productId?: string;
+    productName: string;
+    qtyKg: number;
+    totalPrice: number;
+    unit?: 'kg' | 'package';
+    qtyInput?: number;
+    unitPrice?: number;
+    unitPricePerKg?: number;
+    discount?: number;
+    kgPerPackage?: number;
+  }>;
 }
 
 interface Driver {
@@ -56,6 +87,8 @@ interface Driver {
 }
 
 type ShippingBy = 'us' | 'customer' | 'none';
+type SettleKind = 'paid' | 'credit';
+type SettleMethod = 'cash' | 'card' | 'card_to_card';
 
 const STATUS: Record<string, string> = {
   pending: 'منتظر تأیید',
@@ -71,9 +104,16 @@ const SHIP_BY_LABEL: Record<ShippingBy, string> = {
   none: 'بدون ارسال',
 };
 
+const SETTLE_METHOD_LABEL: Record<SettleMethod, string> = {
+  cash: 'نقد',
+  card: 'پوز',
+  card_to_card: 'کارت به کارت',
+};
+
 const Orders: React.FC = () => {
   const { isAdmin } = useAuth();
   const [tab, setTab] = useState<'pending' | 'approved' | 'shipped' | 'delivered' | 'all'>('approved');
+  const [period, setPeriod] = useState<InvoicePeriod>('all');
   const [list, setList] = useState<SaleInv[]>([]);
   const [drivers, setDrivers] = useState<Driver[]>([]);
   const [shipNotes, setShipNotes] = useState<Record<string, string>>({});
@@ -81,12 +121,18 @@ const Orders: React.FC = () => {
   const [shipBy, setShipBy] = useState<Record<string, ShippingBy>>({});
   const [shipCost, setShipCost] = useState<Record<string, string>>({});
   const [toast, setToast] = useState({ open: false, msg: '', color: 'success' });
+  const [shipConfirm, setShipConfirm] = useState<SaleInv | null>(null);
+  const [settleKind, setSettleKind] = useState<SettleKind>('paid');
+  const [settleMethod, setSettleMethod] = useState<SettleMethod>('cash');
+  const [shippingBusy, setShippingBusy] = useState(false);
+  const [seedEdit, setSeedEdit] = useState<SaleInvRow | null>(null);
 
   const load = useCallback(async () => {
     const status = tab === 'all' ? undefined : tab;
-    const data = await wsClient.request<SaleInv[]>('sale.list', { status });
+    const range = periodRange(period);
+    const data = await wsClient.request<SaleInv[]>('sale.list', { status, ...range });
     setList(data);
-  }, [tab]);
+  }, [tab, period]);
 
   const loadDrivers = useCallback(async () => {
     if (!isAdmin) return;
@@ -124,6 +170,96 @@ const Orders: React.FC = () => {
 
   const resolveBy = (inv: SaleInv): ShippingBy =>
     shipBy[inv._id] || inv.shippingBy || 'none';
+
+  const openShipConfirm = (inv: SaleInv) => {
+    const hasCredit = (inv.payment?.credit || 0) > 0 || inv.paymentMethod === 'credit';
+    setSettleKind(hasCredit ? 'credit' : 'paid');
+    setSettleMethod('cash');
+    setShipConfirm(inv);
+  };
+
+  const openOrderEdit = async (inv: SaleInv) => {
+    try {
+      let row: SaleInv = inv;
+      if (!inv.items?.length) {
+        const full = await wsClient.request<SaleInv>('sale.get', { id: inv._id });
+        row = full || inv;
+      }
+      setSeedEdit({
+        _id: row._id,
+        invoiceNumber: row.invoiceNumber,
+        customerName: row.customerName,
+        customerPhone: row.customerPhone,
+        customerAddress: row.customerAddress,
+        totalAmount: row.totalAmount,
+        totalKg: row.totalKg,
+        totalProfit: row.totalProfit,
+        discount: row.discount,
+        status: row.status,
+        isGolden: row.isGolden,
+        paymentMethod: row.paymentMethod,
+        payment: row.payment,
+        priceTier: row.priceTier,
+        date: row.date,
+        notes: row.notes,
+        shippingNotes: row.shippingNotes,
+        shippedAt: row.shippedAt,
+        paidAt: row.paidAt,
+        lastPaymentAt: row.lastPaymentAt,
+        isPaid: row.isPaid,
+        items: row.items,
+      });
+    } catch (e) {
+      setToast({
+        open: true,
+        msg: e instanceof Error ? e.message : 'فاکتور لود نشد',
+        color: 'danger',
+      });
+    }
+  };
+
+  const confirmShip = async () => {
+    if (!shipConfirm) return;
+    const inv = shipConfirm;
+    setShippingBusy(true);
+    try {
+      const by = resolveBy(inv);
+      const dId = shipDriver[inv._id] || undefined;
+      await wsClient.request(
+        'sale.ship',
+        {
+          id: inv._id,
+          shippingNotes: shipNotes[inv._id] || inv.shippingNotes || 'ارسال شد',
+          driverId: dId || null,
+          shippingBy: by,
+          shippingCost:
+            by === 'us' ? parseAmount(shipCost[inv._id] || '') || inv.shippingCost || 0 : 0,
+          settlement: settleKind,
+          settleMethod: settleKind === 'paid' ? settleMethod : undefined,
+        },
+        { clientMutationId: newMutationId(), queueIfOffline: true }
+      );
+      const settleMsg =
+        settleKind === 'paid'
+          ? ` · پرداخت‌شده (${SETTLE_METHOD_LABEL[settleMethod]}) — نسیه کم شد`
+          : ' · نسیه باقی ماند';
+      setToast({
+        open: true,
+        msg: (dId ? 'ارسال شده · در لیست راننده است' : 'ارسال شده · بدون راننده') + settleMsg,
+        color: 'success',
+      });
+      setShipConfirm(null);
+      await load();
+    } catch (e) {
+      setToast({
+        open: true,
+        msg: e instanceof Error ? e.message : 'خطا',
+        color: 'danger',
+      });
+    } finally {
+      setShippingBusy(false);
+    }
+  };
 
   const shippingControls = (inv: SaleInv) => {
     const by = resolveBy(inv);
@@ -226,6 +362,18 @@ const Orders: React.FC = () => {
             </IonSegmentButton>
           </IonSegment>
 
+          <div className="chip-row" style={{ marginTop: 10, marginBottom: 8, flexWrap: 'wrap' }}>
+            {INVOICE_PERIODS.map((p) => (
+              <IonChip
+                key={p.value}
+                className={period === p.value ? 'ios-chip-active' : 'ios-chip'}
+                onClick={() => setPeriod(p.value)}
+              >
+                {p.label}
+              </IonChip>
+            ))}
+          </div>
+
           {list.length === 0 && <div className="empty-state">موردی نیست</div>}
 
           {list.map((inv) => (
@@ -284,6 +432,16 @@ const Orders: React.FC = () => {
                 <IonButton size="small" fill="outline" onClick={() => void openPdf(inv._id)}>
                   PDF
                 </IonButton>
+                {isAdmin && (
+                  <IonButton
+                    size="small"
+                    fill="clear"
+                    color="warning"
+                    onClick={() => void openOrderEdit(inv)}
+                  >
+                    ویرایش فاکتور
+                  </IonButton>
+                )}
 
                 {isAdmin && inv.status === 'pending' && (
                   <>
@@ -340,40 +498,7 @@ const Orders: React.FC = () => {
                       size="small"
                       color="primary"
                       expand="block"
-                      onClick={async () => {
-                        try {
-                          const by = resolveBy(inv);
-                          const dId = shipDriver[inv._id] || undefined;
-                          await wsClient.request(
-                            'sale.ship',
-                            {
-                              id: inv._id,
-                              shippingNotes: shipNotes[inv._id] || inv.shippingNotes || 'ارسال شد',
-                              driverId: dId || null,
-                              shippingBy: by,
-                              shippingCost:
-                                by === 'us'
-                                  ? parseAmount(shipCost[inv._id] || '') || inv.shippingCost || 0
-                                  : 0,
-                            },
-                            { clientMutationId: newMutationId(), queueIfOffline: true }
-                          );
-                          setToast({
-                            open: true,
-                            msg: dId
-                              ? 'ارسال شده · در لیست راننده است'
-                              : 'ارسال شده · بدون راننده',
-                            color: 'success',
-                          });
-                          await load();
-                        } catch (e) {
-                          setToast({
-                            open: true,
-                            msg: e instanceof Error ? e.message : 'خطا',
-                            color: 'danger',
-                          });
-                        }
-                      }}
+                      onClick={() => openShipConfirm(inv)}
                     >
                       ارسال شده
                     </IonButton>
@@ -473,6 +598,88 @@ const Orders: React.FC = () => {
             </div>
           ))}
         </div>
+
+        {seedEdit && (
+          <InvoiceListPanel
+            kind="sale"
+            editOnly
+            seedEdit={seedEdit}
+            onSeedEditDone={() => {
+              setSeedEdit(null);
+              void load();
+            }}
+            onToast={(msg, color) => setToast({ open: true, msg, color: color || 'success' })}
+          />
+        )}
+
+        <IonModal isOpen={!!shipConfirm} onDidDismiss={() => setShipConfirm(null)}>
+          <IonHeader>
+            <IonToolbar>
+              <IonTitle>پرداخت هنگام ارسال</IonTitle>
+              <IonButtons slot="end">
+                <IonButton onClick={() => setShipConfirm(null)}>بستن</IonButton>
+              </IonButtons>
+            </IonToolbar>
+          </IonHeader>
+          <IonContent className="ion-padding">
+            {shipConfirm && (
+              <>
+                <p>
+                  فاکتور <b>{shipConfirm.invoiceNumber}</b>
+                  {(shipConfirm.payment?.credit || 0) > 0
+                    ? ` · نسیه فعلی ${formatToman(shipConfirm.payment?.credit || 0)}`
+                    : ''}
+                </p>
+                <p className="hint">این فاکتور پرداخت شده بود یا نسیه؟</p>
+                <div className="chip-row">
+                  <IonChip
+                    className={settleKind === 'paid' ? 'ios-chip-active' : 'ios-chip'}
+                    onClick={() => setSettleKind('paid')}
+                  >
+                    پرداخت شده
+                  </IonChip>
+                  <IonChip
+                    className={settleKind === 'credit' ? 'ios-chip-active' : 'ios-chip'}
+                    onClick={() => setSettleKind('credit')}
+                  >
+                    نسیه
+                  </IonChip>
+                </div>
+                {settleKind === 'paid' && (
+                  <>
+                    <p className="hint" style={{ marginTop: 12 }}>
+                      روش دریافت (نسیه کم می‌شود)
+                    </p>
+                    <div className="chip-row">
+                      {(['cash', 'card', 'card_to_card'] as SettleMethod[]).map((m) => (
+                        <IonChip
+                          key={m}
+                          className={settleMethod === m ? 'ios-chip-active' : 'ios-chip'}
+                          onClick={() => setSettleMethod(m)}
+                        >
+                          {SETTLE_METHOD_LABEL[m]}
+                        </IonChip>
+                      ))}
+                    </div>
+                  </>
+                )}
+                {settleKind === 'credit' && (
+                  <p className="hint" style={{ marginTop: 12 }}>
+                    نسیه روی فاکتور می‌ماند و در بدهکاران ثبت می‌شود.
+                  </p>
+                )}
+                <IonButton
+                  expand="block"
+                  className="ios-primary-btn ion-margin-top"
+                  disabled={shippingBusy}
+                  onClick={() => void confirmShip()}
+                >
+                  {shippingBusy ? '…' : 'تأیید ارسال'}
+                </IonButton>
+              </>
+            )}
+          </IonContent>
+        </IonModal>
 
         <IonToast
           isOpen={toast.open}

@@ -28,6 +28,7 @@ import {
 } from '../services/productService';
 import { createPurchaseInvoice, listPurchaseInvoices, deletePurchaseInvoice, updatePurchaseInvoice } from '../services/purchaseService';
 import { createSaleInvoice, listSaleInvoices, recordDebtPayment, recordCustomerDebtPayment, updateDebtor, approveSale, shipSale, cancelSale, getSalePdfHtml, deleteSaleInvoice, updateSaleInvoice, deactivateSaleInvoice, deactivateUnshippedSales } from '../services/saleService';
+import { SaleInvoice } from '../models';
 import { createExpense, updateExpense, recordCardDeposit, listExpenses, listCardDeposits, deleteExpense, deleteCardDeposit, deleteCompanyPayment, listCashTransactions, updateCashTransactionPaymentMethod } from '../services/expenseService';
 import { wipeDevData, listWipeSections, getMongoCompassHint } from '../services/devWipeService';
 import { createCustomer, listCustomers, getCustomer, getCustomerInvoices, updateCustomer, getCustomerSuggestedPricing, quickFindCustomer, getCustomerCrmInsights, listCustomerDirectory, getCustomersMap } from '../services/customerService';
@@ -721,7 +722,7 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
       return { type: 'sale.create', payload: result };
     }
 
-  case 'sale.list': {
+    case 'sale.list': {
       const user = await requireAuth(ws, msg);
       const marketerId = user.role === 'marketer' ? user.userId : (p.marketerId as string | undefined);
       const driverId = user.role === 'driver' ? user.userId : (p.driverId as string | undefined);
@@ -736,6 +737,13 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
           status: p.status as never,
         }),
       };
+    }
+
+    case 'sale.get': {
+      await requireAuth(ws, msg);
+      const inv = await SaleInvoice.findById(String(p.id));
+      if (!inv) throw new Error('فاکتور یافت نشد');
+      return { type: 'sale.get', payload: inv };
     }
 
     case 'sale.approve': {
@@ -760,6 +768,8 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
         driverId: p.driverId !== undefined ? (p.driverId as string | null) : undefined,
         shippingBy: p.shippingBy as 'us' | 'customer' | 'none' | undefined,
         shippingCost: p.shippingCost as number | undefined,
+        settlement: p.settlement as 'paid' | 'credit' | undefined,
+        settleMethod: p.settleMethod as 'cash' | 'card' | 'card_to_card' | undefined,
       });
       notifyDataChange('sale', 'ship', result);
       if (result.shippingExpenseId) notifyDataChange('expense', 'create', { id: result.shippingExpenseId });
@@ -1102,7 +1112,11 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
     case 'debtor.pay': {
       const user = await requireAuth(ws, msg);
       const result = await withIdempotency(msg.clientMutationId, msg.type, user.userId, () =>
-        recordDebtPayment(String(p.id), Number(p.amount), (p.method as 'cash' | 'card') || 'cash')
+        recordDebtPayment(
+          String(p.id),
+          Number(p.amount),
+          (p.method as 'cash' | 'card' | 'card_to_card') || 'cash'
+        )
       );
       notifyDataChange('debtor', 'pay', result);
       return { type: 'debtor.pay', payload: result };
@@ -1116,7 +1130,7 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
           name: p.name as string | undefined,
           phone: p.phone as string | undefined,
           amount: Number(p.amount),
-          method: (p.method as 'cash' | 'card') || 'cash',
+          method: (p.method as 'cash' | 'card' | 'card_to_card') || 'cash',
         })
       );
       notifyDataChange('debtor', 'payCustomer', result);

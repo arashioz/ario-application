@@ -350,6 +350,34 @@ body {
     #f8fafc;
   border: 1px solid rgba(30, 58, 95, 0.08);
 }
+.sticky-board-preview {
+  width: 100%;
+  text-align: right;
+  font-family: inherit;
+  color: inherit;
+  cursor: pointer;
+  margin-top: 14px;
+  margin-bottom: 4px;
+  border: 1px dashed rgba(30, 58, 95, 0.2);
+}
+.sticky-board-preview:active {
+  transform: scale(0.99);
+}
+.sticky-preview-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #1e3a5f;
+}
+.sticky-grid-preview {
+  pointer-events: none;
+}
+.sticky-grid-preview .sticky-note {
+  min-height: 72px;
+  padding-bottom: 12px;
+}
 .sticky-board-head {
   display: flex;
   justify-content: space-between;
@@ -1412,6 +1440,69 @@ body {
   overflow: hidden;
   border: 1px solid var(--ios-separator, #e5e5ea);
   z-index: 0;
+}
+
+/* فیلد آدرس + دکمه نقشه */
+.address-map-field {
+  margin: 4px 0 8px;
+}
+.address-map-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.address-map-input {
+  flex: 1;
+  min-width: 0;
+  --padding-start: 0;
+  --inner-padding-end: 0;
+}
+.address-map-btn {
+  flex-shrink: 0;
+  width: 64px;
+  height: 56px;
+  margin-bottom: 4px;
+  border: 1px solid rgba(30, 58, 95, 0.18);
+  border-radius: 14px;
+  background: #e8eef6;
+  color: #1e3a5f;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  font-size: 11px;
+  font-weight: 800;
+  font-family: inherit;
+  cursor: pointer;
+}
+.address-map-btn ion-icon {
+  font-size: 22px;
+}
+.address-map-btn.has-pin {
+  background: #d1fae5;
+  border-color: #6ee7b7;
+  color: #065f46;
+}
+.address-map-btn:active {
+  transform: scale(0.97);
+}
+.address-map-pin-hint {
+  margin: 4px 2px 0;
+}
+.address-map-modal {
+  --height: 92%;
+  --border-radius: 18px 18px 0 0;
+}
+.address-map-modal-content {
+  --background: #f2f4f7;
+}
+.address-map-modal-body {
+  padding: 14px 16px 28px;
+}
+.address-map-modal .map-picker-canvas {
+  min-height: 360px;
+  height: 58vh !important;
 }
 .money-note {
   font-size: 11px;

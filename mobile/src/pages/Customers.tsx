@@ -19,15 +19,33 @@ import {
   IonSegment,
   IonSegmentButton,
   IonModal,
+  IonChip,
   useIonViewWillEnter,
   RefresherEventDetail,
 } from '@ionic/react';
 import { useHistory } from 'react-router-dom';
-import { mapOutline, saveOutline, addOutline, eyeOutline, receiptOutline, personAddOutline } from 'ionicons/icons';
+import {
+  mapOutline,
+  saveOutline,
+  addOutline,
+  eyeOutline,
+  receiptOutline,
+  personAddOutline,
+  createOutline,
+} from 'ionicons/icons';
 import { wsClient, newMutationId } from '../api/ws';
-import { formatToman, formatKg, formatDate, normalizePhone } from '../utils/format';
-import { LocationPicker } from '../components/LocationPicker';
+import {
+  formatToman,
+  formatKg,
+  formatDate,
+  normalizePhone,
+  parseAmount,
+} from '../utils/format';
+import { AddressMapField } from '../components/AddressMapField';
 import { DigitInput } from '../components/DigitInput';
+import { MoneyInput } from '../components/MoneyInput';
+import { InvoiceListPanel, SaleInvRow } from '../components/InvoiceListPanel';
+import { useAuth } from '../auth/AuthContext';
 
 interface CustomerRow {
   _id: string;
@@ -38,6 +56,11 @@ interface CustomerRow {
   lng?: number;
   notes?: string;
   totalCredit?: number;
+  openCredit?: number;
+  overdueCredit?: number;
+  riskScore?: number;
+  riskLevel?: 'low' | 'medium' | 'high' | 'critical';
+  riskLabel?: string;
   monthKg?: number;
   monthAmount?: number;
   monthInvoices?: number;
@@ -46,6 +69,7 @@ interface CustomerRow {
 }
 
 interface CustomerInvoiceItem {
+  productId?: string;
   productName: string;
   qtyKg: number;
   totalPrice: number;
@@ -54,11 +78,15 @@ interface CustomerInvoiceItem {
   unitPrice?: number;
   unitPricePerKg?: number;
   discount?: number;
+  kgPerPackage?: number;
 }
 
 interface CustomerInvoice {
   _id?: string;
   invoiceNumber: string;
+  customerName?: string;
+  customerPhone?: string;
+  customerAddress?: string;
   totalAmount: number;
   totalKg?: number;
   totalProfit?: number;
@@ -70,7 +98,24 @@ interface CustomerInvoice {
   priceTier?: string;
   isGolden?: boolean;
   notes?: string;
+  shippingNotes?: string;
+  shippedAt?: string;
+  paidAt?: string;
+  lastPaymentAt?: string;
+  isPaid?: boolean;
   items?: CustomerInvoiceItem[];
+}
+
+interface DebtRow {
+  _id: string;
+  amount: number;
+  paidAmount: number;
+  remaining: number;
+  dueDate: string;
+  description?: string;
+  customerId?: string;
+  saleInvoiceId?: string;
+  invoiceNumber?: string;
 }
 
 const STATUS: Record<string, string> = {
@@ -96,8 +141,47 @@ const TIER: Record<string, string> = {
   wholesale: 'عمده',
 };
 
+function toSaleInvRow(inv: CustomerInvoice, customer?: CustomerRow | null): SaleInvRow {
+  return {
+    _id: String(inv._id || ''),
+    invoiceNumber: inv.invoiceNumber,
+    customerName: inv.customerName || customer?.name,
+    customerPhone: inv.customerPhone || customer?.phone,
+    customerAddress: inv.customerAddress || customer?.address,
+    totalAmount: inv.totalAmount,
+    totalKg: inv.totalKg,
+    totalProfit: inv.totalProfit,
+    discount: inv.discount,
+    status: inv.status,
+    isGolden: inv.isGolden,
+    paymentMethod: inv.paymentMethod,
+    payment: inv.payment,
+    priceTier: inv.priceTier,
+    date: inv.date,
+    notes: inv.notes,
+    shippingNotes: inv.shippingNotes,
+    shippedAt: inv.shippedAt,
+    paidAt: inv.paidAt,
+    lastPaymentAt: inv.lastPaymentAt,
+    isPaid: inv.isPaid,
+    items: (inv.items || []).map((it) => ({
+      productId: it.productId ? String(it.productId) : undefined,
+      productName: it.productName,
+      qtyKg: it.qtyKg,
+      totalPrice: it.totalPrice,
+      unit: it.unit,
+      qtyInput: it.qtyInput,
+      unitPrice: it.unitPrice,
+      unitPricePerKg: it.unitPricePerKg,
+      discount: it.discount,
+      kgPerPackage: it.kgPerPackage,
+    })),
+  };
+}
+
 const Customers: React.FC = () => {
   const history = useHistory();
+  const { isAdmin } = useAuth();
   const [list, setList] = useState<CustomerRow[]>([]);
   const [summary, setSummary] = useState({ gold: 0, silver: 0, bronze: 0, new: 0 });
   const [tab, setTab] = useState<'all' | 'gold' | 'silver' | 'bronze' | 'new'>('all');
@@ -110,11 +194,20 @@ const Customers: React.FC = () => {
   const [lng, setLng] = useState<number | null>(null);
   const [selected, setSelected] = useState<CustomerRow | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editName, setEditName] = useState('');
+  const [editPhone, setEditPhone] = useState('');
   const [editAddress, setEditAddress] = useState('');
-  const [editLat, setEditLat] = useState('');
-  const [editLng, setEditLng] = useState('');
+  const [editLat, setEditLat] = useState<number | null>(null);
+  const [editLng, setEditLng] = useState<number | null>(null);
+  const [editNotes, setEditNotes] = useState('');
+  const [savingEdit, setSavingEdit] = useState(false);
   const [invoices, setInvoices] = useState<CustomerInvoice[]>([]);
+  const [debts, setDebts] = useState<DebtRow[]>([]);
   const [invDetail, setInvDetail] = useState<CustomerInvoice | null>(null);
+  const [seedEdit, setSeedEdit] = useState<SaleInvRow | null>(null);
+  const [payAmount, setPayAmount] = useState('');
+  const [payMethod, setPayMethod] = useState<'cash' | 'card' | 'card_to_card'>('cash');
   const [toast, setToast] = useState({ open: false, msg: '', color: 'success' });
 
   const load = useCallback(async (q?: string) => {
@@ -124,6 +217,22 @@ const Customers: React.FC = () => {
     }>('customer.directory', { search: q || undefined });
     setList(data.customers || []);
     setSummary(data.summary || { gold: 0, silver: 0, bronze: 0, new: 0 });
+  }, []);
+
+  const reloadSelected = useCallback(async (id: string, base?: CustomerRow | null) => {
+    const [res, allDebts] = await Promise.all([
+      wsClient.request<{
+        customer?: CustomerRow;
+        invoices: CustomerInvoice[];
+      }>('customer.get', { id }),
+      wsClient.request<DebtRow[]>('debtor.list', { settled: false }).catch(() => [] as DebtRow[]),
+    ]);
+    if (res.customer) setSelected({ ...(base || {}), ...res.customer });
+    setInvoices(res.invoices || []);
+    const cid = String(id);
+    setDebts(
+      (Array.isArray(allDebts) ? allDebts : []).filter((d) => String(d.customerId || '') === cid)
+    );
   }, []);
 
   useIonViewWillEnter(() => {
@@ -164,18 +273,58 @@ const Customers: React.FC = () => {
   const open = async (c: CustomerRow) => {
     setSelected(c);
     setDetailOpen(true);
-    setEditAddress(c.address || '');
-    setEditLat(c.lat != null ? String(c.lat) : '');
-    setEditLng(c.lng != null ? String(c.lng) : '');
+    setInvDetail(null);
+    setSeedEdit(null);
+    setPayAmount('');
     try {
-      const res = await wsClient.request<{
-        customer?: CustomerRow;
-        invoices: CustomerInvoice[];
-      }>('customer.get', { id: c._id });
-      if (res.customer) setSelected({ ...c, ...res.customer });
-      setInvoices(res.invoices || []);
+      await reloadSelected(c._id, c);
     } catch {
       setInvoices([]);
+      setDebts([]);
+    }
+  };
+
+  const openEditCustomer = () => {
+    if (!selected) return;
+    setEditName(selected.name || '');
+    setEditPhone(selected.phone || '');
+    setEditAddress(selected.address || '');
+    setEditLat(selected.lat ?? null);
+    setEditLng(selected.lng ?? null);
+    setEditNotes(selected.notes || '');
+    setEditOpen(true);
+  };
+
+  const saveCustomerEdit = async () => {
+    if (!selected) return;
+    if (!editName.trim()) {
+      setToast({ open: true, msg: 'نام مشتری الزامی است', color: 'danger' });
+      return;
+    }
+    setSavingEdit(true);
+    try {
+      const updated = await wsClient.request<CustomerRow>(
+        'customer.update',
+        {
+          id: selected._id,
+          name: editName.trim(),
+          phone: editPhone.trim() ? normalizePhone(editPhone) || '' : '',
+          address: editAddress.trim() || '',
+          lat: editLat ?? undefined,
+          lng: editLng ?? undefined,
+          notes: editNotes.trim() || '',
+        },
+        { clientMutationId: newMutationId(), queueIfOffline: true }
+      );
+      setSelected({ ...selected, ...updated });
+      setEditOpen(false);
+      setToast({ open: true, msg: 'اطلاعات مشتری ذخیره شد', color: 'success' });
+      await load(search);
+      await reloadSelected(selected._id, { ...selected, ...updated });
+    } catch (e) {
+      setToast({ open: true, msg: e instanceof Error ? e.message : 'خطا', color: 'danger' });
+    } finally {
+      setSavingEdit(false);
     }
   };
 
@@ -184,38 +333,30 @@ const Customers: React.FC = () => {
     const totalAmount = active.reduce((s, i) => s + (i.totalAmount || 0), 0);
     const totalKg = active.reduce((s, i) => s + (i.totalKg || 0), 0);
     const totalCreditOpen = active.reduce((s, i) => s + (i.payment?.credit || 0), 0);
-    const debt = selected?.totalCredit ?? totalCreditOpen;
+    const debtRemaining = debts.reduce((s, d) => s + (d.remaining || 0), 0);
+    const debt = selected?.totalCredit ?? (debtRemaining || totalCreditOpen);
     return {
       totalAmount,
       totalKg,
       invoiceCount: active.length,
       debt,
+      debtRemaining,
       monthAmount: selected?.monthAmount || 0,
       monthKg: selected?.monthKg || 0,
       monthInvoices: selected?.monthInvoices || 0,
     };
-  }, [invoices, selected]);
+  }, [invoices, selected, debts]);
 
-  const saveAddress = async () => {
-    if (!selected) return;
-    try {
-      const updated = await wsClient.request<CustomerRow>(
-        'customer.update',
-        {
-          id: selected._id,
-          address: editAddress.trim() || undefined,
-          lat: editLat ? parseFloat(editLat) : undefined,
-          lng: editLng ? parseFloat(editLng) : undefined,
-        },
-        { clientMutationId: newMutationId(), queueIfOffline: true }
-      );
-      setSelected({ ...selected, ...updated });
-      setToast({ open: true, msg: 'آدرس ذخیره شد', color: 'success' });
-      await load(search);
-    } catch (e) {
-      setToast({ open: true, msg: e instanceof Error ? e.message : 'خطا', color: 'danger' });
-    }
-  };
+  const creditInvoices = useMemo(
+    () =>
+      invoices.filter(
+        (i) =>
+          i.status !== 'cancelled' &&
+          i.status !== 'inactive' &&
+          (i.payment?.credit || 0) > 0
+      ),
+    [invoices]
+  );
 
   const openMap = (c: CustomerRow) => {
     if (c.lat != null && c.lng != null) {
@@ -227,6 +368,57 @@ const Customers: React.FC = () => {
 
   const goNewInvoice = (c: CustomerRow) => {
     history.push('/sale', { followUpCustomerId: c._id });
+  };
+
+  const startInvoiceEdit = (inv: CustomerInvoice) => {
+    if (!inv._id) {
+      setToast({ open: true, msg: 'شناسه فاکتور پیدا نشد', color: 'warning' });
+      return;
+    }
+    setInvDetail(null);
+    setSeedEdit(toSaleInvRow(inv, selected));
+  };
+
+  const onInvoiceEditDone = async () => {
+    setSeedEdit(null);
+    if (selected) {
+      try {
+        await reloadSelected(selected._id, selected);
+        await load(search);
+      } catch {
+        /* ignore */
+      }
+    }
+  };
+
+  const payCustomerDebt = async () => {
+    if (!selected) return;
+    const amount = parseAmount(payAmount);
+    if (!amount) {
+      setToast({ open: true, msg: 'مبلغ را وارد کنید', color: 'danger' });
+      return;
+    }
+    try {
+      const res = await wsClient.request<{ applied: number }>(
+        'debtor.payCustomer',
+        {
+          customerId: selected._id,
+          amount,
+          method: payMethod,
+        },
+        { clientMutationId: newMutationId(), queueIfOffline: true }
+      );
+      setPayAmount('');
+      setToast({
+        open: true,
+        msg: `${formatToman(res.applied)} از نسیه کم شد`,
+        color: 'success',
+      });
+      await reloadSelected(selected._id, selected);
+      await load(search);
+    } catch (e) {
+      setToast({ open: true, msg: e instanceof Error ? e.message : 'خطا', color: 'danger' });
+    }
   };
 
   const filtered = list.filter((c) => (tab === 'all' ? true : c.loyaltyTier === tab));
@@ -329,8 +521,28 @@ const Customers: React.FC = () => {
                   </div>
                   <div className="ios-caption">
                     این ماه: {formatKg(c.monthKg || 0)} · {formatToman(c.monthAmount || 0)}
-                    {(c.totalCredit || 0) > 0 ? ` · بدهی ${formatToman(c.totalCredit || 0)}` : ''}
+                    {(c.totalCredit || c.openCredit || 0) > 0
+                      ? ` · بدهی ${formatToman(c.openCredit || c.totalCredit || 0)}`
+                      : ''}
                   </div>
+                  {c.riskLabel && (
+                    <div
+                      className="ios-caption"
+                      style={{
+                        color:
+                          c.riskLevel === 'critical' || c.riskLevel === 'high'
+                            ? 'var(--ion-color-danger)'
+                            : c.riskLevel === 'medium'
+                              ? 'var(--ion-color-warning)'
+                              : undefined,
+                      }}
+                    >
+                      {c.riskLabel}
+                      {(c.overdueCredit || 0) > 0
+                        ? ` · معوقه ${formatToman(c.overdueCredit || 0)}`
+                        : ''}
+                    </div>
+                  )}
                 </div>
                 <IonBadge color={tierColor(c.loyaltyTier)}>{c.tierLabel || 'جدید'}</IonBadge>
               </div>
@@ -338,7 +550,6 @@ const Customers: React.FC = () => {
           ))}
         </div>
 
-        {/* ایجاد مشتری */}
         <IonModal isOpen={createOpen} onDidDismiss={() => setCreateOpen(false)}>
           <IonHeader>
             <IonToolbar>
@@ -360,19 +571,13 @@ const Customers: React.FC = () => {
               onChange={setPhone}
               placeholder="09…"
             />
-            <IonItem lines="none">
-              <IonLabel position="stacked">آدرس</IonLabel>
-              <IonInput value={address} onIonInput={(e) => setAddress(e.detail.value || '')} />
-            </IonItem>
-            <p className="hint convert-hint" style={{ marginTop: 8 }}>
-              موقعیت روی نقشه (اختیاری)
-            </p>
-            <LocationPicker
+            <AddressMapField
+              label="آدرس"
+              address={address}
+              onAddressChange={setAddress}
               lat={lat}
               lng={lng}
-              address={address}
-              height={220}
-              onChange={({ lat: la, lng: ln, address: street }) => {
+              onLocationChange={({ lat: la, lng: ln, address: street }) => {
                 setLat(la);
                 setLng(ln);
                 if (street) setAddress(street);
@@ -389,12 +594,13 @@ const Customers: React.FC = () => {
           </IonContent>
         </IonModal>
 
-        {/* جزئیات مشتری */}
         <IonModal
           isOpen={detailOpen && !!selected}
           onDidDismiss={() => {
             setDetailOpen(false);
             setSelected(null);
+            setSeedEdit(null);
+            setInvDetail(null);
           }}
         >
           <IonHeader>
@@ -420,7 +626,22 @@ const Customers: React.FC = () => {
                   {selected.address ? ` · ${selected.address}` : ''}
                 </p>
 
-                <div className="ios-section-title" style={{ marginTop: 0 }}>
+                <div className="chip-row">
+                  <IonButton size="small" color="warning" onClick={openEditCustomer}>
+                    <IonIcon slot="start" icon={createOutline} />
+                    ویرایش
+                  </IonButton>
+                  <IonButton size="small" color="success" onClick={() => goNewInvoice(selected)}>
+                    <IonIcon slot="start" icon={addOutline} />
+                    فاکتور جدید
+                  </IonButton>
+                  <IonButton size="small" fill="outline" onClick={() => openMap(selected)}>
+                    <IonIcon slot="start" icon={mapOutline} />
+                    نقشه
+                  </IonButton>
+                </div>
+
+                <div className="ios-section-title" style={{ marginTop: 16 }}>
                   گزارش مشتری
                 </div>
                 <div className="ios-kpi-grid">
@@ -456,44 +677,93 @@ const Customers: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="chip-row">
-                  <IonButton size="small" color="success" onClick={() => goNewInvoice(selected)}>
-                    <IonIcon slot="start" icon={addOutline} />
-                    فاکتور جدید
-                  </IonButton>
-                  <IonButton size="small" fill="outline" onClick={() => openMap(selected)}>
-                    <IonIcon slot="start" icon={mapOutline} />
-                    نقشه
-                  </IonButton>
-                  <IonButton size="small" fill="outline" routerLink="/debtors">
-                    نسیه
-                  </IonButton>
-                </div>
-
-                <div className="ios-section-title">آدرس</div>
-                <div className="ios-glass-card">
-                  <IonItem lines="full">
-                    <IonLabel position="stacked">آدرس</IonLabel>
-                    <IonInput
-                      value={editAddress}
-                      onIonInput={(e) => setEditAddress(e.detail.value || '')}
-                    />
-                  </IonItem>
-                  <LocationPicker
-                    lat={editLat ? parseFloat(editLat) : null}
-                    lng={editLng ? parseFloat(editLng) : null}
-                    address={editAddress}
-                    onChange={({ lat: la, lng: ln, address: street }) => {
-                      setEditLat(String(la));
-                      setEditLng(String(ln));
-                      if (street) setEditAddress(street);
-                    }}
-                  />
-                  <IonButton size="small" onClick={() => void saveAddress()}>
-                    <IonIcon slot="start" icon={saveOutline} />
-                    ذخیره آدرس
-                  </IonButton>
-                </div>
+                <div className="ios-section-title">نسیه‌ها</div>
+                {stats.debt <= 0 && debts.length === 0 && creditInvoices.length === 0 ? (
+                  <p className="hint">نسیه باز ندارد</p>
+                ) : (
+                  <div className="ios-glass-card">
+                    <div className="stat-row">
+                      <span className="stat-label">مانده نسیه</span>
+                      <span className="stat-value warning">
+                        {formatToman(stats.debtRemaining || stats.debt)}
+                      </span>
+                    </div>
+                    {debts.map((d) => (
+                      <div key={d._id} className="ios-caption" style={{ marginTop: 6 }}>
+                        {d.invoiceNumber || 'بدهی'} · سررسید {formatDate(d.dueDate)} · مانده{' '}
+                        {formatToman(d.remaining)}
+                        {d.saleInvoiceId ? (
+                          <>
+                            {' · '}
+                            <button
+                              type="button"
+                              className="linkish"
+                              style={{
+                                background: 'none',
+                                border: 'none',
+                                color: 'var(--ion-color-primary)',
+                                padding: 0,
+                                font: 'inherit',
+                              }}
+                              onClick={() => {
+                                const inv = invoices.find(
+                                  (i) => String(i._id) === String(d.saleInvoiceId)
+                                );
+                                if (inv) startInvoiceEdit(inv);
+                                else
+                                  setToast({
+                                    open: true,
+                                    msg: 'فاکتور در لیست اخیر نیست — از ویرایش فاکتورها استفاده کنید',
+                                    color: 'warning',
+                                  });
+                              }}
+                            >
+                              ویرایش مبلغ
+                            </button>
+                          </>
+                        ) : null}
+                      </div>
+                    ))}
+                    {isAdmin && (stats.debtRemaining > 0 || stats.debt > 0) && (
+                      <>
+                        <div className="chip-row" style={{ marginTop: 10 }}>
+                          <IonChip
+                            className={payMethod === 'cash' ? 'ios-chip-active' : 'ios-chip'}
+                            onClick={() => setPayMethod('cash')}
+                          >
+                            نقد
+                          </IonChip>
+                          <IonChip
+                            className={payMethod === 'card' ? 'ios-chip-active' : 'ios-chip'}
+                            onClick={() => setPayMethod('card')}
+                          >
+                            پوز
+                          </IonChip>
+                          <IonChip
+                            className={payMethod === 'card_to_card' ? 'ios-chip-active' : 'ios-chip'}
+                            onClick={() => setPayMethod('card_to_card')}
+                          >
+                            کارت به کارت
+                          </IonChip>
+                        </div>
+                        <MoneyInput
+                          label="دریافت از نسیه (تومان)"
+                          value={payAmount}
+                          onChange={(v) => setPayAmount(v)}
+                        />
+                        <IonButton
+                          expand="block"
+                          size="small"
+                          className="ion-margin-top"
+                          disabled={!payAmount}
+                          onClick={() => void payCustomerDebt()}
+                        >
+                          ثبت دریافت نسیه
+                        </IonButton>
+                      </>
+                    )}
+                  </div>
+                )}
 
                 <div className="ios-section-title">ریز سفارش‌ها / فاکتورها</div>
                 {invoices.length === 0 && <p className="hint">فاکتوری نیست</p>}
@@ -522,7 +792,16 @@ const Customers: React.FC = () => {
                         نسیه این فاکتور: {formatToman(inv.payment?.credit || 0)}
                       </div>
                     )}
-                    {(inv.items || []).map((it, i) => {
+                    {(inv.shippedAt || inv.paidAt || inv.lastPaymentAt) && (
+                      <div className="ios-caption" style={{ marginTop: 4 }}>
+                        {inv.shippedAt ? `ارسال ${formatDate(inv.shippedAt)}` : ''}
+                        {inv.shippedAt && (inv.paidAt || inv.lastPaymentAt) ? ' · ' : ''}
+                        {inv.paidAt || inv.lastPaymentAt
+                          ? `پرداخت ${formatDate(inv.paidAt || inv.lastPaymentAt!)}`
+                          : ''}
+                      </div>
+                    )}
+                    {(inv.items || []).slice(0, 3).map((it, i) => {
                       const perKg =
                         it.unitPricePerKg ||
                         (it.qtyKg > 0 ? Math.round(it.totalPrice / it.qtyKg) : 0);
@@ -540,6 +819,17 @@ const Customers: React.FC = () => {
                         <IonIcon slot="start" icon={eyeOutline} />
                         جزئیات
                       </IonButton>
+                      {isAdmin && inv._id && (
+                        <IonButton
+                          size="small"
+                          fill="clear"
+                          color="warning"
+                          onClick={() => startInvoiceEdit(inv)}
+                        >
+                          <IonIcon slot="start" icon={createOutline} />
+                          ویرایش
+                        </IonButton>
+                      )}
                       <IonButton size="small" fill="outline" onClick={() => goNewInvoice(selected)}>
                         <IonIcon slot="start" icon={receiptOutline} />
                         فاکتور دوباره
@@ -549,6 +839,56 @@ const Customers: React.FC = () => {
                 ))}
               </>
             )}
+          </IonContent>
+        </IonModal>
+
+        {/* ویرایش اطلاعات مشتری */}
+        <IonModal isOpen={editOpen} onDidDismiss={() => setEditOpen(false)}>
+          <IonHeader>
+            <IonToolbar>
+              <IonTitle>ویرایش مشتری</IonTitle>
+              <IonButtons slot="end">
+                <IonButton onClick={() => setEditOpen(false)}>بستن</IonButton>
+              </IonButtons>
+            </IonToolbar>
+          </IonHeader>
+          <IonContent className="ion-padding">
+            <IonItem lines="full">
+              <IonLabel position="stacked">نام</IonLabel>
+              <IonInput value={editName} onIonInput={(e) => setEditName(e.detail.value || '')} />
+            </IonItem>
+            <DigitInput
+              label="شماره موبایل"
+              mode="phone"
+              value={editPhone}
+              onChange={setEditPhone}
+              placeholder="09…"
+            />
+            <AddressMapField
+              label="آدرس و نقشه"
+              address={editAddress}
+              onAddressChange={setEditAddress}
+              lat={editLat}
+              lng={editLng}
+              onLocationChange={({ lat: la, lng: ln, address: street }) => {
+                setEditLat(la);
+                setEditLng(ln);
+                if (street) setEditAddress(street);
+              }}
+            />
+            <IonItem lines="full">
+              <IonLabel position="stacked">یادداشت</IonLabel>
+              <IonInput value={editNotes} onIonInput={(e) => setEditNotes(e.detail.value || '')} />
+            </IonItem>
+            <IonButton
+              expand="block"
+              className="ios-primary-btn ion-margin-top"
+              disabled={savingEdit || !editName.trim()}
+              onClick={() => void saveCustomerEdit()}
+            >
+              <IonIcon slot="start" icon={saveOutline} />
+              {savingEdit ? '…' : 'ذخیره تغییرات'}
+            </IonButton>
           </IonContent>
         </IonModal>
 
@@ -580,6 +920,17 @@ const Customers: React.FC = () => {
                 <p>
                   <b>وضعیت:</b> {STATUS[invDetail.status || ''] || invDetail.status || '—'}
                 </p>
+                {invDetail.shippedAt && (
+                  <p>
+                    <b>ارسال شده:</b> {formatDate(invDetail.shippedAt)}
+                  </p>
+                )}
+                {(invDetail.paidAt || invDetail.lastPaymentAt) && (
+                  <p>
+                    <b>پرداخت شده:</b> {formatDate(invDetail.paidAt || invDetail.lastPaymentAt!)}
+                    {invDetail.isPaid === false ? ' (جزئی)' : ''}
+                  </p>
+                )}
                 <p>
                   <b>پرداخت:</b> {PAY[invDetail.paymentMethod || ''] || invDetail.paymentMethod || '—'}
                 </p>
@@ -617,10 +968,31 @@ const Customers: React.FC = () => {
                     </div>
                   );
                 })}
+                {isAdmin && invDetail._id && (
+                  <IonButton
+                    expand="block"
+                    color="warning"
+                    className="ion-margin-top"
+                    onClick={() => startInvoiceEdit(invDetail)}
+                  >
+                    <IonIcon slot="start" icon={createOutline} />
+                    ویرایش فاکتور و نسیه
+                  </IonButton>
+                )}
               </>
             )}
           </IonContent>
         </IonModal>
+
+        {seedEdit && (
+          <InvoiceListPanel
+            kind="sale"
+            editOnly
+            seedEdit={seedEdit}
+            onSeedEditDone={() => void onInvoiceEditDone()}
+            onToast={(msg, color) => setToast({ open: true, msg, color: color || 'success' })}
+          />
+        )}
 
         <IonToast
           isOpen={toast.open}

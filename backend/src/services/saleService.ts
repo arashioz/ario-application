@@ -15,6 +15,24 @@ import {
 } from './productService';
 import { PaymentMethod, PriceTier, SaleStatus } from '../models/SaleInvoice';
 import { createCustomer, normalizePhoneDigits, findCustomerByPhone, getCustomerPreferredTier } from './customerService';
+import { startOfDay } from '../utils/persian';
+
+/** تاریخ فاکتور قبل از امروز محلی → برای ثبت‌های گذشته «ارسال‌شده» حساب شود */
+function isPastInvoiceDate(date: Date): boolean {
+  return startOfDay(date).getTime() < startOfDay(new Date()).getTime();
+}
+
+async function autoShipIfPastDate(invoice: InstanceType<typeof SaleInvoice>) {
+  if (!invoice?.date || !isPastInvoiceDate(invoice.date)) return invoice;
+  if (invoice.status === 'pending' || invoice.status === 'cancelled' || invoice.status === 'inactive') {
+    return invoice;
+  }
+  if (invoice.status === 'shipped' || invoice.status === 'delivered') return invoice;
+  invoice.status = 'shipped';
+  invoice.shippedAt = invoice.date;
+  await invoice.save();
+  return invoice;
+}
 
 interface SaleItemInput {
   productId?: string;
@@ -407,6 +425,7 @@ export async function createSaleInvoice(data: {
 
   if (!requiresApproval) {
     await applyStockAndMoney(invoice);
+    await autoShipIfPastDate(invoice);
     if (data.marketerId && data.createdByRole === 'marketer') {
       try {
         const { creditSaleCommission } = await import('./platformService');
@@ -461,6 +480,7 @@ export async function approveSale(
 
   await invoice.save();
   await maybeRecordShippingExpense(invoice);
+  await autoShipIfPastDate(invoice);
 
   if (invoice.marketerId) {
     try {
@@ -504,6 +524,80 @@ async function maybeRecordShippingExpense(invoice: InstanceType<typeof SaleInvoi
   return invoice;
 }
 
+/** هنگام ارسال: اگر «پرداخت‌شده» بود نسیه این فاکتور تسویه و به نقد/پوز/کارت‌به‌کارت برود */
+async function settleInvoiceCreditOnShip(
+  invoice: InstanceType<typeof SaleInvoice>,
+  method: 'cash' | 'card' | 'card_to_card'
+) {
+  const debtors = await Debtor.find({ saleInvoiceId: invoice._id, isSettled: false });
+  let remaining = 0;
+  for (const d of debtors) {
+    remaining += Math.max(0, (d.amount || 0) - (d.paidAmount || 0));
+  }
+  if (remaining <= 0) {
+    remaining = Math.max(0, Math.round(invoice.payment?.credit || 0));
+  }
+  if (remaining <= 0) {
+    invoice.isPaid = true;
+    if (!invoice.paidAt) invoice.paidAt = new Date();
+    return invoice;
+  }
+
+  const now = new Date();
+  for (const d of debtors) {
+    const rem = Math.max(0, (d.amount || 0) - (d.paidAmount || 0));
+    if (rem <= 0) continue;
+    d.paidAmount = d.amount;
+    d.isSettled = true;
+    await d.save();
+  }
+
+  const isCash = method === 'cash';
+  const methodLabel =
+    method === 'cash' ? 'نقد' : method === 'card_to_card' ? 'کارت به کارت' : 'پوز';
+  await CashTransaction.create({
+    type: isCash ? 'sale_cash' : 'sale_card',
+    amount: remaining,
+    direction: 'in',
+    description: `تسویه نسیه هنگام ارسال ${invoice.invoiceNumber} (${methodLabel})`,
+    referenceId: invoice._id.toString(),
+    referenceModel: 'SaleInvoice',
+    date: now,
+  });
+  await updateBalances(isCash ? remaining : 0, isCash ? 0 : remaining);
+
+  if (invoice.customerId) {
+    await Customer.findByIdAndUpdate(invoice.customerId, { $inc: { totalCredit: -remaining } });
+  }
+
+  const pay = {
+    cash: Math.round(invoice.payment?.cash || 0),
+    card: Math.round(invoice.payment?.card || 0),
+    credit: Math.round(invoice.payment?.credit || 0),
+  };
+  if (isCash) pay.cash += remaining;
+  else pay.card += remaining;
+  pay.credit = Math.max(0, pay.credit - remaining);
+  invoice.payment = pay as never;
+
+  if (pay.credit > 0) {
+    invoice.paymentMethod = 'mixed';
+  } else if (pay.cash > 0 && pay.card > 0) {
+    invoice.paymentMethod = 'mixed';
+  } else if (pay.cash > 0) {
+    invoice.paymentMethod = 'cash';
+  } else if (method === 'card_to_card') {
+    invoice.paymentMethod = 'card_to_card';
+  } else {
+    invoice.paymentMethod = 'card';
+  }
+
+  invoice.isPaid = pay.credit === 0;
+  invoice.paidAt = now;
+  invoice.lastPaymentAt = now;
+  return invoice;
+}
+
 export async function shipSale(
   invoiceId: string,
   opts?: {
@@ -511,6 +605,10 @@ export async function shipSale(
     driverId?: string | null;
     shippingBy?: 'us' | 'customer' | 'none';
     shippingCost?: number;
+    /** پرداخت‌شده → نسیه کم شود | نسیه → بماند */
+    settlement?: 'paid' | 'credit';
+    /** اگر پرداخت‌شده: نقد / پوز / کارت به کارت */
+    settleMethod?: 'cash' | 'card' | 'card_to_card';
   }
 ) {
   const invoice = await SaleInvoice.findById(invoiceId);
@@ -520,7 +618,7 @@ export async function shipSale(
   }
   if (!invoice.stockApplied) await applyStockAndMoney(invoice);
   invoice.status = 'shipped';
-  invoice.shippedAt = new Date();
+  invoice.shippedAt = invoice.shippedAt || new Date();
 
   const shippingNotes = opts?.shippingNotes;
   const driverId = opts?.driverId;
@@ -538,6 +636,16 @@ export async function shipSale(
       invoice.driverId = undefined;
     }
   }
+
+  const settlement = opts?.settlement || 'credit';
+  if (settlement === 'paid') {
+    const method = opts?.settleMethod || 'cash';
+    if (method !== 'cash' && method !== 'card' && method !== 'card_to_card') {
+      throw new Error('روش دریافت نامعتبر است');
+    }
+    await settleInvoiceCreditOnShip(invoice, method);
+  }
+
   await invoice.save();
   await maybeRecordShippingExpense(invoice);
   return invoice;
@@ -980,32 +1088,66 @@ export async function listSaleInvoices(opts?: {
   return SaleInvoice.find(filter).sort({ createdAt: -1 });
 }
 
-export async function recordDebtPayment(debtorId: string, amount: number, method: 'cash' | 'card' = 'cash') {
+export async function recordDebtPayment(
+  debtorId: string,
+  amount: number,
+  method: 'cash' | 'card' | 'card_to_card' = 'cash'
+) {
   const debtor = await Debtor.findById(debtorId);
   if (!debtor) throw new Error('بدهکار یافت نشد');
 
-  debtor.paidAmount += amount;
+  const payAmount = Math.round(amount || 0);
+  if (payAmount <= 0) throw new Error('مبلغ نامعتبر است');
+
+  debtor.paidAmount += payAmount;
   if (debtor.paidAmount >= debtor.amount) debtor.isSettled = true;
   await debtor.save();
 
+  const now = new Date();
+  const methodLabel =
+    method === 'cash' ? 'نقد' : method === 'card_to_card' ? 'کارت به کارت' : 'پوز';
   await CashTransaction.create({
     type: 'debt_payment',
-    amount,
+    amount: payAmount,
     direction: 'in',
-    description: `دریافت بدهی ${debtor.name}`,
+    description: `دریافت بدهی ${debtor.name} (${methodLabel})`,
     referenceId: debtor._id.toString(),
     referenceModel: 'Debtor',
-    date: new Date(),
+    date: now,
   });
 
-  await updateBalances(method === 'cash' ? amount : 0, method === 'card' ? amount : 0);
+  const isCash = method === 'cash';
+  await updateBalances(isCash ? payAmount : 0, isCash ? 0 : payAmount);
 
   if (debtor.saleInvoiceId) {
-    await SaleInvoice.findByIdAndUpdate(debtor.saleInvoiceId, { isPaid: debtor.isSettled });
+    const inv = await SaleInvoice.findById(debtor.saleInvoiceId);
+    if (inv) {
+      const pay = {
+        cash: Math.round(inv.payment?.cash || 0),
+        card: Math.round(inv.payment?.card || 0),
+        credit: Math.round(inv.payment?.credit || 0),
+      };
+      if (isCash) pay.cash += payAmount;
+      else pay.card += payAmount;
+      pay.credit = Math.max(0, pay.credit - payAmount);
+      inv.payment = pay as never;
+      inv.lastPaymentAt = now;
+      inv.isPaid = debtor.isSettled || pay.credit === 0;
+      if (inv.isPaid) inv.paidAt = now;
+      if (pay.credit === 0) {
+        if (pay.cash > 0 && pay.card > 0) inv.paymentMethod = 'mixed';
+        else if (pay.cash > 0) inv.paymentMethod = 'cash';
+        else if (method === 'card_to_card') inv.paymentMethod = 'card_to_card';
+        else inv.paymentMethod = 'card';
+      } else {
+        inv.paymentMethod = 'mixed';
+      }
+      await inv.save();
+    }
   }
 
-  if (debtor.customerId && amount > 0) {
-    await Customer.findByIdAndUpdate(debtor.customerId, { $inc: { totalCredit: -amount } });
+  if (debtor.customerId && payAmount > 0) {
+    await Customer.findByIdAndUpdate(debtor.customerId, { $inc: { totalCredit: -payAmount } });
   }
 
   return debtor;
@@ -1022,6 +1164,12 @@ export async function updateDebtor(
   if (data.name?.trim()) d.name = data.name.trim();
   if (data.phone !== undefined) d.phone = data.phone || undefined;
   await d.save();
+
+  // سررسید روی فاکتور هم هم‌خوان شود تا در نسیه‌ها دیده شود
+  if (data.dueDate && d.saleInvoiceId) {
+    await SaleInvoice.findByIdAndUpdate(d.saleInvoiceId, { dueDate: data.dueDate });
+  }
+
   return d;
 }
 
@@ -1031,7 +1179,7 @@ export async function recordCustomerDebtPayment(opts: {
   name?: string;
   phone?: string;
   amount: number;
-  method?: 'cash' | 'card';
+  method?: 'cash' | 'card' | 'card_to_card';
 }) {
   const amount = Math.round(opts.amount || 0);
   if (amount <= 0) throw new Error('مبلغ نامعتبر است');

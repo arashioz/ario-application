@@ -33,7 +33,6 @@ import {
   timeOutline,
   sparklesOutline,
   personAddOutline,
-  mapOutline,
   eyeOutline,
   copyOutline,
 } from 'ionicons/icons';
@@ -64,7 +63,7 @@ import { geoErrorMessage, getCurrentPositionAsync, isGeoSecureContext } from '..
 import { reverseGeocode } from '../utils/geocode';
 import { useHistory, useLocation } from 'react-router-dom';
 import { DigitInput } from '../components/DigitInput';
-import { LocationPicker } from '../components/LocationPicker';
+import { AddressMapField } from '../components/AddressMapField';
 import {
   buildInvoiceShareText,
   buildCardTransferText,
@@ -288,7 +287,6 @@ const Sale: React.FC = () => {
   const [custModalAddress, setCustModalAddress] = useState('');
   const [custModalSaving, setCustModalSaving] = useState(false);
   const [custModalMode, setCustModalMode] = useState<'create' | 'edit'>('create');
-  const [custModalShowMap, setCustModalShowMap] = useState(false);
   const [custModalLat, setCustModalLat] = useState<number | null>(null);
   const [custModalLng, setCustModalLng] = useState<number | null>(null);
   const [histDetailId, setHistDetailId] = useState<string | null>(null);
@@ -339,7 +337,6 @@ const Sale: React.FC = () => {
     setCustModalAddress(address || (mode === 'edit' ? customerAddress : '') || '');
     setCustModalLat(mode === 'edit' ? customerLat : null);
     setCustModalLng(mode === 'edit' ? customerLng : null);
-    setCustModalShowMap(false);
     setCustModalOpen(true);
   };
 
@@ -1689,7 +1686,9 @@ const Sale: React.FC = () => {
         const msg =
           invoice.status === 'pending'
             ? `فاکتور ${invoice.invoiceNumber} ثبت شد — متن برای مشتری کپی شد`
-            : `فاکتور ${invoice.invoiceNumber} ثبت شد — متن کپی شد، بفرستید برای مشتری`;
+            : invoice.status === 'shipped'
+              ? `فاکتور ${invoice.invoiceNumber} ثبت و ارسال شد — متن کپی شد`
+              : `فاکتور ${invoice.invoiceNumber} ثبت شد — متن کپی شد، بفرستید برای مشتری`;
         setToast({ open: true, msg, color: 'success' });
         if (saleTab !== 'bulk') {
           await openPdf(invoice._id);
@@ -2641,48 +2640,19 @@ const Sale: React.FC = () => {
                 placeholder="09…"
                 onChange={(v) => setCustModalPhone(v)}
               />
-              <IonItem lines="full">
-                <IonLabel position="stacked">آدرس (اختیاری)</IonLabel>
-                <IonInput
-                  value={custModalAddress}
-                  placeholder="آدرس ارسال"
-                  onIonInput={(e) => setCustModalAddress(e.detail.value || '')}
-                />
-              </IonItem>
-              <IonButton
-                expand="block"
-                fill="outline"
-                size="small"
-                style={{ marginTop: 10 }}
-                onClick={() => setCustModalShowMap((v) => !v)}
-              >
-                <IonIcon slot="start" icon={mapOutline} />
-                {custModalShowMap
-                  ? 'بستن نقشه'
-                  : custModalLat != null
-                    ? 'ویرایش موقعیت روی نقشه'
-                    : 'انتخاب موقعیت روی نقشه'}
-              </IonButton>
-              {custModalShowMap && (
-                <div style={{ marginTop: 8 }}>
-                  <LocationPicker
-                    lat={custModalLat}
-                    lng={custModalLng}
-                    address={custModalAddress}
-                    height={220}
-                    onChange={({ lat: la, lng: ln, address: street }) => {
-                      setCustModalLat(la);
-                      setCustModalLng(ln);
-                      if (street) setCustModalAddress(street);
-                    }}
-                  />
-                </div>
-              )}
-              {!custModalShowMap && custModalLat != null && custModalLng != null && (
-                <p className="hint convert-hint">
-                  موقعیت ثبت شد: {custModalLat.toFixed(5)}, {custModalLng.toFixed(5)}
-                </p>
-              )}
+              <AddressMapField
+                label="آدرس (اختیاری)"
+                placeholder="آدرس ارسال"
+                address={custModalAddress}
+                onAddressChange={setCustModalAddress}
+                lat={custModalLat}
+                lng={custModalLng}
+                onLocationChange={({ lat: la, lng: ln, address: street }) => {
+                  setCustModalLat(la);
+                  setCustModalLng(ln);
+                  if (street) setCustModalAddress(street);
+                }}
+              />
               <IonButton
                 expand="block"
                 className="ios-primary-btn"

@@ -80,6 +80,20 @@ interface Period {
     kg: number;
     invoices: number;
   }>;
+  companyBox?: {
+    purchaseTotal: number;
+    purchaseKg: number;
+    purchaseCount: number;
+    salesTotal: number;
+    salesProfit: number;
+    avgMarkupPercent: number;
+    avgMarginPercent: number;
+    withdrawalPeriod: number;
+    withdrawalAllTime: number;
+    purchaseDebtOpen: number;
+    myDebtToCompany: number;
+    paidToCompany: number;
+  };
   daily: Array<{
     date: string;
     sales: number;
@@ -351,13 +365,13 @@ const History: React.FC = () => {
               <strong>{formatToman(Math.abs(net))}</strong>
             </div>
             <p className="hint" style={{ margin: '10px 0 0' }}>
-              هزینه‌ها فقط در بازه انتخابی جمع می‌شوند. برداشت شخصی و قرض جزو «هزینه عملیاتی» نیست.
-              واریز کارت هم جداست.
+              فقط بارهای «ارسال‌شده / تحویل‌شده» و بخش نقد/پوز/کارت در سود می‌آید. آماده‌ارسال و نسیهٔ
+              تسویه‌نشده تا وقتی پرداخت نشود در فروش/سود روز نیست.
             </p>
             {profit < 0 && (
               <p className="hint" style={{ margin: '8px 0 0', color: '#b91c1c' }}>
-                سود منفی معمولاً یعنی فی خرید کالا از قیمت فروش بیشتر است — فاکتورهای خرید و قیمت
-                محصولات را بررسی کنید.
+                سود منفی یعنی بهای کالای فروخته‌شده از مبلغ فروش بیشتر بوده — فی فروش و خرید را چک
+                کنید. خرید نسیه از شرکت جزو «ضرر فروش روز» نیست؛ بدهکاری شما به شرکت جداست.
               </p>
             )}
           </div>
@@ -443,22 +457,76 @@ const History: React.FC = () => {
             </>
           )}
 
+          {/* صندوق شرکت — خلاصه ساده */}
+          {isAdmin && period?.companyBox && (
+            <>
+              <div className="cash-section-title">صندوق شرکت (خلاصه)</div>
+              <div className="cash-company-card">
+                <div className="cash-sum-row">
+                  <span>اینقدر خرید کردی (بازه)</span>
+                  <strong>{formatToman(period.companyBox.purchaseTotal)}</strong>
+                </div>
+                <div className="ios-caption" style={{ marginTop: -4, marginBottom: 8 }}>
+                  {period.companyBox.purchaseCount.toLocaleString('fa-IR')} فاکتور خرید
+                  {period.companyBox.purchaseKg > 0
+                    ? ` · ${formatKg(period.companyBox.purchaseKg)}`
+                    : ''}
+                </div>
+                <div className="cash-sum-row good">
+                  <span>اینقدر فروختی (ارسالی · بدون نسیه باز)</span>
+                  <strong>{formatToman(period.companyBox.salesTotal)}</strong>
+                </div>
+                <div className="cash-sum-row">
+                  <span>میانگین درصد روی فاکتور (نسبت به خرید کالا)</span>
+                  <strong>
+                    {period.companyBox.avgMarkupPercent.toLocaleString('fa-IR')}٪
+                  </strong>
+                </div>
+                <div className="ios-caption" style={{ marginTop: -4, marginBottom: 8 }}>
+                  حاشیه روی فروش:{' '}
+                  {period.companyBox.avgMarginPercent.toLocaleString('fa-IR')}٪ · سود فروش بازه{' '}
+                  {formatToman(period.companyBox.salesProfit)}
+                </div>
+                <div className="cash-sum-row cost">
+                  <span>برداشت شخصی از صندوق (بازه)</span>
+                  <strong>{formatToman(period.companyBox.withdrawalPeriod)}</strong>
+                </div>
+                <div className="ios-caption" style={{ marginTop: -4, marginBottom: 8 }}>
+                  کل برداشت شخصی تا الان: {formatToman(period.companyBox.withdrawalAllTime)} — این
+                  بدهکاری شخصی شما به شرکت است
+                </div>
+                <div className={`cash-sum-row result loss`}>
+                  <span>بدهکاری شما به شرکت (جمع)</span>
+                  <strong>{formatToman(period.companyBox.myDebtToCompany)}</strong>
+                </div>
+                <p className="hint" style={{ margin: '10px 0 0' }}>
+                  = مانده خرید تسویه‌نشده ({formatToman(period.companyBox.purchaseDebtOpen)}) + کل
+                  برداشت شخصی ({formatToman(period.companyBox.withdrawalAllTime)})
+                </p>
+              </div>
+            </>
+          )}
+
           {/* بدهی شرکت */}
           {isAdmin && companyDebt && (
             <>
-              <div className="cash-section-title">بدهی به شرکت</div>
+              <div className="cash-section-title">بدهکاری خرید از شرکت</div>
               <div className="cash-company-card">
                 <div className="cash-company-main">
-                  <div className="cash-company-k">مانده بدهی</div>
+                  <div className="cash-company-k">مانده خرید تسویه‌نشده</div>
                   <div className="cash-company-v">
                     {formatToman(companyDebt.remainingDebt || 0)}
                   </div>
                   <div className="cash-company-formula">
-                    کل بدهی {formatToman(companyDebt.totalDebtAmount || 0)}
+                    کل خرید نسیه {formatToman(companyDebt.totalDebtAmount || 0)}
                     {' − '}
-                    پرداخت‌شده {formatToman(companyDebt.totalPaidToCompany || 0)}
+                    پرداختی {formatToman(companyDebt.totalPaidToCompany || 0)}
                   </div>
                 </div>
+                <p className="hint" style={{ marginTop: 0 }}>
+                  این‌ها فاکتور فروش مشتری نیست — خریدهایی است که از شرکت گرفته‌اید و هنوز به شرکت
+                  پرداخت نکرده‌اید. تا وقتی پرداخت ثبت نکنید در این لیست می‌ماند.
+                </p>
                 <div className="cash-company-stats">
                   <div className="stat-row">
                     <span className="stat-label">کل بدهی خرید نسیه</span>
@@ -483,7 +551,7 @@ const History: React.FC = () => {
                 {(companyDebt.recentPayments || []).length > 0 && (
                   <div className="cash-mini-list">
                     <div className="ios-caption" style={{ fontWeight: 800, marginBottom: 6 }}>
-                      آخرین پرداخت‌ها
+                      آخرین پرداخت‌ها به شرکت
                     </div>
                     {companyDebt.recentPayments.slice(0, 5).map((p) => (
                       <div key={p._id} className="stat-row">
@@ -504,7 +572,7 @@ const History: React.FC = () => {
                 {(companyDebt.debts || []).length > 0 && (
                   <div className="cash-mini-list">
                     <div className="ios-caption" style={{ fontWeight: 800, marginBottom: 6 }}>
-                      فاکتورهای بدهی باز
+                      خریدهای تسویه‌نشده از شرکت
                     </div>
                     {companyDebt.debts.slice(0, 6).map((d) => (
                       <div key={String(d.id)} className="cash-debt-line">

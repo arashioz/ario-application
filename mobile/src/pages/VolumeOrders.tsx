@@ -22,6 +22,7 @@ import {
 import { wsClient, newMutationId } from '../api/ws';
 import { formatToman, formatKg, sanitizeNumberInput } from '../utils/format';
 import { useAuth } from '../auth/AuthContext';
+import { AddressMapField } from '../components/AddressMapField';
 
 interface Product {
   _id: string;
@@ -53,6 +54,8 @@ const VolumeOrders: React.FC = () => {
   const [city, setCity] = useState('');
   const [customerName, setCustomerName] = useState('');
   const [address, setAddress] = useState('');
+  const [lat, setLat] = useState<number | null>(null);
+  const [lng, setLng] = useState<number | null>(null);
   const [tier, setTier] = useState<'supermarket' | 'wholesale'>('supermarket');
   const [deliveryMode, setDeliveryMode] = useState<'company' | 'self'>('company');
   const [toast, setToast] = useState({ open: false, msg: '', color: 'success' });
@@ -156,10 +159,18 @@ const VolumeOrders: React.FC = () => {
                   onIonInput={(e) => setCustomerName(e.detail.value || '')}
                 />
               </IonItem>
-              <IonItem>
-                <IonLabel position="stacked">آدرس</IonLabel>
-                <IonInput value={address} onIonInput={(e) => setAddress(e.detail.value || '')} />
-              </IonItem>
+              <AddressMapField
+                label="آدرس"
+                address={address}
+                onAddressChange={setAddress}
+                lat={lat}
+                lng={lng}
+                onLocationChange={({ lat: la, lng: ln, address: street }) => {
+                  setLat(la);
+                  setLng(ln);
+                  if (street) setAddress(street);
+                }}
+              />
               <p className="hint">نوع قیمت</p>
               <div className="chip-row">
                 <IonChip

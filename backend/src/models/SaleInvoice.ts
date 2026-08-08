@@ -71,6 +71,10 @@ export interface ISaleInvoice extends Document {
   date: Date;
   dueDate?: Date;
   isPaid: boolean;
+  /** تاریخ تسویه کامل (نسیه صفر شد) */
+  paidAt?: Date;
+  /** آخرین دریافت وجه / نسیه */
+  lastPaymentAt?: Date;
   /** نسیه با چک بوده */
   creditIsCheck?: boolean;
   priceTier: PriceTier;
@@ -171,6 +175,8 @@ const SaleInvoiceSchema = new Schema<ISaleInvoice>(
     date: { type: Date, required: true, default: Date.now },
     dueDate: { type: Date },
     isPaid: { type: Boolean, default: true },
+    paidAt: { type: Date },
+    lastPaymentAt: { type: Date },
     creditIsCheck: { type: Boolean, default: false },
     priceTier: {
       type: String,
