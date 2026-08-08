@@ -34,6 +34,7 @@ import { buildInvoiceShareText, copyText, pickDefaultBankCard } from '../utils/i
 import { useAuth } from '../auth/AuthContext';
 import { DigitInput } from './DigitInput';
 import { QtyStepper } from './QtyStepper';
+import { SaleInvoiceDetailBody } from './SaleInvoiceDetailBody';
 
 export interface SaleInvRow {
   _id: string;
@@ -476,6 +477,10 @@ export const InvoiceListPanel: React.FC<Props> = ({
                   </div>
                   <div className="inv-card-meta">
                     {formatDate(inv.date)} · {inv.customerName || 'بدون مشتری'}
+                    {inv.items?.length
+                      ? ` · ${inv.items.length.toLocaleString('fa-IR')} قلم`
+                      : ''}
+                    {inv.totalKg ? ` · ${formatKg(inv.totalKg)}` : ''}
                   </div>
                 </div>
                 <div className="inv-card-amount">
@@ -595,128 +600,7 @@ export const InvoiceListPanel: React.FC<Props> = ({
         <IonContent className="ion-padding">
           {detail && kind === 'sale' && (
             <>
-              <p>
-                <b>شماره:</b> {(detail as SaleInvRow).invoiceNumber}
-                {(detail as SaleInvRow).isGolden ? ' ⭐ طلایی' : ''}
-              </p>
-              <p>
-                <b>مشتری:</b> {(detail as SaleInvRow).customerName || '—'}
-                {(detail as SaleInvRow).customerPhone
-                  ? ` · ${(detail as SaleInvRow).customerPhone}`
-                  : ''}
-              </p>
-              {(detail as SaleInvRow).customerAddress ? (
-                <p>
-                  <b>آدرس:</b> {(detail as SaleInvRow).customerAddress}
-                </p>
-              ) : null}
-              <p>
-                <b>تاریخ:</b> {formatDate(detail.date)}
-              </p>
-              <p>
-                <b>مبلغ:</b> {formatToman(detail.totalAmount)}
-              </p>
-              <p>
-                <b>تناژ:</b> {formatKg((detail as SaleInvRow).totalKg || 0)}
-              </p>
-              {(detail as SaleInvRow).totalProfit != null ? (
-                <p>
-                  <b>سود:</b> {formatToman((detail as SaleInvRow).totalProfit || 0)}
-                </p>
-              ) : null}
-              {(detail as SaleInvRow).discount ? (
-                <p>
-                  <b>تخفیف:</b> {formatToman((detail as SaleInvRow).discount || 0)}
-                </p>
-              ) : null}
-              {(detail as SaleInvRow).priceTier ? (
-                <p>
-                  <b>سطح قیمت:</b>{' '}
-                  {TIER[(detail as SaleInvRow).priceTier || ''] || (detail as SaleInvRow).priceTier}
-                </p>
-              ) : null}
-              {(detail as SaleInvRow).paymentMethod ? (
-                <p>
-                  <b>روش پرداخت:</b>{' '}
-                  {PAY[(detail as SaleInvRow).paymentMethod || ''] ||
-                    (detail as SaleInvRow).paymentMethod}
-                </p>
-              ) : null}
-              {(detail as SaleInvRow).payment && (
-                <div className="ios-glass-card">
-                  <div className="ios-section-title" style={{ marginTop: 0 }}>
-                    جزئیات پرداخت مشتری
-                  </div>
-                  <div className="stat-row">
-                    <span>نقد</span>
-                    <span>{formatToman((detail as SaleInvRow).payment?.cash || 0)}</span>
-                  </div>
-                  <div className="stat-row">
-                    <span>پوز / کارت</span>
-                    <span>{formatToman((detail as SaleInvRow).payment?.card || 0)}</span>
-                  </div>
-                  <div className="stat-row">
-                    <span>نسیه</span>
-                    <span className="warning">
-                      {formatToman((detail as SaleInvRow).payment?.credit || 0)}
-                    </span>
-                  </div>
-                </div>
-              )}
-              <p>
-                <b>وضعیت:</b>{' '}
-                {STATUS[(detail as SaleInvRow).status || ''] || (detail as SaleInvRow).status || '—'}
-              </p>
-              {(detail as SaleInvRow).shippedAt ? (
-                <p>
-                  <b>ارسال شده:</b> {formatDate((detail as SaleInvRow).shippedAt!)}
-                </p>
-              ) : null}
-              {(detail as SaleInvRow).paidAt || (detail as SaleInvRow).lastPaymentAt ? (
-                <p>
-                  <b>پرداخت شده:</b>{' '}
-                  {formatDate(
-                    (detail as SaleInvRow).paidAt || (detail as SaleInvRow).lastPaymentAt!
-                  )}
-                  {(detail as SaleInvRow).isPaid === false ? ' (جزئی)' : ''}
-                </p>
-              ) : null}
-              {(detail as SaleInvRow).shippingNotes ? (
-                <p>
-                  <b>ارسال:</b> {(detail as SaleInvRow).shippingNotes}
-                </p>
-              ) : null}
-              {(detail as SaleInvRow).items?.length ? (
-                <div className="ios-glass-card">
-                  <div className="ios-section-title" style={{ marginTop: 0 }}>
-                    اقلام و فی قند
-                  </div>
-                  {(detail as SaleInvRow).items!.map((it, i) => {
-                    const perKg =
-                      it.unitPricePerKg ||
-                      (it.qtyKg > 0 ? Math.round(it.totalPrice / it.qtyKg) : 0);
-                    return (
-                      <div key={i} style={{ marginBottom: 10 }}>
-                        <div className="stat-row">
-                          <span>
-                            <strong>{it.productName}</strong>
-                          </span>
-                          <span>{formatToman(it.totalPrice)}</span>
-                        </div>
-                        <div className="ios-caption">
-                          {formatKg(it.qtyKg)}
-                          {it.unit === 'package' && it.qtyInput
-                            ? ` · ${it.qtyInput} بسته`
-                            : ''}
-                          {' · '}
-                          فی {formatToman(perKg)}/کیلو
-                          {it.discount ? ` · تخفیف ${formatToman(it.discount)}` : ''}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : null}
+              <SaleInvoiceDetailBody inv={detail as SaleInvRow} />
               <IonButton
                 expand="block"
                 fill="outline"

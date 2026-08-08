@@ -31,6 +31,7 @@ import {
 import { PersianDateField } from '../components/PersianDateField';
 import { useAuth } from '../auth/AuthContext';
 import { InvoiceListPanel, SaleInvRow } from '../components/InvoiceListPanel';
+import { SaleInvoiceDetailBody } from '../components/SaleInvoiceDetailBody';
 
 interface DebtRow {
   _id: string;
@@ -114,6 +115,7 @@ const Debtors: React.FC = () => {
   const [editDue, setEditDue] = useState('');
   const [editDesc, setEditDesc] = useState('');
   const [debtDetail, setDebtDetail] = useState<DebtRow | null>(null);
+  const [debtSaleDetail, setDebtSaleDetail] = useState<SaleInvRow | null>(null);
   const [seedEdit, setSeedEdit] = useState<SaleInvRow | null>(null);
   const [toast, setToast] = useState({ open: false, msg: '', color: 'success' });
 
@@ -207,6 +209,25 @@ const Debtors: React.FC = () => {
     });
   };
 
+  const openDebtDetail = async (d: DebtRow) => {
+    setDebtDetail(d);
+    setDebtSaleDetail(null);
+    if (!d.saleInvoiceId) return;
+    try {
+      const inv = await wsClient.request<SaleInvRow>('sale.get', { id: d.saleInvoiceId });
+      setDebtSaleDetail({
+        ...inv,
+        _id: String(inv._id),
+        items: (inv.items || []).map((it) => ({
+          ...it,
+          productId: it.productId ? String(it.productId) : undefined,
+        })),
+      });
+    } catch {
+      /* keep debtDetail only */
+    }
+  };
+
   const openInvoiceEdit = async (saleInvoiceId?: string) => {
     if (!saleInvoiceId) {
       setToast({ open: true, msg: 'فاکتور مرتبط پیدا نشد', color: 'warning' });
@@ -215,6 +236,7 @@ const Debtors: React.FC = () => {
     try {
       const inv = await wsClient.request<SaleInvRow>('sale.get', { id: saleInvoiceId });
       setDebtDetail(null);
+      setDebtSaleDetail(null);
       setSeedEdit({
         ...inv,
         _id: String(inv._id),
@@ -500,7 +522,7 @@ const Debtors: React.FC = () => {
                       {d.description && <p className="hint">{d.description}</p>}
 
                       <div className="chip-row" style={{ marginTop: 8 }}>
-                        <IonButton size="small" fill="outline" onClick={() => setDebtDetail(d)}>
+                        <IonButton size="small" fill="outline" onClick={() => void openDebtDetail(d)}>
                           جزئیات
                         </IonButton>
                         {isAdmin && (
@@ -651,100 +673,91 @@ const Debtors: React.FC = () => {
           </IonContent>
         </IonModal>
 
-        <IonModal isOpen={!!debtDetail} onDidDismiss={() => setDebtDetail(null)}>
+        <IonModal
+          isOpen={!!debtDetail}
+          onDidDismiss={() => {
+            setDebtDetail(null);
+            setDebtSaleDetail(null);
+          }}
+        >
           <IonHeader>
             <IonToolbar>
               <IonTitle>جزئیات فاکتور بدهی</IonTitle>
               <IonButtons slot="end">
-                <IonButton onClick={() => setDebtDetail(null)}>بستن</IonButton>
+                <IonButton
+                  onClick={() => {
+                    setDebtDetail(null);
+                    setDebtSaleDetail(null);
+                  }}
+                >
+                  بستن
+                </IonButton>
               </IonButtons>
             </IonToolbar>
           </IonHeader>
           <IonContent className="ion-padding">
             {debtDetail && (
               <>
-                <p>
-                  <b>شماره:</b> {debtDetail.invoiceNumber || '—'}
-                </p>
-                <p>
-                  <b>مشتری:</b> {debtDetail.customerName || debtDetail.name}
-                  {debtDetail.customerPhone || debtDetail.phone
-                    ? ` · ${debtDetail.customerPhone || debtDetail.phone}`
-                    : ''}
-                </p>
-                {debtDetail.customerAddress && (
-                  <p>
-                    <b>آدرس:</b> {debtDetail.customerAddress}
-                  </p>
-                )}
-                <p>
-                  <b>تاریخ فاکتور:</b>{' '}
-                  {debtDetail.invoiceDate ? formatDate(debtDetail.invoiceDate) : '—'}
-                </p>
-                <p>
-                  <b>سررسید:</b> {formatDate(debtDetail.dueDate)}
-                </p>
-                {debtDetail.invoiceShippedAt && (
-                  <p>
-                    <b>ارسال شده:</b> {formatDate(debtDetail.invoiceShippedAt)}
-                  </p>
-                )}
-                {(debtDetail.invoicePaidAt || debtDetail.invoiceLastPaymentAt) && (
-                  <p>
-                    <b>پرداخت شده:</b>{' '}
-                    {formatDate(debtDetail.invoicePaidAt || debtDetail.invoiceLastPaymentAt!)}
-                  </p>
-                )}
-                <p>
-                  <b>مبلغ فاکتور:</b> {formatToman(debtDetail.invoiceTotal || debtDetail.amount)}
-                </p>
-                <p>
-                  <b>بدهی اولیه:</b> {formatToman(debtDetail.amount)}
-                </p>
-                <p>
-                  <b>پرداختی:</b> {formatToman(debtDetail.paidAmount || 0)}
-                </p>
-                <p>
-                  <b>مانده نسیه:</b>{' '}
-                  <span className="warning">
-                    {formatToman(
-                      debtDetail.remaining ??
-                        Math.max(0, debtDetail.amount - (debtDetail.paidAmount || 0))
-                    )}
-                  </span>
-                </p>
-                {debtDetail.invoiceKg != null && (
-                  <p>
-                    <b>تناژ:</b> {formatKg(debtDetail.invoiceKg)}
-                  </p>
-                )}
-                {debtDetail.invoiceStatus && (
-                  <p>
-                    <b>وضعیت فاکتور:</b> {debtDetail.invoiceStatus}
-                  </p>
-                )}
-                {debtDetail.description && (
-                  <p>
-                    <b>توضیح:</b> {debtDetail.description}
-                  </p>
-                )}
-                {(debtDetail.invoiceItems || []).length > 0 && (
-                  <div className="ios-glass-card">
-                    <div className="ios-section-title" style={{ marginTop: 0 }}>
-                      اقلام
-                    </div>
-                    {(debtDetail.invoiceItems || []).map((it, i) => {
-                      const perKg =
-                        it.unitPricePerKg ||
-                        (it.qtyKg > 0 ? Math.round(it.totalPrice / it.qtyKg) : 0);
-                      return (
-                        <div key={i} className="ios-caption" style={{ marginTop: 4 }}>
-                          {it.productName} · {formatKg(it.qtyKg)} · فی {formatToman(perKg)}/کیلو ·{' '}
-                          {formatToman(it.totalPrice)}
-                        </div>
-                      );
-                    })}
+                <div className="ios-glass-card" style={{ marginBottom: 12 }}>
+                  <div className="ios-section-title" style={{ marginTop: 0 }}>
+                    مانده نسیه این فاکتور
                   </div>
+                  <div className="stat-row">
+                    <span>بدهی اولیه</span>
+                    <span>{formatToman(debtDetail.amount)}</span>
+                  </div>
+                  <div className="stat-row">
+                    <span>پرداختی</span>
+                    <span>{formatToman(debtDetail.paidAmount || 0)}</span>
+                  </div>
+                  <div className="stat-row">
+                    <span>مانده</span>
+                    <span className="warning">
+                      {formatToman(
+                        debtDetail.remaining ??
+                          Math.max(0, debtDetail.amount - (debtDetail.paidAmount || 0))
+                      )}
+                    </span>
+                  </div>
+                  <div className="stat-row">
+                    <span>سررسید</span>
+                    <span>{formatDate(debtDetail.dueDate)}</span>
+                  </div>
+                </div>
+                {debtSaleDetail ? (
+                  <SaleInvoiceDetailBody inv={debtSaleDetail} />
+                ) : (
+                  <>
+                    <p>
+                      <b>شماره:</b> {debtDetail.invoiceNumber || '—'}
+                    </p>
+                    <p>
+                      <b>تاریخ فاکتور:</b>{' '}
+                      {debtDetail.invoiceDate ? formatDate(debtDetail.invoiceDate) : '—'}
+                    </p>
+                    {(debtDetail.invoiceItems || []).length > 0 && (
+                      <div className="ios-glass-card">
+                        <div className="ios-section-title" style={{ marginTop: 0 }}>
+                          اقلام ({(debtDetail.invoiceItems || []).length.toLocaleString('fa-IR')} قلم
+                          {debtDetail.invoiceKg != null
+                            ? ` · ${formatKg(debtDetail.invoiceKg)}`
+                            : ''}
+                          )
+                        </div>
+                        {(debtDetail.invoiceItems || []).map((it, i) => {
+                          const perKg =
+                            it.unitPricePerKg ||
+                            (it.qtyKg > 0 ? Math.round(it.totalPrice / it.qtyKg) : 0);
+                          return (
+                            <div key={i} className="ios-caption" style={{ marginTop: 4 }}>
+                              {i + 1}. {it.productName} · {formatKg(it.qtyKg)} · فی{' '}
+                              {formatToman(perKg)}/کیلو · {formatToman(it.totalPrice)}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </>
                 )}
                 {isAdmin && debtDetail.saleInvoiceId && (
                   <IonButton

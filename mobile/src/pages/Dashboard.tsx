@@ -87,6 +87,44 @@ interface Dash {
     count: number;
     overdue: Array<{ name: string; remaining: number }>;
   };
+  profitAverages?: {
+    week: {
+      invoiceCount: number;
+      totalSales: number;
+      totalProfit: number;
+      totalKg: number;
+      avgProfitPerInvoice: number;
+      avgMarkupPercent: number;
+      avgMarginPercent: number;
+    };
+    month: {
+      invoiceCount: number;
+      totalSales: number;
+      totalProfit: number;
+      totalKg: number;
+      avgProfitPerInvoice: number;
+      avgMarkupPercent: number;
+      avgMarginPercent: number;
+    };
+    year: {
+      invoiceCount: number;
+      totalSales: number;
+      totalProfit: number;
+      totalKg: number;
+      avgProfitPerInvoice: number;
+      avgMarkupPercent: number;
+      avgMarginPercent: number;
+    };
+    all: {
+      invoiceCount: number;
+      totalSales: number;
+      totalProfit: number;
+      totalKg: number;
+      avgProfitPerInvoice: number;
+      avgMarkupPercent: number;
+      avgMarginPercent: number;
+    };
+  };
 }
 
 type ShopNote = {
@@ -354,6 +392,35 @@ const Dashboard: React.FC = () => {
                   <div className="k-value">{data.salesCount}</div>
                 </div>
               </div>
+
+              {showProfit && data.profitAverages && (
+                <div className="ios-glass-card" style={{ marginTop: 10 }}>
+                  <div className="ios-section-title" style={{ marginTop: 0 }}>
+                    میانگین سود فاکتور
+                  </div>
+                  {(
+                    [
+                      ['week', 'هفته'],
+                      ['month', 'ماه'],
+                      ['year', 'سال'],
+                      ['all', 'کلی'],
+                    ] as const
+                  ).map(([key, label]) => {
+                    const b = data.profitAverages![key];
+                    return (
+                      <div key={key} className="stat-row">
+                        <span className="stat-label">
+                          {label} · {b.avgMarkupPercent.toLocaleString('fa-IR')}٪
+                        </span>
+                        <span className="stat-value">{formatToman(b.avgProfitPerInvoice)}</span>
+                      </div>
+                    );
+                  })}
+                  <p className="hint" style={{ margin: '6px 0 0' }}>
+                    عدد سمت راست = میانگین سود هر فاکتور ارسال‌شده
+                  </p>
+                </div>
+              )}
 
               {showProfit && (
                 <div className="ios-glass-card dash-money-summary">

@@ -52,6 +52,93 @@ export function recognizedSaleMetrics(inv: {
     card,
   };
 }
+
+type ProfitAvgBucket = {
+  invoiceCount: number;
+  totalSales: number;
+  totalProfit: number;
+  totalKg: number;
+  avgProfitPerInvoice: number;
+  avgMarkupPercent: number;
+  avgMarginPercent: number;
+};
+
+function emptyProfitBucket(): ProfitAvgBucket {
+  return {
+    invoiceCount: 0,
+    totalSales: 0,
+    totalProfit: 0,
+    totalKg: 0,
+    avgProfitPerInvoice: 0,
+    avgMarkupPercent: 0,
+    avgMarginPercent: 0,
+  };
+}
+
+function summarizeProfitBucket(
+  sales: Array<{
+    totalAmount?: number;
+    totalProfit?: number;
+    totalCost?: number;
+    totalKg?: number;
+    payment?: { cash?: number; card?: number; credit?: number } | null;
+  }>
+): ProfitAvgBucket {
+  let totalSales = 0;
+  let totalProfit = 0;
+  let totalKg = 0;
+  let markupSum = 0;
+  let markupN = 0;
+  let marginSum = 0;
+  let marginN = 0;
+  let invoiceCount = 0;
+  for (const sale of sales) {
+    const rec = recognizedSaleMetrics(sale);
+    if (rec.amount <= 0) continue;
+    invoiceCount += 1;
+    totalSales += rec.amount;
+    totalProfit += rec.profit;
+    totalKg += rec.kg;
+    if (rec.cost > 0) {
+      markupSum += (rec.profit / rec.cost) * 100;
+      markupN += 1;
+    }
+    marginSum += (rec.profit / rec.amount) * 100;
+    marginN += 1;
+  }
+  return {
+    invoiceCount,
+    totalSales: Math.round(totalSales),
+    totalProfit: Math.round(totalProfit),
+    totalKg: Math.round(totalKg * 100) / 100,
+    avgProfitPerInvoice: invoiceCount > 0 ? Math.round(totalProfit / invoiceCount) : 0,
+    avgMarkupPercent: markupN > 0 ? Math.round((markupSum / markupN) * 10) / 10 : 0,
+    avgMarginPercent: marginN > 0 ? Math.round((marginSum / marginN) * 10) / 10 : 0,
+  };
+}
+
+/** میانگین سود فاکتورهای ارسال/تحویل‌شده — هفته / ماه / سال / کلی */
+export async function getProfitAverages(refDate?: Date) {
+  const now = refDate ? new Date(refDate) : new Date();
+  const dayEnd = endOfDay(now);
+  const weekFrom = startOfDay(new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000));
+  const monthFrom = startOfDay(new Date(now.getFullYear(), now.getMonth(), 1));
+  const yearFrom = startOfDay(new Date(now.getFullYear(), 0, 1));
+
+  const sales = await SaleInvoice.find({
+    status: REVENUE_STATUSES,
+    date: { $lte: dayEnd },
+  }).select('date totalAmount totalProfit totalCost totalKg payment');
+
+  const inRange = (from: Date) => sales.filter((s) => new Date(s.date) >= from && new Date(s.date) <= dayEnd);
+
+  return {
+    week: summarizeProfitBucket(inRange(weekFrom)),
+    month: summarizeProfitBucket(inRange(monthFrom)),
+    year: summarizeProfitBucket(inRange(yearFrom)),
+    all: summarizeProfitBucket(sales),
+  };
+}
 async function getInventorySnapshot() {
   const products = await Product.find().sort({ stockKg: -1 }).select('name stockKg stock kgPerPackage avgCostPerKg');
   const normalized = products.map((p) => {
@@ -134,7 +221,7 @@ export async function getDashboard(
 
   const ACTIVE = REVENUE_STATUSES;
 
-  const [sales, monthSales, expenses, settings, debtors, cardDeposits, company, checks, crm, readyShip, pendingCount, inventory] =
+  const [sales, monthSales, expenses, settings, debtors, cardDeposits, company, checks, crm, readyShip, pendingCount, inventory, profitAverages] =
     await Promise.all([
       SaleInvoice.find({ ...saleFilterRange, status: ACTIVE }),
       SaleInvoice.find({ ...saleFilterMonth, status: ACTIVE }),
@@ -154,6 +241,7 @@ export async function getDashboard(
         .select('invoiceNumber customerName customerAddress totalKg totalAmount driverId shippingNotes date'),
       SaleInvoice.countDocuments({ status: 'pending' }),
       getInventorySnapshot(),
+      getProfitAverages(targetDate),
     ]);
 
   const totalSales = sales.reduce((s, inv) => s + recognizedSaleMetrics(inv).amount, 0);
@@ -238,7 +326,9 @@ export async function getDashboard(
       total: company.totalDebt,
       count: company.openCount,
       debts: company.debts,
+      applyOrderHint: company.applyOrderHint,
     },
+    profitAverages,
     target,
     checks: {
       pendingCount: checks.pendingCount,
@@ -556,6 +646,7 @@ export async function getPeriodSummary(from: Date, to: Date, marketerId?: string
   const company = await getCompanyDebtSummary();
   const purchaseDebtOpen = Math.round(company.remainingDebt || 0);
   const myDebtToCompany = purchaseDebtOpen + withdrawalAllTime;
+  const profitAverages = await getProfitAverages(rangeTo);
 
   return {
     from: rangeFrom.toISOString(),
@@ -586,6 +677,7 @@ export async function getPeriodSummary(from: Date, to: Date, marketerId?: string
       byPerson: debtorsByPerson,
     },
     creditByCustomer,
+    profitAverages,
     companyBox: {
       purchaseTotal: Math.round(purchaseTotal),
       purchaseKg: Math.round(purchaseKg * 100) / 100,

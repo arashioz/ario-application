@@ -45,6 +45,7 @@ import { AddressMapField } from '../components/AddressMapField';
 import { DigitInput } from '../components/DigitInput';
 import { MoneyInput } from '../components/MoneyInput';
 import { InvoiceListPanel, SaleInvRow } from '../components/InvoiceListPanel';
+import { SaleInvoiceDetailBody, summarizeSaleItems } from '../components/SaleInvoiceDetailBody';
 import { useAuth } from '../auth/AuthContext';
 
 interface CustomerRow {
@@ -814,6 +815,19 @@ const Customers: React.FC = () => {
                         </div>
                       );
                     })}
+                    {(() => {
+                      const s = summarizeSaleItems(inv.items);
+                      if (!s.lineCount) return null;
+                      return (
+                        <div className="ios-caption" style={{ marginTop: 4 }}>
+                          {s.lineCount.toLocaleString('fa-IR')} قلم ·{' '}
+                          {formatKg(inv.totalKg || s.totalKg)}
+                          {s.packageCount > 0
+                            ? ` · ${s.packageCount.toLocaleString('fa-IR')} بسته`
+                            : ''}
+                        </div>
+                      );
+                    })()}
                     <div className="inv-card-actions">
                       <IonButton size="small" fill="clear" onClick={() => setInvDetail(inv)}>
                         <IonIcon slot="start" icon={eyeOutline} />
@@ -904,70 +918,14 @@ const Customers: React.FC = () => {
           <IonContent className="ion-padding">
             {invDetail && (
               <>
-                <p>
-                  <b>شماره:</b> {invDetail.invoiceNumber}
-                  {invDetail.isGolden ? ' ⭐' : ''}
-                </p>
-                <p>
-                  <b>تاریخ:</b> {formatDate(invDetail.date)}
-                </p>
-                <p>
-                  <b>مبلغ:</b> {formatToman(invDetail.totalAmount)}
-                </p>
-                <p>
-                  <b>تناژ:</b> {formatKg(invDetail.totalKg || 0)}
-                </p>
-                <p>
-                  <b>وضعیت:</b> {STATUS[invDetail.status || ''] || invDetail.status || '—'}
-                </p>
-                {invDetail.shippedAt && (
-                  <p>
-                    <b>ارسال شده:</b> {formatDate(invDetail.shippedAt)}
-                  </p>
-                )}
-                {(invDetail.paidAt || invDetail.lastPaymentAt) && (
-                  <p>
-                    <b>پرداخت شده:</b> {formatDate(invDetail.paidAt || invDetail.lastPaymentAt!)}
-                    {invDetail.isPaid === false ? ' (جزئی)' : ''}
-                  </p>
-                )}
-                <p>
-                  <b>پرداخت:</b> {PAY[invDetail.paymentMethod || ''] || invDetail.paymentMethod || '—'}
-                </p>
-                {invDetail.payment && (
-                  <div className="ios-glass-card">
-                    <div className="stat-row">
-                      <span>نقد</span>
-                      <span>{formatToman(invDetail.payment.cash || 0)}</span>
-                    </div>
-                    <div className="stat-row">
-                      <span>پوز / کارت</span>
-                      <span>{formatToman(invDetail.payment.card || 0)}</span>
-                    </div>
-                    <div className="stat-row">
-                      <span>نسیه</span>
-                      <span className="warning">{formatToman(invDetail.payment.credit || 0)}</span>
-                    </div>
-                  </div>
-                )}
-                {(invDetail.items || []).map((it, i) => {
-                  const perKg =
-                    it.unitPricePerKg ||
-                    (it.qtyKg > 0 ? Math.round(it.totalPrice / it.qtyKg) : 0);
-                  return (
-                    <div key={i} style={{ marginBottom: 10 }}>
-                      <div className="stat-row">
-                        <span>
-                          <strong>{it.productName}</strong>
-                        </span>
-                        <span>{formatToman(it.totalPrice)}</span>
-                      </div>
-                      <div className="ios-caption">
-                        {formatKg(it.qtyKg)} · فی {formatToman(perKg)}/کیلو
-                      </div>
-                    </div>
-                  );
-                })}
+                <SaleInvoiceDetailBody
+                  inv={{
+                    ...invDetail,
+                    customerName: invDetail.customerName || selected?.name,
+                    customerPhone: invDetail.customerPhone || selected?.phone,
+                    customerAddress: invDetail.customerAddress || selected?.address,
+                  }}
+                />
                 {isAdmin && invDetail._id && (
                   <IonButton
                     expand="block"

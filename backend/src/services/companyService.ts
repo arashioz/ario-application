@@ -99,7 +99,9 @@ export async function listSupplierDebts(settled?: boolean) {
 
 export async function getCompanyDebtSummary() {
   const [open, allDebts, paymentsAgg, payments] = await Promise.all([
-    SupplierDebt.find({ isSettled: false }),
+    SupplierDebt.find({ isSettled: false })
+      .populate('purchaseInvoiceId', 'invoiceNumber totalKg totalAmount date items')
+      .sort({ date: 1 }),
     SupplierDebt.find(),
     CompanyPayment.aggregate<{ total: number }>([{ $group: { _id: null, total: { $sum: '$amount' } } }]),
     CompanyPayment.find().sort({ date: -1 }).limit(40),
@@ -127,14 +129,40 @@ export async function getCompanyDebtSummary() {
     /** جمع همه پرداخت‌های ثبت‌شده به شرکت */
     totalPaidToCompany,
     openCount: open.length,
-    debts: open.map((d) => ({
-      id: d._id,
-      supplier: d.supplier,
-      remaining: Math.max(0, d.amount - (d.paidAmount || 0)),
-      amount: d.amount,
-      paidAmount: d.paidAmount || 0,
-      date: d.date,
-    })),
+    /** پرداخت‌ها از قدیمی‌ترین بار به جدید روی همین لیست می‌نشینند */
+    applyOrderHint: 'پرداخت‌ها به‌ترتیب از قدیمی‌ترین بار خرید کم می‌شوند',
+    debts: open.map((d) => {
+      const inv = d.purchaseInvoiceId as
+        | {
+            _id?: unknown;
+            invoiceNumber?: string;
+            totalKg?: number;
+            totalAmount?: number;
+            date?: Date;
+            items?: Array<{ productName?: string; qtyKg?: number }>;
+          }
+        | null
+        | undefined;
+      const itemCount = inv?.items?.length || 0;
+      const kg = inv?.totalKg || 0;
+      return {
+        id: d._id,
+        supplier: d.supplier,
+        remaining: Math.max(0, d.amount - (d.paidAmount || 0)),
+        amount: d.amount,
+        paidAmount: d.paidAmount || 0,
+        date: d.date,
+        notes: d.notes,
+        purchaseInvoiceId: inv?._id
+          ? String(inv._id)
+          : d.purchaseInvoiceId
+            ? String(d.purchaseInvoiceId)
+            : undefined,
+        invoiceNumber: inv?.invoiceNumber || undefined,
+        invoiceKg: kg,
+        itemCount,
+      };
+    }),
     recentPayments: payments,
   };
 }

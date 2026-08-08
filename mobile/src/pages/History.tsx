@@ -94,6 +94,7 @@ interface Period {
     myDebtToCompany: number;
     paidToCompany: number;
   };
+  profitAverages?: ProfitAverages;
   daily: Array<{
     date: string;
     sales: number;
@@ -117,7 +118,11 @@ type CompanyDebt = {
     amount: number;
     paidAmount: number;
     date: string;
+    invoiceNumber?: string;
+    invoiceKg?: number;
+    itemCount?: number;
   }>;
+  applyOrderHint?: string;
   recentPayments: Array<{
     _id: string;
     supplier: string;
@@ -125,6 +130,23 @@ type CompanyDebt = {
     method: string;
     date: string;
   }>;
+};
+
+type ProfitAvg = {
+  invoiceCount: number;
+  totalSales: number;
+  totalProfit: number;
+  totalKg: number;
+  avgProfitPerInvoice: number;
+  avgMarkupPercent: number;
+  avgMarginPercent: number;
+};
+
+type ProfitAverages = {
+  week: ProfitAvg;
+  month: ProfitAvg;
+  year: ProfitAvg;
+  all: ProfitAvg;
 };
 
 type CashTx = {
@@ -507,6 +529,51 @@ const History: React.FC = () => {
             </>
           )}
 
+          {isAdmin && period?.profitAverages && (
+            <>
+              <div className="cash-section-title">میانگین سود فاکتورها</div>
+              <div className="cash-company-card">
+                {(
+                  [
+                    ['week', 'هفتگی (۷ روز)'],
+                    ['month', 'این ماه'],
+                    ['year', 'امسال'],
+                    ['all', 'کلی (همه)'],
+                  ] as const
+                ).map(([key, label]) => {
+                  const b = period.profitAverages![key];
+                  return (
+                    <div key={key} style={{ marginBottom: 12 }}>
+                      <div className="ios-caption" style={{ fontWeight: 800, marginBottom: 4 }}>
+                        {label}
+                      </div>
+                      <div className="stat-row">
+                        <span>میانگین سود هر فاکتور</span>
+                        <span>{formatToman(b.avgProfitPerInvoice)}</span>
+                      </div>
+                      <div className="stat-row">
+                        <span>میانگین درصد روی خرید</span>
+                        <span>{b.avgMarkupPercent.toLocaleString('fa-IR')}٪</span>
+                      </div>
+                      <div className="stat-row">
+                        <span>حاشیه روی فروش</span>
+                        <span>{b.avgMarginPercent.toLocaleString('fa-IR')}٪</span>
+                      </div>
+                      <div className="ios-caption">
+                        {b.invoiceCount.toLocaleString('fa-IR')} فاکتور · فروش{' '}
+                        {formatToman(b.totalSales)} · سود {formatToman(b.totalProfit)} ·{' '}
+                        {formatKg(b.totalKg)}
+                      </div>
+                    </div>
+                  );
+                })}
+                <p className="hint" style={{ margin: 0 }}>
+                  فقط فاکتورهای ارسال/تحویل‌شده؛ نسیهٔ باز تا تسویه در میانگین نمی‌آید.
+                </p>
+              </div>
+            </>
+          )}
+
           {/* بدهی شرکت */}
           {isAdmin && companyDebt && (
             <>
@@ -525,7 +592,7 @@ const History: React.FC = () => {
                 </div>
                 <p className="hint" style={{ marginTop: 0 }}>
                   این‌ها فاکتور فروش مشتری نیست — خریدهایی است که از شرکت گرفته‌اید و هنوز به شرکت
-                  پرداخت نکرده‌اید. تا وقتی پرداخت ثبت نکنید در این لیست می‌ماند.
+                  پرداخت نکرده‌اید. هر پرداخت ثبت‌شده از قدیمی‌ترین بار به جدید کم می‌شود.
                 </p>
                 <div className="cash-company-stats">
                   <div className="stat-row">
@@ -572,14 +639,21 @@ const History: React.FC = () => {
                 {(companyDebt.debts || []).length > 0 && (
                   <div className="cash-mini-list">
                     <div className="ios-caption" style={{ fontWeight: 800, marginBottom: 6 }}>
-                      خریدهای تسویه‌نشده از شرکت
+                      بارهای خرید تسویه‌نشده (قدیمی → جدید)
                     </div>
-                    {companyDebt.debts.slice(0, 6).map((d) => (
+                    {companyDebt.debts.slice(0, 8).map((d) => (
                       <div key={String(d.id)} className="cash-debt-line">
                         <div>
-                          <strong>{d.supplier}</strong>
+                          <strong>
+                            {d.invoiceNumber ? `بار ${d.invoiceNumber}` : d.supplier}
+                          </strong>
                           <div className="ios-caption">
-                            {formatDate(d.date)} · اصل {formatToman(d.amount)}
+                            {formatDate(d.date)}
+                            {d.invoiceNumber ? ` · ${d.supplier}` : ''}
+                            {d.invoiceKg ? ` · ${formatKg(d.invoiceKg)}` : ''}
+                            {d.itemCount ? ` · ${d.itemCount.toLocaleString('fa-IR')} قلم` : ''}
+                            {' · '}
+                            اصل {formatToman(d.amount)}
                             {(d.paidAmount || 0) > 0
                               ? ` · پرداختی ${formatToman(d.paidAmount)}`
                               : ''}
