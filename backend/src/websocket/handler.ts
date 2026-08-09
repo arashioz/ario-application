@@ -624,8 +624,12 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
     case 'customer.delete': {
       const user = await requireAuth(ws, msg);
       requireAdmin(user);
-      const result = await deleteCustomer(String(p.id));
+      const result = await deleteCustomer(String(p.id), p.password as string | undefined);
       notifyDataChange('customer', 'delete', result);
+      if ((result as { deletedInvoices?: number }).deletedInvoices) {
+        notifyDataChange('sale', 'delete', result);
+        notifyDataChange('debtor', 'delete', result);
+      }
       return { type: 'customer.delete', payload: result };
     }
 

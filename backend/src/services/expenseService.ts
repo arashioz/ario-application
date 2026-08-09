@@ -12,7 +12,11 @@ export async function getActionPassword(): Promise<string> {
 
 export async function assertDeletePassword(password?: string) {
   const expected = await getActionPassword();
-  if (password !== expected) {
+  const given = password != null ? String(password) : '';
+  if (!given.trim()) {
+    throw new Error('رمز حذف الزامی است');
+  }
+  if (given !== expected) {
     throw new Error('رمز اشتباه است');
   }
 }

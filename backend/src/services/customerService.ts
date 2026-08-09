@@ -321,24 +321,151 @@ export async function getCustomerCreditPayments(customerId: string) {
   return rows;
 }
 
-export async function deleteCustomer(id: string) {
+export async function deleteCustomer(id: string, password?: string) {
+  const { assertDeletePassword } = await import('./expenseService');
+  await assertDeletePassword(password);
+
   const customer = await Customer.findById(id);
   if (!customer) throw new Error('مشتری یافت نشد');
 
-  const openDebt = await Debtor.findOne({
-    customerId: id,
-    isSettled: false,
-    $expr: { $gt: [{ $subtract: ['$amount', '$paidAmount'] }, 0] },
-  });
-  if (openDebt) {
-    throw new Error('این مشتری نسیه باز دارد — ابتدا تسویه کنید');
+  const { Product, CashTransaction } = await import('../models');
+  const { updateBalances } = await import('./productService');
+
+  const invoices = await SaleInvoice.find({ customerId: id });
+  const warnings: string[] = [];
+  let deletedInvoices = 0;
+
+  for (const invoice of invoices) {
+    if (invoice.driverPaid) {
+      warnings.push(`${invoice.invoiceNumber}: به راننده پرداخت شده — رد شد`);
+      continue;
+    }
+
+    try {
+      const debtors = await Debtor.find({ saleInvoiceId: invoice._id });
+
+      // برگشت دریافت‌های نسیه این فاکتور
+      for (const d of debtors) {
+        const debtPays = await CashTransaction.find({
+          type: 'debt_payment',
+          referenceId: d._id.toString(),
+          referenceModel: 'Debtor',
+        });
+        let cashDelta = 0;
+        let cardDelta = 0;
+        for (const tx of debtPays) {
+          if (tx.direction === 'in') {
+            // دریافت قبلی را از صندوق کم کن
+            const desc = String(tx.description || '');
+            if (desc.includes('پوز') || desc.includes('کارت')) cardDelta -= tx.amount;
+            else cashDelta -= tx.amount;
+          }
+          await tx.deleteOne();
+        }
+        if (cashDelta !== 0 || cardDelta !== 0) {
+          await updateBalances(cashDelta, cardDelta);
+        }
+        await d.deleteOne();
+      }
+
+      if (invoice.stockApplied) {
+        for (const item of invoice.items) {
+          const product = await Product.findById(item.productId);
+          if (!product) continue;
+          const stockKg = product.stockKg ?? product.stock ?? 0;
+          product.stockKg = stockKg + (item.qtyKg || 0);
+          product.stock = product.stockKg;
+          await product.save();
+        }
+
+        const txs = await CashTransaction.find({
+          referenceId: invoice._id.toString(),
+          referenceModel: 'SaleInvoice',
+        });
+        let cashDelta = 0;
+        let cardDelta = 0;
+        for (const tx of txs) {
+          if (tx.type === 'sale_cash') cashDelta -= tx.amount;
+          else if (tx.type === 'sale_card') cardDelta -= tx.amount;
+          else if (tx.direction === 'in') cashDelta -= tx.amount;
+          else cashDelta += tx.amount;
+          await tx.deleteOne();
+        }
+        if (cashDelta !== 0 || cardDelta !== 0) {
+          await updateBalances(cashDelta, cardDelta);
+        }
+      }
+
+      try {
+        const { reverseSaleCommission } = await import('./platformService');
+        await reverseSaleCommission(invoice._id.toString());
+      } catch (e) {
+        console.warn('reverse commission on customer delete failed', e);
+      }
+
+      if (invoice.shippingExpenseId) {
+        try {
+          const { deleteExpense } = await import('./expenseService');
+          await deleteExpense(invoice.shippingExpenseId.toString(), password);
+        } catch {
+          /* ignore */
+        }
+      }
+
+      await invoice.deleteOne();
+      deletedInvoices += 1;
+    } catch (e) {
+      warnings.push(
+        `${invoice.invoiceNumber}: ${e instanceof Error ? e.message : 'حذف نشد'}`
+      );
+    }
   }
 
-  await Debtor.deleteMany({ customerId: id, isSettled: true });
-  // فاکتورها را نگه می‌داریم؛ فقط لینک مشتری را برمی‌داریم تا تاریخچه فروش نپرد
+  // بدهکاری‌های مانده بدون فاکتور / ردشده‌ها
+  const leftoverDebts = await Debtor.find({ customerId: id });
+  for (const d of leftoverDebts) {
+    const debtPays = await CashTransaction.find({
+      type: 'debt_payment',
+      referenceId: d._id.toString(),
+      referenceModel: 'Debtor',
+    });
+    let cashDelta = 0;
+    let cardDelta = 0;
+    for (const tx of debtPays) {
+      if (tx.direction === 'in') {
+        const desc = String(tx.description || '');
+        if (desc.includes('پوز') || desc.includes('کارت')) cardDelta -= tx.amount;
+        else cashDelta -= tx.amount;
+      }
+      await tx.deleteOne();
+    }
+    if (cashDelta !== 0 || cardDelta !== 0) {
+      await updateBalances(cashDelta, cardDelta);
+    }
+    await d.deleteOne();
+  }
+
+  const blocked = invoices.length - deletedInvoices;
+  if (blocked > 0 && deletedInvoices === 0 && invoices.length > 0) {
+    throw new Error(
+      `حذف ممکن نیست: ${warnings.slice(0, 3).join(' · ') || 'فاکتورها قفل‌اند'}`
+    );
+  }
+
+  // فاکتورهای قفل‌مانده را از مشتری جدا کن تا سند یتیم نماند
   await SaleInvoice.updateMany({ customerId: id }, { $unset: { customerId: 1 } });
+
+  const name = customer.name;
   await customer.deleteOne();
-  return { id, deleted: true, name: customer.name };
+
+  return {
+    id,
+    deleted: true,
+    name,
+    deletedInvoices,
+    blockedInvoices: blocked,
+    warnings,
+  };
 }
 
 function suggestDiscountAmount(

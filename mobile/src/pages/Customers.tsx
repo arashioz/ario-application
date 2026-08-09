@@ -20,7 +20,6 @@ import {
   IonSegmentButton,
   IonModal,
   IonChip,
-  IonAlert,
   useIonViewWillEnter,
   RefresherEventDetail,
 } from '@ionic/react';
@@ -247,6 +246,8 @@ const Customers: React.FC = () => {
   const [creditPayments, setCreditPayments] = useState<CreditPayRow[]>([]);
   const [creditTab, setCreditTab] = useState<'open' | 'history' | 'invoices'>('open');
   const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [deletePw, setDeletePw] = useState('');
+  const [deleteBusy, setDeleteBusy] = useState(false);
   const [invDetail, setInvDetail] = useState<CustomerInvoice | null>(null);
   const [seedEdit, setSeedEdit] = useState<SaleInvRow | null>(null);
   const [payAmount, setPayAmount] = useState('');
@@ -460,16 +461,32 @@ const Customers: React.FC = () => {
 
   const deleteCustomerNow = async () => {
     if (!selected) return;
+    if (!deletePw.trim()) {
+      setToast({ open: true, msg: 'رمز حذف را وارد کنید', color: 'warning' });
+      return;
+    }
+    setDeleteBusy(true);
     try {
-      await wsClient.request(
-        'customer.delete',
-        { id: selected._id },
-        { clientMutationId: newMutationId(), queueIfOffline: true }
-      );
+      const res = await wsClient.request<{
+        name?: string;
+        deletedInvoices?: number;
+        blockedInvoices?: number;
+        warnings?: string[];
+      }>('customer.delete', { id: selected._id, password: deletePw.trim() });
       setDetailOpen(false);
       setSelected(null);
       setDeleteConfirm(false);
-      setToast({ open: true, msg: 'مشتری حذف شد', color: 'success' });
+      setDeletePw('');
+      const n = res.deletedInvoices || 0;
+      const blocked = res.blockedInvoices || 0;
+      setToast({
+        open: true,
+        msg:
+          blocked > 0
+            ? `مشتری حذف شد · ${n} فاکتور پاک شد · ${blocked} فاکتور قفل ماند`
+            : `مشتری و ${n.toLocaleString('fa-IR')} فاکتور حذف شد — موجودی/صندوق برگشت`,
+        color: blocked > 0 ? 'warning' : 'success',
+      });
       await load(search);
     } catch (e) {
       setToast({
@@ -477,6 +494,8 @@ const Customers: React.FC = () => {
         msg: e instanceof Error ? e.message : 'حذف نشد',
         color: 'danger',
       });
+    } finally {
+      setDeleteBusy(false);
     }
   };
 
@@ -1214,28 +1233,66 @@ const Customers: React.FC = () => {
           />
         )}
 
-        <IonAlert
+        <IonModal
           isOpen={deleteConfirm}
-          onDidDismiss={() => setDeleteConfirm(false)}
-          header="حذف مشتری"
-          message="مشتری بدون نسیه باز حذف می‌شود. فاکتورهای قبلی در سیستم می‌مانند."
-          buttons={[
-            { text: 'انصراف', role: 'cancel' },
-            {
-              text: 'حذف',
-              role: 'destructive',
-              handler: () => {
-                void deleteCustomerNow();
-              },
-            },
-          ]}
-        />
+          onDidDismiss={() => {
+            setDeleteConfirm(false);
+            setDeletePw('');
+          }}
+        >
+          <IonHeader>
+            <IonToolbar>
+              <IonTitle>حذف مشتری و فاکتورها</IonTitle>
+              <IonButtons slot="end">
+                <IonButton
+                  onClick={() => {
+                    setDeleteConfirm(false);
+                    setDeletePw('');
+                  }}
+                >
+                  انصراف
+                </IonButton>
+              </IonButtons>
+            </IonToolbar>
+          </IonHeader>
+          <IonContent className="ion-padding">
+            <p className="hint" style={{ color: 'var(--ion-color-danger)' }}>
+              این کار برگشت‌پذیر نیست. مشتری «{selected?.name}»، همه فاکتورها، نسیه‌ها و
+              دریافت‌های مرتبط حذف می‌شوند؛ موجودی کالا و صندوق برمی‌گردد.
+            </p>
+            <p className="hint">
+              فاکتورهایی که به راننده پرداخت شده، حذف نمی‌شوند و هشدار می‌گیرید.
+            </p>
+            <IonItem>
+              <IonLabel position="stacked">رمز حذف / ویرایش (مثل حذف فاکتور)</IonLabel>
+              <IonInput
+                type="password"
+                value={deletePw}
+                placeholder="رمز تنظیمات اپ"
+                autocomplete="off"
+                onIonInput={(e) => setDeletePw(e.detail.value || '')}
+              />
+            </IonItem>
+            <p className="hint" style={{ marginTop: 8 }}>
+              بدون رمز صحیح سرور مشتری را پاک نمی‌کند.
+            </p>
+            <IonButton
+              expand="block"
+              color="danger"
+              className="ion-margin-top"
+              disabled={deleteBusy || !deletePw.trim()}
+              onClick={() => void deleteCustomerNow()}
+            >
+              {deleteBusy ? '…' : 'حذف قطعی مشتری و فاکتورها'}
+            </IonButton>
+          </IonContent>
+        </IonModal>
 
         <IonToast
           isOpen={toast.open}
           message={toast.msg}
           color={toast.color}
-          duration={2200}
+          duration={2800}
           onDidDismiss={() => setToast((t) => ({ ...t, open: false }))}
           position="top"
         />
