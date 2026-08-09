@@ -112,7 +112,17 @@ const SETTLE_METHOD_LABEL: Record<SettleMethod, string> = {
 
 const Orders: React.FC = () => {
   const { isAdmin } = useAuth();
-  const [tab, setTab] = useState<'pending' | 'approved' | 'shipped' | 'delivered' | 'all'>('approved');
+  const [tab, setTab] = useState<'pending' | 'approved' | 'shipped' | 'delivered' | 'all'>(() => {
+    try {
+      const v = localStorage.getItem('ario.orders.tab');
+      if (v === 'pending' || v === 'approved' || v === 'shipped' || v === 'delivered' || v === 'all') {
+        return v;
+      }
+    } catch {
+      /* ignore */
+    }
+    return 'approved';
+  });
   const [period, setPeriod] = useState<InvoicePeriod>('all');
   const [marketerPanelEnabled, setMarketerPanelEnabled] = useState(true);
   const [list, setList] = useState<SaleInv[]>([]);
@@ -167,6 +177,15 @@ const Orders: React.FC = () => {
   useEffect(() => {
     if (!marketerPanelEnabled && tab === 'pending') setTab('approved');
   }, [marketerPanelEnabled, tab]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('ario.orders.tab', tab);
+    } catch {
+      /* ignore */
+    }
+  }, [tab]);
+
   useEffect(() => {
     const unsub = wsClient.onEvent('data_changed', (payload: unknown) => {
       const p = payload as { entity?: string };

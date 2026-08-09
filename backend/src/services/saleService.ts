@@ -558,6 +558,13 @@ async function settleInvoiceCreditOnShip(
     if (rem <= 0) continue;
     d.paidAmount = d.amount;
     d.isSettled = true;
+    if (!Array.isArray(d.payments)) d.payments = [];
+    d.payments.push({
+      amount: rem,
+      method,
+      date: now,
+      note: `تسویه هنگام ارسال`,
+    });
     await d.save();
   }
 
@@ -1118,13 +1125,21 @@ export async function recordDebtPayment(
   const payAmount = Math.round(amount || 0);
   if (payAmount <= 0) throw new Error('مبلغ نامعتبر است');
 
-  debtor.paidAmount += payAmount;
-  if (debtor.paidAmount >= debtor.amount) debtor.isSettled = true;
-  await debtor.save();
-
   const now = new Date();
   const methodLabel =
     method === 'cash' ? 'نقد' : method === 'card_to_card' ? 'کارت به کارت' : 'پوز';
+
+  debtor.paidAmount += payAmount;
+  if (debtor.paidAmount >= debtor.amount) debtor.isSettled = true;
+  if (!Array.isArray(debtor.payments)) debtor.payments = [];
+  debtor.payments.push({
+    amount: payAmount,
+    method,
+    date: now,
+    note: methodLabel,
+  });
+  await debtor.save();
+
   await CashTransaction.create({
     type: 'debt_payment',
     amount: payAmount,

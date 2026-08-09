@@ -234,9 +234,111 @@ export async function getCustomer(id: string) {
 }
 
 export async function getCustomerInvoices(customerId: string) {
-  return SaleInvoice.find({ customerId, status: { $ne: 'cancelled' } })
+  const invoices = await SaleInvoice.find({ customerId, status: { $ne: 'cancelled' } })
     .sort({ date: -1 })
     .limit(50);
+
+  // هم‌خوان کردن برچسب پرداخت با مانده نسیه واقعی
+  for (const inv of invoices) {
+    const credit = Math.round(inv.payment?.credit || 0);
+    const cash = Math.round(inv.payment?.cash || 0);
+    const card = Math.round(inv.payment?.card || 0);
+    if (credit <= 0 && inv.paymentMethod === 'credit') {
+      if (cash > 0 && card > 0) inv.paymentMethod = 'mixed';
+      else if (cash > 0) inv.paymentMethod = 'cash';
+      else if (card > 0) inv.paymentMethod = 'card';
+      else inv.paymentMethod = 'cash';
+      inv.isPaid = true;
+      if (!inv.paidAt) inv.paidAt = inv.lastPaymentAt || inv.shippedAt || inv.date;
+      await inv.save();
+    } else if (credit > 0 && inv.paymentMethod === 'credit' && (cash > 0 || card > 0)) {
+      inv.paymentMethod = 'mixed';
+      await inv.save();
+    }
+  }
+
+  return invoices;
+}
+
+/** تاریخچه دریافت نسیه مشتری */
+export async function getCustomerCreditPayments(customerId: string) {
+  const debts = await Debtor.find({ customerId }).sort({ updatedAt: -1 }).limit(80);
+  const rows: Array<{
+    id: string;
+    debtorId: string;
+    invoiceNumber?: string;
+    amount: number;
+    method: string;
+    date: Date;
+    note?: string;
+    debtAmount: number;
+    debtPaid: number;
+    settled: boolean;
+  }> = [];
+
+  const invIds = debts.map((d) => d.saleInvoiceId).filter(Boolean);
+  const invs = invIds.length
+    ? await SaleInvoice.find({ _id: { $in: invIds } }).select('_id invoiceNumber')
+    : [];
+  const invMap = new Map(invs.map((i) => [i._id.toString(), i.invoiceNumber]));
+
+  for (const d of debts) {
+    const invNo = d.saleInvoiceId ? invMap.get(d.saleInvoiceId.toString()) : undefined;
+    const pays = Array.isArray(d.payments) ? d.payments : [];
+    if (pays.length) {
+      for (const p of pays) {
+        rows.push({
+          id: `${d._id}-${new Date(p.date).getTime()}-${p.amount}`,
+          debtorId: d._id.toString(),
+          invoiceNumber: invNo,
+          amount: p.amount,
+          method: p.method,
+          date: p.date,
+          note: p.note,
+          debtAmount: d.amount,
+          debtPaid: d.paidAmount,
+          settled: d.isSettled,
+        });
+      }
+    } else if ((d.paidAmount || 0) > 0) {
+      // سوابق قدیمی بدون آرایه payments
+      rows.push({
+        id: `${d._id}-legacy`,
+        debtorId: d._id.toString(),
+        invoiceNumber: invNo,
+        amount: d.paidAmount,
+        method: 'cash',
+        date: d.updatedAt || d.createdAt,
+        note: 'پرداخت قبلی (بدون ریز)',
+        debtAmount: d.amount,
+        debtPaid: d.paidAmount,
+        settled: d.isSettled,
+      });
+    }
+  }
+
+  rows.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  return rows;
+}
+
+export async function deleteCustomer(id: string) {
+  const customer = await Customer.findById(id);
+  if (!customer) throw new Error('مشتری یافت نشد');
+
+  const openDebt = await Debtor.findOne({
+    customerId: id,
+    isSettled: false,
+    $expr: { $gt: [{ $subtract: ['$amount', '$paidAmount'] }, 0] },
+  });
+  if (openDebt) {
+    throw new Error('این مشتری نسیه باز دارد — ابتدا تسویه کنید');
+  }
+
+  await Debtor.deleteMany({ customerId: id, isSettled: true });
+  // فاکتورها را نگه می‌داریم؛ فقط لینک مشتری را برمی‌داریم تا تاریخچه فروش نپرد
+  await SaleInvoice.updateMany({ customerId: id }, { $unset: { customerId: 1 } });
+  await customer.deleteOne();
+  return { id, deleted: true, name: customer.name };
 }
 
 function suggestDiscountAmount(
@@ -682,21 +784,24 @@ export async function listCustomerDirectory(search?: string) {
     Debtor.find({ isSettled: false }).select('customerId amount paidAmount dueDate'),
   ]);
 
-  const stats = new Map<string, { kg: number; amount: number; count: number }>();
+  const stats = new Map<
+    string,
+    { kg: number; amount: number; collected: number; count: number }
+  >();
   for (const inv of sales) {
     const id = inv.customerId!.toString();
-    const cur = stats.get(id) || { kg: 0, amount: 0, count: 0 };
-    // فروش ماه برای ریسک: فقط بخش شناسایی‌شده (بدون نسیه باز)
+    const cur = stats.get(id) || { kg: 0, amount: 0, collected: 0, count: 0 };
+    const total = Math.round(inv.totalAmount || 0);
     const cash = Math.round(inv.payment?.cash || 0);
     const card = Math.round(inv.payment?.card || 0);
     const credit = Math.round(inv.payment?.credit || 0);
-    const total = Math.round(inv.totalAmount || 0);
     let recognized = cash + card;
     if (recognized <= 0 && credit <= 0) recognized = total;
     else if (recognized <= 0 && credit < total) recognized = Math.max(0, total - credit);
-    const ratio = total > 0 ? Math.min(1, recognized / total) : 0;
-    cur.kg += (inv.totalKg || 0) * ratio;
-    cur.amount += recognized;
+    // فروش ماه = مبلغ کل فاکتور؛ وصول = نقد/کارت
+    cur.kg += inv.totalKg || 0;
+    cur.amount += total;
+    cur.collected += recognized;
     cur.count += 1;
     stats.set(id, cur);
   }
@@ -715,10 +820,10 @@ export async function listCustomerDirectory(search?: string) {
 
   const rows = customers.map((c) => {
     const id = c._id.toString();
-    const s = stats.get(id) || { kg: 0, amount: 0, count: 0 };
+    const s = stats.get(id) || { kg: 0, amount: 0, collected: 0, count: 0 };
     const debt = debtByCustomer.get(id) || { open: 0, overdue: 0 };
     const openCredit = Math.max(debt.open, c.totalCredit || 0);
-    const salesBase = Math.max(s.amount, 1);
+    const salesBase = Math.max(s.collected, 1);
     const ratio = openCredit / (salesBase + openCredit);
     let riskLevel: 'low' | 'medium' | 'high' | 'critical' = 'low';
     if (debt.overdue > 0 && ratio >= 0.35) riskLevel = 'critical';
@@ -737,6 +842,7 @@ export async function listCustomerDirectory(search?: string) {
       ...c.toObject(),
       monthKg: Math.round(s.kg * 100) / 100,
       monthAmount: s.amount,
+      monthCollected: s.collected,
       monthInvoices: s.count,
       openCredit,
       overdueCredit: debt.overdue,

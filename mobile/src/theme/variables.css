@@ -1171,6 +1171,39 @@ body {
   font-family: inherit;
   background: #fff;
 }
+.date-picker-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 8px 12px;
+  background: #fff;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: right;
+}
+.date-picker-btn-label {
+  font-size: 11px;
+  color: #64748b;
+  font-weight: 600;
+}
+.date-picker-btn-value {
+  font-size: 14px;
+  font-weight: 800;
+  color: #0f2744;
+}
+.date-modal-cal {
+  display: flex;
+  justify-content: center;
+  direction: rtl;
+}
+.date-modal-cal .rmdp-wrapper,
+.date-modal-cal .rmdp-calendar {
+  box-shadow: none !important;
+}
 .date-hint { font-size: 11px; color: #64748b; margin-top: 4px; }
 .date-picker-wrap { flex: 1; }
 

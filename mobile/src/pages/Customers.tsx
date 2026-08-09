@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   IonPage,
   IonHeader,
@@ -20,6 +20,7 @@ import {
   IonSegmentButton,
   IonModal,
   IonChip,
+  IonAlert,
   useIonViewWillEnter,
   RefresherEventDetail,
 } from '@ionic/react';
@@ -32,6 +33,8 @@ import {
   receiptOutline,
   personAddOutline,
   createOutline,
+  trashOutline,
+  copyOutline,
 } from 'ionicons/icons';
 import { wsClient, newMutationId } from '../api/ws';
 import {
@@ -46,6 +49,7 @@ import { DigitInput } from '../components/DigitInput';
 import { MoneyInput } from '../components/MoneyInput';
 import { InvoiceListPanel, SaleInvRow } from '../components/InvoiceListPanel';
 import { SaleInvoiceDetailBody, summarizeSaleItems } from '../components/SaleInvoiceDetailBody';
+import { buildInvoiceShareText, copyText } from '../utils/invoiceShare';
 import { useAuth } from '../auth/AuthContext';
 
 interface CustomerRow {
@@ -64,9 +68,23 @@ interface CustomerRow {
   riskLabel?: string;
   monthKg?: number;
   monthAmount?: number;
+  monthCollected?: number;
   monthInvoices?: number;
   loyaltyTier?: 'gold' | 'silver' | 'bronze' | 'new';
   tierLabel?: string;
+}
+
+interface CreditPayRow {
+  id: string;
+  debtorId: string;
+  invoiceNumber?: string;
+  amount: number;
+  method: string;
+  date: string;
+  note?: string;
+  debtAmount: number;
+  debtPaid: number;
+  settled: boolean;
 }
 
 interface CustomerInvoiceItem {
@@ -142,6 +160,27 @@ const TIER: Record<string, string> = {
   wholesale: 'عمده',
 };
 
+function invoicePayLabel(inv: {
+  paymentMethod?: string;
+  payment?: { cash?: number; card?: number; credit?: number };
+  isPaid?: boolean;
+}): string {
+  const credit = Math.round(inv.payment?.credit || 0);
+  const cash = Math.round(inv.payment?.cash || 0);
+  const card = Math.round(inv.payment?.card || 0);
+  if (credit > 0) {
+    if (cash > 0 || card > 0) return `ترکیبی · نسیه ${formatToman(credit)}`;
+    return `نسیه ${formatToman(credit)}`;
+  }
+  if (inv.isPaid || cash > 0 || card > 0) {
+    if (cash > 0 && card > 0) return 'ترکیبی (تسویه)';
+    if (cash > 0) return 'نقد (تسویه)';
+    if (card > 0) return 'کارت/پوز (تسویه)';
+    return PAY[inv.paymentMethod || ''] || 'تسویه‌شده';
+  }
+  return PAY[inv.paymentMethod || ''] || '—';
+}
+
 function toSaleInvRow(inv: CustomerInvoice, customer?: CustomerRow | null): SaleInvRow {
   return {
     _id: String(inv._id || ''),
@@ -205,6 +244,9 @@ const Customers: React.FC = () => {
   const [savingEdit, setSavingEdit] = useState(false);
   const [invoices, setInvoices] = useState<CustomerInvoice[]>([]);
   const [debts, setDebts] = useState<DebtRow[]>([]);
+  const [creditPayments, setCreditPayments] = useState<CreditPayRow[]>([]);
+  const [creditTab, setCreditTab] = useState<'open' | 'history' | 'invoices'>('open');
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [invDetail, setInvDetail] = useState<CustomerInvoice | null>(null);
   const [seedEdit, setSeedEdit] = useState<SaleInvRow | null>(null);
   const [payAmount, setPayAmount] = useState('');
@@ -225,11 +267,13 @@ const Customers: React.FC = () => {
       wsClient.request<{
         customer?: CustomerRow;
         invoices: CustomerInvoice[];
+        creditPayments?: CreditPayRow[];
       }>('customer.get', { id }),
       wsClient.request<DebtRow[]>('debtor.list', { settled: false }).catch(() => [] as DebtRow[]),
     ]);
     if (res.customer) setSelected({ ...(base || {}), ...res.customer });
     setInvoices(res.invoices || []);
+    setCreditPayments(res.creditPayments || []);
     const cid = String(id);
     setDebts(
       (Array.isArray(allDebts) ? allDebts : []).filter((d) => String(d.customerId || '') === cid)
@@ -240,6 +284,16 @@ const Customers: React.FC = () => {
     void load().catch(console.warn);
   });
 
+  useEffect(() => {
+    const unsub = wsClient.onEvent('data_changed', (payload: unknown) => {
+      const p = payload as { entity?: string };
+      if (p?.entity === 'sale' || p?.entity === 'debtor' || p?.entity === 'customer') {
+        void load(search).catch(console.warn);
+        if (selected?._id) void reloadSelected(selected._id, selected).catch(console.warn);
+      }
+    });
+    return unsub;
+  }, [load, reloadSelected, search, selected]);
   const create = async () => {
     if (!name.trim()) return;
     try {
@@ -277,11 +331,13 @@ const Customers: React.FC = () => {
     setInvDetail(null);
     setSeedEdit(null);
     setPayAmount('');
+    setCreditTab('open');
     try {
       await reloadSelected(c._id, c);
     } catch {
       setInvoices([]);
       setDebts([]);
+      setCreditPayments([]);
     }
   };
 
@@ -336,15 +392,35 @@ const Customers: React.FC = () => {
     const totalCreditOpen = active.reduce((s, i) => s + (i.payment?.credit || 0), 0);
     const debtRemaining = debts.reduce((s, d) => s + (d.remaining || 0), 0);
     const debt = selected?.totalCredit ?? (debtRemaining || totalCreditOpen);
+
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const monthInvs = active.filter((i) => new Date(i.date) >= monthStart);
+    const monthAmount =
+      monthInvs.reduce((s, i) => s + (i.totalAmount || 0), 0) || selected?.monthAmount || 0;
+    const monthCollected =
+      monthInvs.reduce((s, i) => {
+        const cash = Math.round(i.payment?.cash || 0);
+        const card = Math.round(i.payment?.card || 0);
+        let rec = cash + card;
+        const credit = Math.round(i.payment?.credit || 0);
+        const total = Math.round(i.totalAmount || 0);
+        if (rec <= 0 && credit <= 0) rec = total;
+        return s + rec;
+      }, 0) || selected?.monthCollected || 0;
+    const monthKg =
+      monthInvs.reduce((s, i) => s + (i.totalKg || 0), 0) || selected?.monthKg || 0;
+
     return {
       totalAmount,
       totalKg,
       invoiceCount: active.length,
       debt,
       debtRemaining,
-      monthAmount: selected?.monthAmount || 0,
-      monthKg: selected?.monthKg || 0,
-      monthInvoices: selected?.monthInvoices || 0,
+      monthAmount,
+      monthCollected,
+      monthKg,
+      monthInvoices: monthInvs.length || selected?.monthInvoices || 0,
     };
   }, [invoices, selected, debts]);
 
@@ -358,6 +434,51 @@ const Customers: React.FC = () => {
       ),
     [invoices]
   );
+
+  const copyInvoiceReport = async (inv: CustomerInvoice) => {
+    const text = buildInvoiceShareText({
+      invoiceNumber: inv.invoiceNumber,
+      customerName: inv.customerName || selected?.name,
+      customerPhone: inv.customerPhone || selected?.phone,
+      date: inv.date,
+      totalAmount: inv.totalAmount,
+      totalKg: inv.totalKg,
+      discount: inv.discount,
+      paymentMethod: inv.paymentMethod,
+      isGolden: inv.isGolden,
+      items: inv.items,
+      payment: inv.payment,
+      isPaid: inv.isPaid || (inv.payment?.credit || 0) <= 0,
+    });
+    const ok = await copyText(text);
+    setToast({
+      open: true,
+      msg: ok ? 'گزارش فاکتور کپی شد (مبلغ / پرداخت‌شده / مانده نسیه)' : 'کپی نشد',
+      color: ok ? 'success' : 'danger',
+    });
+  };
+
+  const deleteCustomerNow = async () => {
+    if (!selected) return;
+    try {
+      await wsClient.request(
+        'customer.delete',
+        { id: selected._id },
+        { clientMutationId: newMutationId(), queueIfOffline: true }
+      );
+      setDetailOpen(false);
+      setSelected(null);
+      setDeleteConfirm(false);
+      setToast({ open: true, msg: 'مشتری حذف شد', color: 'success' });
+      await load(search);
+    } catch (e) {
+      setToast({
+        open: true,
+        msg: e instanceof Error ? e.message : 'حذف نشد',
+        color: 'danger',
+      });
+    }
+  };
 
   const openMap = (c: CustomerRow) => {
     if (c.lat != null && c.lng != null) {
@@ -640,6 +761,17 @@ const Customers: React.FC = () => {
                     <IonIcon slot="start" icon={mapOutline} />
                     نقشه
                   </IonButton>
+                  {isAdmin && (
+                    <IonButton
+                      size="small"
+                      color="danger"
+                      fill="outline"
+                      onClick={() => setDeleteConfirm(true)}
+                    >
+                      <IonIcon slot="start" icon={trashOutline} />
+                      حذف
+                    </IonButton>
+                  )}
                 </div>
 
                 <div className="ios-section-title" style={{ marginTop: 16 }}>
@@ -665,6 +797,10 @@ const Customers: React.FC = () => {
                 </div>
                 <div className="ios-glass-card">
                   <div className="stat-row">
+                    <span className="stat-label">وصول‌شده این ماه</span>
+                    <span className="stat-value">{formatToman(stats.monthCollected)}</span>
+                  </div>
+                  <div className="stat-row">
                     <span className="stat-label">تناژ این ماه</span>
                     <span className="stat-value">{formatKg(stats.monthKg)}</span>
                   </div>
@@ -679,10 +815,94 @@ const Customers: React.FC = () => {
                 </div>
 
                 <div className="ios-section-title">نسیه‌ها</div>
-                {stats.debt <= 0 && debts.length === 0 && creditInvoices.length === 0 ? (
+                <IonSegment
+                  value={creditTab}
+                  className="ios-segment"
+                  onIonChange={(e) =>
+                    setCreditTab((e.detail.value as typeof creditTab) || 'open')
+                  }
+                >
+                  <IonSegmentButton value="open">
+                    <IonLabel>باز</IonLabel>
+                  </IonSegmentButton>
+                  <IonSegmentButton value="history">
+                    <IonLabel>پرداخت‌ها</IonLabel>
+                  </IonSegmentButton>
+                  <IonSegmentButton value="invoices">
+                    <IonLabel>فاکتور نسیه</IonLabel>
+                  </IonSegmentButton>
+                </IonSegment>
+                {creditTab === 'history' && (
+                  <div className="ios-glass-card" style={{ marginTop: 10 }}>
+                    {creditPayments.length === 0 ? (
+                      <p className="hint" style={{ margin: 0 }}>
+                        هنوز پرداختی ثبت نشده (از این به بعد ریز تاریخ می‌ماند)
+                      </p>
+                    ) : (
+                      creditPayments.map((p) => (
+                        <div key={p.id} className="stat-row" style={{ alignItems: 'flex-start' }}>
+                          <span className="stat-label">
+                            {formatDate(p.date)}
+                            {p.invoiceNumber ? ` · ${p.invoiceNumber}` : ''}
+                            <br />
+                            <span className="ios-caption">
+                              {p.method === 'cash'
+                                ? 'نقد'
+                                : p.method === 'card_to_card'
+                                  ? 'کارت‌به‌کارت'
+                                  : 'پوز'}
+                              {p.note ? ` · ${p.note}` : ''}
+                              {p.settled ? ' · تسویه کامل' : ''}
+                            </span>
+                          </span>
+                          <span className="stat-value success">{formatToman(p.amount)}</span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+                {creditTab === 'invoices' && (
+                  <div style={{ marginTop: 10 }}>
+                    {creditInvoices.length === 0 ? (
+                      <p className="hint">فاکتور نسیه باز نیست</p>
+                    ) : (
+                      creditInvoices.map((inv) => (
+                        <div key={inv.invoiceNumber} className="inv-card" style={{ marginBottom: 8 }}>
+                          <div className="inv-card-top">
+                            <div>
+                              <div className="inv-card-num">{inv.invoiceNumber}</div>
+                              <div className="inv-card-meta">
+                                {formatDate(inv.date)} · {invoicePayLabel(inv)}
+                              </div>
+                            </div>
+                            <div className="inv-card-amount">
+                              <div className="inv-card-money">{formatToman(inv.totalAmount)}</div>
+                            </div>
+                          </div>
+                          <div className="ios-caption" style={{ color: 'var(--ion-color-danger)' }}>
+                            مانده نسیه: {formatToman(inv.payment?.credit || 0)} · پرداخت‌شده:{' '}
+                            {formatToman(
+                              Math.round(inv.payment?.cash || 0) + Math.round(inv.payment?.card || 0)
+                            )}
+                          </div>
+                          <IonButton
+                            size="small"
+                            fill="clear"
+                            onClick={() => void copyInvoiceReport(inv)}
+                          >
+                            <IonIcon slot="start" icon={copyOutline} />
+                            کپی گزارش
+                          </IonButton>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+                {creditTab === 'open' &&
+                  (stats.debt <= 0 && debts.length === 0 && creditInvoices.length === 0 ? (
                   <p className="hint">نسیه باز ندارد</p>
                 ) : (
-                  <div className="ios-glass-card">
+                  <div className="ios-glass-card" style={{ marginTop: 10 }}>
                     <div className="stat-row">
                       <span className="stat-label">مانده نسیه</span>
                       <span className="stat-value warning">
@@ -720,6 +940,26 @@ const Customers: React.FC = () => {
                               }}
                             >
                               ویرایش مبلغ
+                            </button>
+                            {' · '}
+                            <button
+                              type="button"
+                              className="linkish"
+                              style={{
+                                background: 'none',
+                                border: 'none',
+                                color: 'var(--ion-color-primary)',
+                                padding: 0,
+                                font: 'inherit',
+                              }}
+                              onClick={() => {
+                                const inv = invoices.find(
+                                  (i) => String(i._id) === String(d.saleInvoiceId)
+                                );
+                                if (inv) void copyInvoiceReport(inv);
+                              }}
+                            >
+                              کپی گزارش
                             </button>
                           </>
                         ) : null}
@@ -764,7 +1004,7 @@ const Customers: React.FC = () => {
                       </>
                     )}
                   </div>
-                )}
+                ))}
 
                 <div className="ios-section-title">ریز سفارش‌ها / فاکتورها</div>
                 {invoices.length === 0 && <p className="hint">فاکتوری نیست</p>}
@@ -779,7 +1019,7 @@ const Customers: React.FC = () => {
                         <div className="inv-card-meta">
                           {formatDate(inv.date)}
                           {inv.priceTier ? ` · ${TIER[inv.priceTier] || inv.priceTier}` : ''}
-                          {inv.paymentMethod ? ` · ${PAY[inv.paymentMethod] || inv.paymentMethod}` : ''}
+                          {` · ${invoicePayLabel(inv)}`}
                           {inv.status ? ` · ${STATUS[inv.status] || inv.status}` : ''}
                         </div>
                       </div>
@@ -790,9 +1030,23 @@ const Customers: React.FC = () => {
                     </div>
                     {(inv.payment?.credit || 0) > 0 && (
                       <div className="ios-caption" style={{ color: 'var(--ion-color-danger)' }}>
-                        نسیه این فاکتور: {formatToman(inv.payment?.credit || 0)}
+                        نسیه این فاکتور: {formatToman(inv.payment?.credit || 0)} · پرداخت‌شده:{' '}
+                        {formatToman(
+                          Math.round(inv.payment?.cash || 0) + Math.round(inv.payment?.card || 0)
+                        )}
                       </div>
                     )}
+                    {(inv.payment?.credit || 0) <= 0 &&
+                      (Math.round(inv.payment?.cash || 0) + Math.round(inv.payment?.card || 0) > 0 ||
+                        inv.isPaid) && (
+                        <div className="ios-caption" style={{ color: 'var(--ion-color-success)' }}>
+                          تسویه‌شده — پرداخت‌شده{' '}
+                          {formatToman(
+                            Math.round(inv.payment?.cash || 0) + Math.round(inv.payment?.card || 0) ||
+                              inv.totalAmount
+                          )}
+                        </div>
+                      )}
                     {(inv.shippedAt || inv.paidAt || inv.lastPaymentAt) && (
                       <div className="ios-caption" style={{ marginTop: 4 }}>
                         {inv.shippedAt ? `ارسال ${formatDate(inv.shippedAt)}` : ''}
@@ -832,6 +1086,14 @@ const Customers: React.FC = () => {
                       <IonButton size="small" fill="clear" onClick={() => setInvDetail(inv)}>
                         <IonIcon slot="start" icon={eyeOutline} />
                         جزئیات
+                      </IonButton>
+                      <IonButton
+                        size="small"
+                        fill="clear"
+                        onClick={() => void copyInvoiceReport(inv)}
+                      >
+                        <IonIcon slot="start" icon={copyOutline} />
+                        کپی گزارش
                       </IonButton>
                       {isAdmin && inv._id && (
                         <IonButton
@@ -951,6 +1213,23 @@ const Customers: React.FC = () => {
             onToast={(msg, color) => setToast({ open: true, msg, color: color || 'success' })}
           />
         )}
+
+        <IonAlert
+          isOpen={deleteConfirm}
+          onDidDismiss={() => setDeleteConfirm(false)}
+          header="حذف مشتری"
+          message="مشتری بدون نسیه باز حذف می‌شود. فاکتورهای قبلی در سیستم می‌مانند."
+          buttons={[
+            { text: 'انصراف', role: 'cancel' },
+            {
+              text: 'حذف',
+              role: 'destructive',
+              handler: () => {
+                void deleteCustomerNow();
+              },
+            },
+          ]}
+        />
 
         <IonToast
           isOpen={toast.open}

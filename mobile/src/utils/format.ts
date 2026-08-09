@@ -81,12 +81,14 @@ export function normalizePhone(raw?: string): string {
   return s.replace(/[^\d]/g, '');
 }
 
-/** ورودی اعشاری/عدد صحیح با تبدیل ارقام فارسی */
+/** ورودی اعشاری/عدد صحیح با تبدیل ارقام فارسی — مثل ۰.۲ یا ۰٫۲ */
 export function sanitizeNumberInput(
   text: string,
   opts?: { decimal?: boolean; maxLen?: number }
 ): string {
   let s = toEnglishDigits(text || '');
+  // اعشار فارسی و ویرگول → نقطه؛ جداکننده هزارگان فارسی را حذف کن
+  s = s.replace(/٫/g, '.').replace(/,/g, '.').replace(/٬/g, '');
   if (opts?.decimal) {
     s = s.replace(/[^\d.]/g, '');
     const parts = s.split('.');

@@ -31,7 +31,7 @@ import { createSaleInvoice, listSaleInvoices, recordDebtPayment, recordCustomerD
 import { SaleInvoice } from '../models';
 import { createExpense, updateExpense, recordCardDeposit, listExpenses, listCardDeposits, deleteExpense, deleteCardDeposit, deleteCompanyPayment, listCashTransactions, updateCashTransactionPaymentMethod } from '../services/expenseService';
 import { wipeDevData, listWipeSections, getMongoCompassHint } from '../services/devWipeService';
-import { createCustomer, listCustomers, getCustomer, getCustomerInvoices, updateCustomer, getCustomerSuggestedPricing, quickFindCustomer, getCustomerCrmInsights, listCustomerDirectory, getCustomersMap } from '../services/customerService';
+import { createCustomer, listCustomers, getCustomer, getCustomerInvoices, getCustomerCreditPayments, updateCustomer, deleteCustomer, getCustomerSuggestedPricing, quickFindCustomer, getCustomerCrmInsights, listCustomerDirectory, getCustomersMap } from '../services/customerService';
 import {
   createCompanyPayment,
   listCompanyPayments,
@@ -621,12 +621,23 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
       return { type: 'customer.update', payload: result };
     }
 
+    case 'customer.delete': {
+      const user = await requireAuth(ws, msg);
+      requireAdmin(user);
+      const result = await deleteCustomer(String(p.id));
+      notifyDataChange('customer', 'delete', result);
+      return { type: 'customer.delete', payload: result };
+    }
+
     case 'customer.get': {
       await requireAuth(ws, msg);
       const customer = await getCustomer(String(p.id));
-      const invoices = await getCustomerInvoices(String(p.id));
+      const [invoices, creditPayments] = await Promise.all([
+        getCustomerInvoices(String(p.id)),
+        getCustomerCreditPayments(String(p.id)),
+      ]);
       const suggest = await getCustomerSuggestedPricing(String(p.id), p.productId as string | undefined);
-      return { type: 'customer.get', payload: { customer, invoices, suggest } };
+      return { type: 'customer.get', payload: { customer, invoices, creditPayments, suggest } };
     }
 
     case 'customer.suggest': {

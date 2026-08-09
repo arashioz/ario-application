@@ -9,7 +9,7 @@ interface Props {
   onChange: (value: string) => void;
   placeholder?: string;
   lines?: 'full' | 'none' | 'inset';
-  /** int = فقط رقم · decimal = اعشار · phone/tel = موبایل */
+  /** int = فقط رقم · decimal = اعشار (مثلاً ۰.۲) · phone/tel = موبایل */
   mode?: Mode;
   maxLen?: number;
   disabled?: boolean;
@@ -20,6 +20,7 @@ interface Props {
 
 /**
  * فیلد عدد با کیبورد عددی + تبدیل خودکار ارقام فارسی/عربی به انگلیسی
+ * در حالت decimal می‌توان ۰.۲ زد (نقطه یا٫)
  */
 export const DigitInput: React.FC<Props> = ({
   label,
@@ -33,15 +34,16 @@ export const DigitInput: React.FC<Props> = ({
   className,
   bare,
 }) => {
-  // numeric + pattern روی iOS کیبورد عدد می‌آورد؛ tel گاهی کاراکتر اضافه دارد
-  const inputMode = mode === 'decimal' ? 'decimal' : 'numeric';
+  const isDecimal = mode === 'decimal';
+  // روی iOS: pattern=[0-9]* اعشار را برمی‌دارد — برای decimal نگذار
+  const inputMode = isDecimal ? 'decimal' : 'numeric';
 
   const handle = (raw: string) => {
     if (mode === 'phone' || mode === 'tel') {
       onChange(normalizePhone(raw).slice(0, maxLen || 15));
       return;
     }
-    onChange(sanitizeNumberInput(raw, { decimal: mode === 'decimal', maxLen }));
+    onChange(sanitizeNumberInput(raw, { decimal: isDecimal, maxLen }));
   };
 
   const field = (
@@ -49,12 +51,12 @@ export const DigitInput: React.FC<Props> = ({
       className={className}
       type="text"
       inputMode={inputMode}
-      pattern={mode === 'decimal' ? '[0-9]*[.]?[0-9]*' : '[0-9]*'}
+      {...(isDecimal ? {} : { pattern: '[0-9]*' })}
       enterkeyhint="done"
       autocomplete={mode === 'phone' || mode === 'tel' ? 'tel' : 'off'}
       value={value}
       disabled={disabled}
-      placeholder={placeholder}
+      placeholder={placeholder || (isDecimal ? 'مثلاً 0.2' : undefined)}
       onIonInput={(e) => handle(e.detail.value || '')}
     />
   );

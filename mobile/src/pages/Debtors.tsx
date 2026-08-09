@@ -32,6 +32,8 @@ import { PersianDateField } from '../components/PersianDateField';
 import { useAuth } from '../auth/AuthContext';
 import { InvoiceListPanel, SaleInvRow } from '../components/InvoiceListPanel';
 import { SaleInvoiceDetailBody } from '../components/SaleInvoiceDetailBody';
+import { buildInvoiceShareText, copyText } from '../utils/invoiceShare';
+import { MoneyInput } from '../components/MoneyInput';
 
 interface DebtRow {
   _id: string;
@@ -226,6 +228,39 @@ const Debtors: React.FC = () => {
     } catch {
       /* keep debtDetail only */
     }
+  };
+
+  const copyDebtReport = async (d: DebtRow, inv?: SaleInvRow | null) => {
+    const rem = d.remaining ?? Math.max(0, d.amount - (d.paidAmount || 0));
+    const total = inv?.totalAmount ?? d.invoiceTotal ?? d.amount;
+    const paid = inv
+      ? Math.round(inv.payment?.cash || 0) + Math.round(inv.payment?.card || 0)
+      : Math.round(d.paidAmount || 0);
+    const credit = inv ? Math.round(inv.payment?.credit || 0) : rem;
+    const text = buildInvoiceShareText({
+      invoiceNumber: d.invoiceNumber || inv?.invoiceNumber,
+      customerName: d.customerName || d.name || inv?.customerName,
+      customerPhone: d.customerPhone || d.phone || inv?.customerPhone,
+      date: d.invoiceDate || inv?.date,
+      totalAmount: total,
+      totalKg: d.invoiceKg ?? inv?.totalKg,
+      paymentMethod: inv?.paymentMethod || (credit > 0 ? 'credit' : 'mixed'),
+      items: inv?.items || d.invoiceItems,
+      payment: inv?.payment || {
+        cash: paid > 0 ? paid : 0,
+        card: 0,
+        credit,
+      },
+      isPaid: rem <= 0 || inv?.isPaid,
+    });
+    const ok = await copyText(text);
+    setToast({
+      open: true,
+      msg: ok
+        ? `کپی شد — فاکتور ${formatToman(total)} · پرداخت ${formatToman(paid)} · مانده ${formatToman(credit || rem)}`
+        : 'کپی نشد',
+      color: ok ? 'success' : 'danger',
+    });
   };
 
   const openInvoiceEdit = async (saleInvoiceId?: string) => {
@@ -525,6 +560,13 @@ const Debtors: React.FC = () => {
                         <IonButton size="small" fill="outline" onClick={() => void openDebtDetail(d)}>
                           جزئیات
                         </IonButton>
+                        <IonButton
+                          size="small"
+                          fill="clear"
+                          onClick={() => void copyDebtReport(d)}
+                        >
+                          کپی گزارش
+                        </IonButton>
                         {isAdmin && (
                           <IonButton
                             size="small"
@@ -769,6 +811,14 @@ const Debtors: React.FC = () => {
                     ویرایش فاکتور
                   </IonButton>
                 )}
+                <IonButton
+                  expand="block"
+                  fill="outline"
+                  className="ion-margin-top"
+                  onClick={() => void copyDebtReport(debtDetail, debtSaleDetail)}
+                >
+                  کپی گزارش (فاکتور / پرداخت / مانده)
+                </IonButton>
               </>
             )}
           </IonContent>

@@ -449,8 +449,7 @@ const Purchase: React.FC = () => {
                     <IonLabel position="stacked">کیلو هر بسته</IonLabel>
                     <IonInput
                       type="text"
-                      inputMode="numeric"
-                      pattern="[0-9]*"
+                      inputMode="decimal"
                       value={item.kgPerPackage}
                       onIonInput={(e) => update(index, 'kgPerPackage', sanitizeNumberInput(e.detail.value || '', { decimal: true }))}
                     />
@@ -464,8 +463,8 @@ const Purchase: React.FC = () => {
                       <IonLabel position="stacked">کیلوگرم</IonLabel>
                       <IonInput
                         type="text"
-                      inputMode="numeric"
-                      pattern="[0-9]*"
+                        inputMode="decimal"
+                        placeholder="0.2"
                         value={item.unit === 'kg' ? item.qtyInput : String(Math.round(qtyKg * 100) / 100 || '')}
                         onIonInput={(e) => {
                         const v = sanitizeNumberInput(e.detail.value || '', { decimal: true });
@@ -486,8 +485,8 @@ const Purchase: React.FC = () => {
                       <IonLabel position="stacked">بسته (گرد)</IonLabel>
                       <IonInput
                         type="text"
-                      inputMode="numeric"
-                      pattern="[0-9]*"
+                        inputMode="decimal"
+                        placeholder="0.2"
                         value={
                           item.unit === 'package'
                             ? item.qtyInput

@@ -24,6 +24,7 @@ import {
   IonList,
   IonNote,
   IonSpinner,
+  IonBadge,
   useIonViewWillEnter,
   RefresherEventDetail,
 } from '@ionic/react';
@@ -265,8 +266,15 @@ const Sale: React.FC = () => {
   const [payCredit, setPayCredit] = useState('');
   const [creditIsCheck, setCreditIsCheck] = useState(false);
   const [workOn, setWorkOn] = useState(false);
-  const [priceTier, setPriceTier] = useState<PriceTier | null>(null);
-  const [dateModalOpen, setDateModalOpen] = useState(false);
+  const [priceTier, setPriceTier] = useState<PriceTier | null>(() => {
+    try {
+      const v = localStorage.getItem('ario.sale.priceTier');
+      if (v === 'retail' || v === 'supermarket' || v === 'wholesale') return v;
+    } catch {
+      /* ignore */
+    }
+    return null;
+  });
   const [deliveryMode, setDeliveryMode] = useState<'company' | 'self'>('company');
   const [isGolden, setIsGolden] = useState(false);
   const [discountMode, setDiscountMode] = useState<DiscountMode>('invoice');
@@ -279,7 +287,15 @@ const Sale: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState({ open: false, msg: '', color: 'success' });
   const [histOpen, setHistOpen] = useState(false);
-  const [saleTab, setSaleTab] = useState<'single' | 'bulk'>('single');
+  const [saleTab, setSaleTab] = useState<'single' | 'bulk'>(() => {
+    try {
+      const v = localStorage.getItem('ario.sale.tab');
+      if (v === 'single' || v === 'bulk') return v;
+    } catch {
+      /* ignore */
+    }
+    return 'single';
+  });
   const [bulkCount, setBulkCount] = useState(0);
   /** نوع غالب مشتری از تاریخچه — برای قفل قانون عمده≠تکی */
   const [customerPreferredTier, setCustomerPreferredTier] = useState<PriceTier | null>(null);
@@ -341,6 +357,11 @@ const Sale: React.FC = () => {
       return;
     }
     setPriceTier(t);
+    try {
+      localStorage.setItem('ario.sale.priceTier', t);
+    } catch {
+      /* ignore */
+    }
   };
 
   const openAddCustomerModal = (
@@ -1820,6 +1841,12 @@ const Sale: React.FC = () => {
       setCreditIsCheck(false);
       setHistOpen(false);
       setCustModalOpen(false);
+      try {
+        localStorage.removeItem('ario.sale.priceTier');
+        localStorage.removeItem('ario.sale.tab');
+      } catch {
+        /* ignore */
+      }
     } catch (e) {
       setToast({
         open: true,
@@ -1845,7 +1872,15 @@ const Sale: React.FC = () => {
         <IonToolbar>
           <IonSegment
             value={saleTab}
-            onIonChange={(e) => setSaleTab((e.detail.value as 'single' | 'bulk') || 'single')}
+            onIonChange={(e) => {
+              const next = (e.detail.value as 'single' | 'bulk') || 'single';
+              setSaleTab(next);
+              try {
+                localStorage.setItem('ario.sale.tab', next);
+              } catch {
+                /* ignore */
+              }
+            }}
           >
             <IonSegmentButton value="single">
               <IonLabel>فاکتور تکی</IonLabel>
@@ -1855,6 +1890,15 @@ const Sale: React.FC = () => {
             </IonSegmentButton>
           </IonSegment>
         </IonToolbar>
+        {saleTab === 'bulk' && bulkCount > 0 && (
+          <IonToolbar>
+            <div className="ion-padding-horizontal" style={{ paddingBottom: 8 }}>
+              <IonBadge color="success">
+                امروز {bulkCount.toLocaleString('fa-IR')} فاکتور ثبت شد
+              </IonBadge>
+            </div>
+          </IonToolbar>
+        )}
       </IonHeader>
       <IonContent fullscreen className="page-content ios-content sale-navy-content">
         <IonRefresher
@@ -1897,19 +1941,13 @@ const Sale: React.FC = () => {
             </div>
           )}
 
-          <div className={`ios-glass-card sale-navy-card sale-toolbar ${isGolden ? 'golden-card' : ''}`}>
+            <div className={`ios-glass-card sale-navy-card sale-toolbar ${isGolden ? 'golden-card' : ''}`}>
             {saleTab === 'bulk' && (
               <p className="hint convert-hint" style={{ marginTop: 0 }}>
                 حالت سریع روزانه — تاریخ ثابت می‌ماند؛ بعد از ثبت فقط مشتری و اقلام پاک می‌شود
-                {bulkCount > 0 ? ` · امروز ${bulkCount.toLocaleString('fa-IR')} فاکتور ثبت شد` : ''}
               </p>
             )}
-            <button type="button" className="sale-date-btn" onClick={() => setDateModalOpen(true)}>
-              <span className="sale-date-label">تاریخ فاکتور</span>
-              <span className="sale-date-value">
-                {date ? new Date(date + 'T12:00:00').toLocaleDateString('fa-IR') : 'انتخاب'}
-              </span>
-            </button>
+            <PersianDateField label="تاریخ فاکتور" value={date} onChange={setDate} />
             <div className="sale-tier-row">
               {(Object.keys(TIER_LABELS) as PriceTier[]).map((t) => {
                 const lockedRetail = t === 'retail' && isWholesaleCustomer;
@@ -3042,6 +3080,7 @@ const Sale: React.FC = () => {
                     type="text"
                     inputMode="decimal"
                     className="qty-input"
+                    placeholder="0.2"
                     value={prodModalQty}
                     onIonInput={(e) =>
                       setProdModalQty(
@@ -3233,20 +3272,6 @@ const Sale: React.FC = () => {
           </IonContent>
         </IonModal>
 
-
-        <IonModal isOpen={dateModalOpen} onDidDismiss={() => setDateModalOpen(false)} initialBreakpoint={0.45} breakpoints={[0, 0.45, 0.7]}>
-          <IonHeader>
-            <IonToolbar>
-              <IonTitle>تاریخ فاکتور</IonTitle>
-              <IonButtons slot="end">
-                <IonButton onClick={() => setDateModalOpen(false)}>تأیید</IonButton>
-              </IonButtons>
-            </IonToolbar>
-          </IonHeader>
-          <IonContent className="ion-padding">
-            <PersianDateField label="تاریخ" value={date} onChange={setDate} />
-          </IonContent>
-        </IonModal>
 
         <IonToast
           isOpen={toast.open}

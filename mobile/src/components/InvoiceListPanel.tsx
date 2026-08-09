@@ -649,6 +649,8 @@ export const InvoiceListPanel: React.FC<Props> = ({
                         paymentMethod: inv.paymentMethod,
                         isGolden: inv.isGolden,
                         items: inv.items,
+                        payment: inv.payment,
+                        isPaid: inv.isPaid,
                       },
                       defaultCard ? { defaultCard } : undefined
                     );

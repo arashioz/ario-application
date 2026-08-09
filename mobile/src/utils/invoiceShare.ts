@@ -23,6 +23,9 @@ export type ShareInvoiceInput = {
   appliedOffer?: string;
   items?: ShareInvoiceItem[];
   shopName?: string;
+  /** تفکیک پرداخت برای گزارش نسیه */
+  payment?: { cash?: number; card?: number; credit?: number };
+  isPaid?: boolean;
 };
 
 const PAY_LABEL: Record<string, string> = {
@@ -33,7 +36,7 @@ const PAY_LABEL: Record<string, string> = {
   mixed: 'ترکیبی',
 };
 
-/** متن قابل کپی برای ارسال فاکتور به مشتری */
+/** متن قابل کپی برای ارسال فاکتور به مشتری / بدهی */
 export function buildInvoiceShareText(
   inv: ShareInvoiceInput,
   opts?: {
@@ -74,19 +77,39 @@ export function buildInvoiceShareText(
   if (inv.discount) lines.push(`تخفیف: ${formatToman(inv.discount)}`);
   if (inv.appliedOffer) lines.push(inv.appliedOffer);
   if (inv.totalKg != null) lines.push(`تناژ: ${formatKg(inv.totalKg)}`);
-  lines.push(`مبلغ نهایی: ${formatToman(inv.totalAmount)}`);
+  lines.push(`مبلغ فاکتور: ${formatToman(inv.totalAmount)}`);
+
+  const cash = Math.round(inv.payment?.cash || 0);
+  const card = Math.round(inv.payment?.card || 0);
+  const credit = Math.round(inv.payment?.credit || 0);
+  const paid = cash + card;
+  if (inv.payment || paid > 0 || credit > 0) {
+    const paidParts: string[] = [];
+    if (cash > 0) paidParts.push(`نقد ${formatToman(cash)}`);
+    if (card > 0) paidParts.push(`کارت/پوز ${formatToman(card)}`);
+    lines.push(
+      `پرداخت‌شده: ${formatToman(paid)}${paidParts.length ? ` (${paidParts.join(' + ')})` : ''}`
+    );
+    lines.push(`مانده نسیه: ${formatToman(credit)}`);
+    if (inv.isPaid || credit <= 0) lines.push('وضعیت: تسویه‌شده ✅');
+    else lines.push('وضعیت: نسیه باز');
+  } else {
+    lines.push(`مبلغ نهایی: ${formatToman(inv.totalAmount)}`);
+  }
+
   lines.push('────────────');
   lines.push('با تشکر 🙏');
 
-  const card = opts?.defaultCard;
-  if (card?.cardNumber) {
-    const spaced = card.cardNumber.replace(/(\d{4})(?=\d)/g, '$1 ').trim();
+  const bankCard = opts?.defaultCard;
+  if (bankCard?.cardNumber) {
+    const spaced = bankCard.cardNumber.replace(/(\d{4})(?=\d)/g, '$1 ').trim();
+    const due = credit > 0 ? credit : inv.totalAmount;
     lines.push('');
     lines.push('💳 کارت مقصد برای واریز');
-    if (card.bankName) lines.push(`بانک: ${card.bankName}`);
-    lines.push(`به نام: ${card.accountHolder || card.label}`);
+    if (bankCard.bankName) lines.push(`بانک: ${bankCard.bankName}`);
+    lines.push(`به نام: ${bankCard.accountHolder || bankCard.label}`);
     lines.push(`شماره کارت: ${spaced}`);
-    lines.push(`مبلغ: ${formatToman(inv.totalAmount)}`);
+    lines.push(`مبلغ: ${formatToman(due)}`);
     lines.push('لطفاً پس از واریز رسید را ارسال کنید.');
   }
 

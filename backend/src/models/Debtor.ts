@@ -1,5 +1,12 @@
 import mongoose, { Schema, Document, Types } from 'mongoose';
 
+export interface IDebtorPayment {
+  amount: number;
+  method: 'cash' | 'card' | 'card_to_card';
+  date: Date;
+  note?: string;
+}
+
 export interface IDebtor extends Document {
   name: string;
   phone?: string;
@@ -11,9 +18,20 @@ export interface IDebtor extends Document {
   description?: string;
   isSettled: boolean;
   reminderSent: boolean;
+  payments: IDebtorPayment[];
   createdAt: Date;
   updatedAt: Date;
 }
+
+const DebtorPaymentSchema = new Schema<IDebtorPayment>(
+  {
+    amount: { type: Number, required: true, min: 0 },
+    method: { type: String, enum: ['cash', 'card', 'card_to_card'], default: 'cash' },
+    date: { type: Date, required: true, default: Date.now },
+    note: { type: String },
+  },
+  { _id: false }
+);
 
 const DebtorSchema = new Schema<IDebtor>(
   {
@@ -27,6 +45,7 @@ const DebtorSchema = new Schema<IDebtor>(
     description: { type: String },
     isSettled: { type: Boolean, default: false },
     reminderSent: { type: Boolean, default: false },
+    payments: { type: [DebtorPaymentSchema], default: [] },
   },
   { timestamps: true }
 );

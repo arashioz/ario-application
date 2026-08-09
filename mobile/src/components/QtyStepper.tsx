@@ -17,6 +17,7 @@ function sanitizeQty(text: string, allowNegative?: boolean): string {
   }
   let s = toEnglishDigits(text || '');
   const neg = s.trim().startsWith('-');
+  s = s.replace(/٫/g, '.').replace(/,/g, '.').replace(/٬/g, '');
   s = s.replace(/[^\d.]/g, '');
   const parts = s.split('.');
   if (parts.length > 2) s = parts[0] + '.' + parts.slice(1).join('');
@@ -45,7 +46,9 @@ export const QtyStepper: React.FC<Props> = ({
         type="text"
         inputMode="decimal"
         className="qty-input"
+        pattern={undefined}
         value={value}
+        placeholder="0.2"
         onIonInput={(e) => onChange(sanitizeQty(e.detail.value || '', allowNegative))}
       />
       <IonButton fill="outline" size="small" onClick={() => onChange(String(n + 1))}>
