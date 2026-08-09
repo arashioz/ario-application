@@ -18,7 +18,7 @@ function operatingExpenseAmount(type: string | undefined, amount: number): numbe
 }
 
 /**
- * نسیهٔ تسویه‌نشده در فروش/سود/تناژ روز حساب نمی‌شود.
+ * نسیهٔ تسویه‌نشده در فروش/سود/تناژ «نقدی روز» حساب نمی‌شود.
  * بعد از تسویه، مبلغ به نقد/کارت منتقل شده و روی همان تاریخ فاکتور می‌نشیند.
  */
 export function recognizedSaleMetrics(inv: {
@@ -52,6 +52,95 @@ export function recognizedSaleMetrics(inv: {
     card,
   };
 }
+
+/** تفکیک بار ارسال‌شده: بخش پرداخت‌شده در برابر نسیهٔ باز */
+export function splitSaleMetrics(inv: {
+  totalAmount?: number;
+  totalProfit?: number;
+  totalCost?: number;
+  totalKg?: number;
+  payment?: { cash?: number; card?: number; credit?: number } | null;
+}) {
+  const paid = recognizedSaleMetrics(inv);
+  const total = Math.max(0, Math.round(inv.totalAmount || 0));
+  const credit = Math.max(0, Math.round(inv.payment?.credit || 0));
+  const cRatio = total > 0 ? Math.min(1, credit / total) : 0;
+  return {
+    paid: {
+      amount: paid.amount,
+      profit: paid.profit,
+      cost: paid.cost,
+      kg: paid.kg,
+      cash: paid.cash,
+      card: paid.card,
+    },
+    credit: {
+      amount: credit,
+      profit: Math.round((inv.totalProfit || 0) * cRatio),
+      cost: Math.round((inv.totalCost || 0) * cRatio),
+      kg: Math.round((inv.totalKg || 0) * cRatio * 100) / 100,
+    },
+  };
+}
+
+export type ShippedBucket = {
+  sales: number;
+  profit: number;
+  cost: number;
+  kg: number;
+  invoiceCount: number;
+};
+
+function emptyShippedBucket(): ShippedBucket {
+  return { sales: 0, profit: 0, cost: 0, kg: 0, invoiceCount: 0 };
+}
+
+export function aggregateShippedSplit(
+  sales: Array<{
+    totalAmount?: number;
+    totalProfit?: number;
+    totalCost?: number;
+    totalKg?: number;
+    payment?: { cash?: number; card?: number; credit?: number } | null;
+  }>
+): { paid: ShippedBucket; credit: ShippedBucket } {
+  const paid = emptyShippedBucket();
+  const credit = emptyShippedBucket();
+  for (const sale of sales) {
+    const s = splitSaleMetrics(sale);
+    if (s.paid.amount > 0) {
+      paid.sales += s.paid.amount;
+      paid.profit += s.paid.profit;
+      paid.cost += s.paid.cost;
+      paid.kg += s.paid.kg;
+      paid.invoiceCount += 1;
+    }
+    if (s.credit.amount > 0) {
+      credit.sales += s.credit.amount;
+      credit.profit += s.credit.profit;
+      credit.cost += s.credit.cost;
+      credit.kg += s.credit.kg;
+      credit.invoiceCount += 1;
+    }
+  }
+  return {
+    paid: {
+      sales: Math.round(paid.sales),
+      profit: Math.round(paid.profit),
+      cost: Math.round(paid.cost),
+      kg: Math.round(paid.kg * 100) / 100,
+      invoiceCount: paid.invoiceCount,
+    },
+    credit: {
+      sales: Math.round(credit.sales),
+      profit: Math.round(credit.profit),
+      cost: Math.round(credit.cost),
+      kg: Math.round(credit.kg * 100) / 100,
+      invoiceCount: credit.invoiceCount,
+    },
+  };
+}
+
 
 type ProfitAvgBucket = {
   invoiceCount: number;
@@ -235,7 +324,10 @@ export async function getDashboard(
       getCompanyDebtSummary(),
       getDueChecksSummary(),
       getCustomerCrmInsights(targetDate),
-      SaleInvoice.find({ status: 'approved' })
+      SaleInvoice.find({
+        status: 'approved',
+        priceTier: { $in: ['supermarket', 'wholesale'] },
+      })
         .sort({ approvedAt: -1 })
         .limit(12)
         .select('invoiceNumber customerName customerAddress totalKg totalAmount driverId shippingNotes date'),
@@ -248,6 +340,7 @@ export async function getDashboard(
   const soldKg = sales.reduce((s, inv) => s + recognizedSaleMetrics(inv).kg, 0);
   const totalProfit = sales.reduce((s, inv) => s + recognizedSaleMetrics(inv).profit, 0);
   const totalCost = sales.reduce((s, inv) => s + recognizedSaleMetrics(inv).cost, 0);
+  const shippedSplit = aggregateShippedSplit(sales);
 
   const expenseByType: Record<string, number> = {};
   let totalExpenses = 0;
@@ -312,6 +405,8 @@ export async function getDashboard(
     cashBalance: settings.cashBalance,
     cardBalance: settings.cardBalance,
     salesCount: sales.length,
+    /** دو ستون خلاصه روز: پرداخت‌شده | نسیه ارسال‌شده */
+    shippedSplit,
     expenseCount: expenses.filter((e) => operatingExpenseAmount(e.type, e.amount) > 0).length,
     inventory,
     month: {
@@ -456,6 +551,7 @@ export async function getPeriodSummary(from: Date, to: Date, marketerId?: string
   const soldKg = sales.reduce((s, i) => s + recognizedSaleMetrics(i).kg, 0);
   const totalProfit = sales.reduce((s, i) => s + recognizedSaleMetrics(i).profit, 0);
   const totalCost = sales.reduce((s, i) => s + recognizedSaleMetrics(i).cost, 0);
+  const shippedSplit = aggregateShippedSplit(sales);
   const expenseByType: Record<string, number> = {};
   let totalExpenses = 0;
   let excludedExpenses = 0;
@@ -663,6 +759,7 @@ export async function getPeriodSummary(from: Date, to: Date, marketerId?: string
     netProfit: totalProfit - totalExpenses,
     invoiceCount,
     payment: { cash: cashSales, card: cardSales, credit: creditSales },
+    shippedSplit,
     golden: { count: goldenCount, amount: goldenAmount, kg: goldenKg },
     balances: {
       cashBalance: settings.cashBalance || 0,

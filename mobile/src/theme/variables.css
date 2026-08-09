@@ -145,6 +145,59 @@ body {
   gap: 10px;
   margin-bottom: 8px;
 }
+
+.day-split-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+.day-split-card {
+  border-radius: 14px;
+  padding: 12px 12px 10px;
+  border: 1px solid rgba(15, 39, 68, 0.08);
+  background: #fff;
+  box-shadow: 0 6px 18px rgba(15, 39, 68, 0.06);
+}
+.day-split-card.paid {
+  border-top: 3px solid #10b981;
+}
+.day-split-card.credit {
+  border-top: 3px solid #f59e0b;
+}
+.day-split-title {
+  font-size: 13px;
+  font-weight: 800;
+  color: #0f2744;
+}
+.day-split-sub {
+  margin: 2px 0 10px;
+  font-size: 11px;
+  color: #64748b;
+  line-height: 1.35;
+}
+.day-split-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 12px;
+  color: #475569;
+  border-top: 1px solid rgba(15, 39, 68, 0.05);
+}
+.day-split-row:first-of-type {
+  border-top: 0;
+}
+.day-split-row strong {
+  font-size: 12px;
+  font-weight: 800;
+  color: #0f2744;
+}
+.day-split-row strong.success {
+  color: #059669;
+}
+
 .ios-kpi {
   border-radius: var(--ios-radius);
   padding: 14px 12px;

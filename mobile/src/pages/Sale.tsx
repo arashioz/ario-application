@@ -21,6 +21,9 @@ import {
   IonSegment,
   IonSegmentButton,
   IonCheckbox,
+  IonList,
+  IonNote,
+  IonSpinner,
   useIonViewWillEnter,
   RefresherEventDetail,
 } from '@ionic/react';
@@ -289,6 +292,21 @@ const Sale: React.FC = () => {
   const [custModalMode, setCustModalMode] = useState<'create' | 'edit'>('create');
   const [custModalLat, setCustModalLat] = useState<number | null>(null);
   const [custModalLng, setCustModalLng] = useState<number | null>(null);
+  /** جستجوی مشتری قبل از محصول (سوپر/عمده) — نه لیست کامل */
+  const [custPickOpen, setCustPickOpen] = useState(false);
+  const [pickSearch, setPickSearch] = useState('');
+  const [pickCustomers, setPickCustomers] = useState<Customer[]>([]);
+  const [pickLookingUp, setPickLookingUp] = useState(false);
+  const [pendingProduct, setPendingProduct] = useState<Product | null>(null);
+  /** تسویه تکی هنگام ارسال خودکار (مثل صفحه ارسال) */
+  const [retailShipSettle, setRetailShipSettle] = useState<{
+    id: string;
+    invoiceNumber: string;
+    credit: number;
+  } | null>(null);
+  const [retailSettleKind, setRetailSettleKind] = useState<'paid' | 'credit'>('paid');
+  const [retailSettleMethod, setRetailSettleMethod] = useState<'cash' | 'card' | 'card_to_card'>('cash');
+  const [retailSettleBusy, setRetailSettleBusy] = useState(false);
   const [histDetailId, setHistDetailId] = useState<string | null>(null);
   const [bankCards, setBankCards] = useState<BankCard[]>([]);
   const [selectedBankCard, setSelectedBankCard] = useState(0);
@@ -340,6 +358,21 @@ const Sale: React.FC = () => {
     setCustModalOpen(true);
   };
 
+  const openCustomerPickModal = (product?: Product | null) => {
+    setPendingProduct(product || null);
+    setPickSearch('');
+    setPickCustomers([]);
+    setCustPickOpen(true);
+  };
+
+  const continueAfterCustomerPick = async (c: Customer) => {
+    await pickCustomer(c, { skipHist: true });
+    setCustPickOpen(false);
+    const p = pendingProduct;
+    setPendingProduct(null);
+    if (p) openProductModal(p);
+  };
+
   const saveCustomerFromModal = async () => {
     const name = custModalName.trim();
     const phone = normalizePhone(custModalPhone) || custModalPhone.trim();
@@ -385,7 +418,11 @@ const Sale: React.FC = () => {
       setCustModalOpen(false);
       setToast({ open: true, msg: 'مشتری اضافه شد', color: 'success' });
       if (created?._id) {
-        await pickCustomer(created);
+        if (pendingProduct || custPickOpen) {
+          await continueAfterCustomerPick(created);
+        } else {
+          await pickCustomer(created);
+        }
       } else {
         setCustomerName(name);
         setCustomerPhone(phone);
@@ -393,6 +430,12 @@ const Sale: React.FC = () => {
         setCustomerLat(custModalLat);
         setCustomerLng(custModalLng);
         setCustSearch(name);
+        setCustPickOpen(false);
+        if (pendingProduct) {
+          const p = pendingProduct;
+          setPendingProduct(null);
+          openProductModal(p);
+        }
       }
     } catch (e) {
       setToast({
@@ -646,6 +689,25 @@ const Sale: React.FC = () => {
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [custSearch]);
+
+  useEffect(() => {
+    if (!custPickOpen) return;
+    const q = pickSearch.trim();
+    if (q.length < 2) {
+      setPickCustomers([]);
+      setPickLookingUp(false);
+      return;
+    }
+    const t = setTimeout(() => {
+      setPickLookingUp(true);
+      void wsClient
+        .request<{ customers: Customer[] }>('customer.quick', { query: q })
+        .then((res) => setPickCustomers(res.customers || []))
+        .catch(console.warn)
+        .finally(() => setPickLookingUp(false));
+    }, 280);
+    return () => clearTimeout(t);
+  }, [custPickOpen, pickSearch]);
 
   const filtered = products.filter((p) => !search || p.name.includes(search));
 
@@ -1271,7 +1333,7 @@ const Sale: React.FC = () => {
     return () => clearTimeout(t);
   }, [lines, paymentMethod, customerId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const pickCustomer = async (c: Customer) => {
+  const pickCustomer = async (c: Customer, opts?: { skipHist?: boolean }) => {
     setCustomerId(c._id);
     setCustomerName(c.name);
     setCustomerPhone(c.phone || '');
@@ -1315,8 +1377,10 @@ const Sale: React.FC = () => {
         }))
       );
       if (res.suggest) applySuggest(res.suggest);
-      setHistOpen(true);
-      setHistDetailId(null);
+      if (!opts?.skipHist) {
+        setHistOpen(true);
+        setHistDetailId(null);
+      }
     } catch {
       setPrevInvoices([]);
     }
@@ -1431,10 +1495,10 @@ const Sale: React.FC = () => {
     if (needsCustomer && !customerId && !customerName.trim()) {
       setToast({
         open: true,
-        msg: 'اول مشتری را انتخاب یا اضافه کنید',
+        msg: 'اول مشتری را جستجو یا اضافه کنید',
         color: 'warning',
       });
-      openAddCustomerModal();
+      openCustomerPickModal(prodModalProduct);
       return;
     }
     const percent = tierPercent(p, calcTier);
@@ -1495,10 +1559,10 @@ const Sale: React.FC = () => {
 
   const addProduct = (p: Product) => {
     if (needsCustomer && !customerId && !customerName.trim()) {
-      openAddCustomerModal();
+      openCustomerPickModal(p);
       setToast({
         open: true,
-        msg: 'برای سوپر/عمده اول مشتری را اضافه کنید',
+        msg: 'برای سوپر/عمده اول مشتری را جستجو یا اضافه کنید',
         color: 'warning',
       });
       return;
@@ -1690,6 +1754,24 @@ const Sale: React.FC = () => {
               ? `فاکتور ${invoice.invoiceNumber} ثبت و ارسال شد — متن کپی شد`
               : `فاکتور ${invoice.invoiceNumber} ثبت شد — متن کپی شد، بفرستید برای مشتری`;
         setToast({ open: true, msg, color: 'success' });
+        if (
+          priceTier === 'retail' &&
+          invoice.status !== 'pending' &&
+          !(invoice as { queued?: boolean }).queued
+        ) {
+          let creditAmt = 0;
+          if (paymentMethod === 'credit') creditAmt = totals.net;
+          else if (paymentMethod === 'mixed') creditAmt = parseAmount(payCredit) || 0;
+          setRetailSettleKind(creditAmt > 0 ? 'credit' : 'paid');
+          setRetailSettleMethod(
+            paymentMethod === 'cash' ? 'cash' : paymentMethod === 'card_to_card' ? 'card_to_card' : 'card'
+          );
+          setRetailShipSettle({
+            id: invoice._id,
+            invoiceNumber: invoice.invoiceNumber,
+            credit: creditAmt,
+          });
+        }
         if (saleTab !== 'bulk') {
           await openPdf(invoice._id);
         }
@@ -2608,8 +2690,212 @@ const Sale: React.FC = () => {
           )}
         </div>
 
+        {/* تسویه فاکتور تکی (بدون صف ارسال) */}
+        <IonModal
+          isOpen={!!retailShipSettle}
+          onDidDismiss={() => setRetailShipSettle(null)}
+        >
+          <IonHeader>
+            <IonToolbar>
+              <IonTitle>پرداخت هنگام ارسال</IonTitle>
+              <IonButtons slot="end">
+                <IonButton onClick={() => setRetailShipSettle(null)}>بعداً</IonButton>
+              </IonButtons>
+            </IonToolbar>
+          </IonHeader>
+          <IonContent className="ion-padding">
+            {retailShipSettle && (
+              <>
+                <p>
+                  فاکتور تکی <b>{retailShipSettle.invoiceNumber}</b> بدون صف ارسال، مستقیم ارسال می‌شود.
+                  {retailShipSettle.credit > 0
+                    ? ` · نسیه فعلی ${formatToman(retailShipSettle.credit)}`
+                    : ''}
+                </p>
+                <p className="hint">این فاکتور پرداخت شده بود یا نسیه؟</p>
+                <div className="chip-row">
+                  <IonChip
+                    className={retailSettleKind === 'paid' ? 'ios-chip-active' : 'ios-chip'}
+                    onClick={() => setRetailSettleKind('paid')}
+                  >
+                    پرداخت شده
+                  </IonChip>
+                  <IonChip
+                    className={retailSettleKind === 'credit' ? 'ios-chip-active' : 'ios-chip'}
+                    onClick={() => setRetailSettleKind('credit')}
+                  >
+                    نسیه
+                  </IonChip>
+                </div>
+                {retailSettleKind === 'paid' && (
+                  <>
+                    <p className="hint" style={{ marginTop: 12 }}>
+                      روش دریافت (نسیه کم می‌شود)
+                    </p>
+                    <div className="chip-row">
+                      {(
+                        [
+                          ['cash', 'نقد'],
+                          ['card', 'پوز'],
+                          ['card_to_card', 'کارت‌به‌کارت'],
+                        ] as const
+                      ).map(([m, label]) => (
+                        <IonChip
+                          key={m}
+                          className={retailSettleMethod === m ? 'ios-chip-active' : 'ios-chip'}
+                          onClick={() => setRetailSettleMethod(m)}
+                        >
+                          {label}
+                        </IonChip>
+                      ))}
+                    </div>
+                  </>
+                )}
+                {retailSettleKind === 'credit' && (
+                  <p className="hint" style={{ marginTop: 12 }}>
+                    نسیه روی فاکتور می‌ماند و در بدهکاران ثبت می‌شود.
+                  </p>
+                )}
+                <IonButton
+                  expand="block"
+                  className="ios-primary-btn ion-margin-top"
+                  disabled={retailSettleBusy}
+                  onClick={() => {
+                    if (!retailShipSettle) return;
+                    setRetailSettleBusy(true);
+                    void wsClient
+                      .request(
+                        'sale.ship',
+                        {
+                          id: retailShipSettle.id,
+                          shippingBy: 'none',
+                          shippingNotes: 'فروش تکی — بدون صف ارسال',
+                          settlement: retailSettleKind,
+                          settleMethod:
+                            retailSettleKind === 'paid' ? retailSettleMethod : undefined,
+                        },
+                        { clientMutationId: newMutationId(), queueIfOffline: true }
+                      )
+                      .then(() => {
+                        setToast({
+                          open: true,
+                          msg:
+                            retailSettleKind === 'paid'
+                              ? 'تسویه و ارسال تکی ثبت شد'
+                              : 'ارسال تکی با نسیه ثبت شد',
+                          color: 'success',
+                        });
+                        setRetailShipSettle(null);
+                        setListRefreshKey((k) => k + 1);
+                      })
+                      .catch((e) =>
+                        setToast({
+                          open: true,
+                          msg: e instanceof Error ? e.message : 'تسویه نشد',
+                          color: 'danger',
+                        })
+                      )
+                      .finally(() => setRetailSettleBusy(false));
+                  }}
+                >
+                  {retailSettleBusy ? '…' : 'تأیید'}
+                </IonButton>
+              </>
+            )}
+          </IonContent>
+        </IonModal>
+
+        {/* انتخاب مشتری با جستجو (سوپر / عمده) — بدون لیست کامل */}
+        <IonModal
+          isOpen={custPickOpen}
+          onDidDismiss={() => {
+            setCustPickOpen(false);
+            setPickSearch('');
+            setPickCustomers([]);
+            setPendingProduct(null);
+          }}
+        >
+          <IonHeader>
+            <IonToolbar color="primary">
+              <IonTitle>انتخاب مشتری</IonTitle>
+              <IonButtons slot="end">
+                <IonButton
+                  onClick={() => {
+                    setCustPickOpen(false);
+                    setPickSearch('');
+                    setPickCustomers([]);
+                    setPendingProduct(null);
+                  }}
+                >
+                  بستن
+                </IonButton>
+              </IonButtons>
+            </IonToolbar>
+          </IonHeader>
+          <IonContent className="ion-padding">
+            <IonSearchbar
+              value={pickSearch}
+              debounce={0}
+              placeholder="جستجوی نام، موبایل یا کد فاکتور…"
+              onIonInput={(e) => setPickSearch(e.detail.value || '')}
+            />
+            <IonButton
+              expand="block"
+              fill="solid"
+              color="success"
+              className="ion-margin-bottom"
+              onClick={() => {
+                const digits = normalizePhone(pickSearch).replace(/\D/g, '');
+                openAddCustomerModal(digits.length >= 8 ? digits : undefined);
+              }}
+            >
+              <IonIcon icon={personAddOutline} slot="start" />
+              افزودن مشتری جدید
+            </IonButton>
+            {pickLookingUp && (
+              <div className="ion-text-center ion-padding">
+                <IonSpinner name="crescent" />
+              </div>
+            )}
+            {!pickLookingUp && pickSearch.trim().length < 2 && (
+              <IonNote color="medium">
+                حداقل ۲ حرف جستجو کنید — لیست کامل مشتریان نمایش داده نمی‌شود.
+              </IonNote>
+            )}
+            {!pickLookingUp && pickSearch.trim().length >= 2 && pickCustomers.length === 0 && (
+              <IonNote color="medium">
+                مشتری‌ای پیدا نشد. می‌توانید «افزودن مشتری جدید» را بزنید.
+              </IonNote>
+            )}
+            <IonList>
+              {pickCustomers.map((c) => (
+                <IonItem
+                  key={c._id}
+                  button
+                  detail
+                  onClick={() => void continueAfterCustomerPick(c)}
+                >
+                  <IonLabel>
+                    <h3>{c.name}</h3>
+                    <p>
+                      {c.phone || '—'}
+                      {c.address ? ` · ${c.address}` : ''}
+                    </p>
+                  </IonLabel>
+                </IonItem>
+              ))}
+            </IonList>
+          </IonContent>
+        </IonModal>
+
         {/* پاپ‌آپ افزودن مشتری */}
-        <IonModal isOpen={custModalOpen} onDidDismiss={() => setCustModalOpen(false)}>
+        <IonModal
+          isOpen={custModalOpen}
+          onDidDismiss={() => {
+            setCustModalOpen(false);
+            if (!custPickOpen) setPendingProduct(null);
+          }}
+        >
           <IonHeader>
             <IonToolbar>
               <IonTitle>{custModalMode === 'edit' ? 'ویرایش مشتری' : 'افزودن مشتری'}</IonTitle>

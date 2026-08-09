@@ -22,14 +22,23 @@ function isPastInvoiceDate(date: Date): boolean {
   return startOfDay(date).getTime() < startOfDay(new Date()).getTime();
 }
 
-async function autoShipIfPastDate(invoice: InstanceType<typeof SaleInvoice>) {
-  if (!invoice?.date || !isPastInvoiceDate(invoice.date)) return invoice;
+/** تکی‌ها صف ارسال ندارند؛ تاریخ گذشته هم مستقیم ارسال می‌شود */
+function shouldSkipShippingQueue(invoice: InstanceType<typeof SaleInvoice>): boolean {
+  const tier = (invoice.priceTier || 'retail') as PriceTier;
+  if (tier === 'retail') return true;
+  return !!invoice.date && isPastInvoiceDate(invoice.date);
+}
+
+async function autoShipIfNoQueue(invoice: InstanceType<typeof SaleInvoice>) {
+  if (!shouldSkipShippingQueue(invoice)) return invoice;
   if (invoice.status === 'pending' || invoice.status === 'cancelled' || invoice.status === 'inactive') {
     return invoice;
   }
   if (invoice.status === 'shipped' || invoice.status === 'delivered') return invoice;
   invoice.status = 'shipped';
-  invoice.shippedAt = invoice.date;
+  invoice.shippedAt =
+    invoice.date && isPastInvoiceDate(invoice.date) ? invoice.date : new Date();
+  if (!invoice.shippingBy) invoice.shippingBy = 'none';
   await invoice.save();
   return invoice;
 }
@@ -425,7 +434,7 @@ export async function createSaleInvoice(data: {
 
   if (!requiresApproval) {
     await applyStockAndMoney(invoice);
-    await autoShipIfPastDate(invoice);
+    await autoShipIfNoQueue(invoice);
     if (data.marketerId && data.createdByRole === 'marketer') {
       try {
         const { creditSaleCommission } = await import('./platformService');
@@ -480,7 +489,7 @@ export async function approveSale(
 
   await invoice.save();
   await maybeRecordShippingExpense(invoice);
-  await autoShipIfPastDate(invoice);
+  await autoShipIfNoQueue(invoice);
 
   if (invoice.marketerId) {
     try {
@@ -1074,6 +1083,8 @@ export async function listSaleInvoices(opts?: {
   marketerId?: string;
   driverId?: string;
   status?: SaleStatus;
+  /** صف ارسال: فقط سوپرمارکت/عمده (+ تکیِ در انتظار تأیید) */
+  shippingQueue?: boolean;
 }) {
   const filter: Record<string, unknown> = {};
   if (opts?.from || opts?.to) {
@@ -1085,6 +1096,14 @@ export async function listSaleInvoices(opts?: {
   if (opts?.marketerId) filter.marketerId = opts.marketerId;
   if (opts?.driverId) filter.driverId = opts.driverId;
   if (opts?.status) filter.status = opts.status;
+  if (opts?.shippingQueue) {
+    // تکی‌ها صف ارسال ندارند؛ فقط اگر هنوز pending باشند برای تأیید می‌آیند
+    filter.$or = [
+      { priceTier: { $in: ['supermarket', 'wholesale'] } },
+      { priceTier: 'retail', status: 'pending' },
+      { priceTier: { $exists: false }, status: 'pending' },
+    ];
+  }
   return SaleInvoice.find(filter).sort({ createdAt: -1 });
 }
 

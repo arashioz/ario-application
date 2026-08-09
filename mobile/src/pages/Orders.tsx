@@ -114,6 +114,7 @@ const Orders: React.FC = () => {
   const { isAdmin } = useAuth();
   const [tab, setTab] = useState<'pending' | 'approved' | 'shipped' | 'delivered' | 'all'>('approved');
   const [period, setPeriod] = useState<InvoicePeriod>('all');
+  const [marketerPanelEnabled, setMarketerPanelEnabled] = useState(true);
   const [list, setList] = useState<SaleInv[]>([]);
   const [drivers, setDrivers] = useState<Driver[]>([]);
   const [shipNotes, setShipNotes] = useState<Record<string, string>>({});
@@ -127,10 +128,23 @@ const Orders: React.FC = () => {
   const [shippingBusy, setShippingBusy] = useState(false);
   const [seedEdit, setSeedEdit] = useState<SaleInvRow | null>(null);
 
+  const loadFlags = useCallback(async () => {
+    try {
+      const s = await wsClient.request<{ marketerPanelEnabled?: boolean }>('settings.get', {});
+      setMarketerPanelEnabled(s.marketerPanelEnabled !== false);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   const load = useCallback(async () => {
     const status = tab === 'all' ? undefined : tab;
     const range = periodRange(period);
-    const data = await wsClient.request<SaleInv[]>('sale.list', { status, ...range });
+    const data = await wsClient.request<SaleInv[]>('sale.list', {
+      status,
+      shippingQueue: true,
+      ...range,
+    });
     setList(data);
   }, [tab, period]);
 
@@ -141,6 +155,7 @@ const Orders: React.FC = () => {
   }, [isAdmin]);
 
   useIonViewWillEnter(() => {
+    void loadFlags().catch(console.warn);
     void load().catch(console.warn);
     void loadDrivers().catch(console.warn);
   });
@@ -149,6 +164,9 @@ const Orders: React.FC = () => {
     void load().catch(console.warn);
   }, [load]);
 
+  useEffect(() => {
+    if (!marketerPanelEnabled && tab === 'pending') setTab('approved');
+  }, [marketerPanelEnabled, tab]);
   useEffect(() => {
     const unsub = wsClient.onEvent('data_changed', (payload: unknown) => {
       const p = payload as { entity?: string };
@@ -348,9 +366,11 @@ const Orders: React.FC = () => {
             <IonSegmentButton value="approved">
               <IonLabel>آماده ارسال</IonLabel>
             </IonSegmentButton>
-            <IonSegmentButton value="pending">
-              <IonLabel>تأیید</IonLabel>
-            </IonSegmentButton>
+            {marketerPanelEnabled && (
+              <IonSegmentButton value="pending">
+                <IonLabel>تأیید</IonLabel>
+              </IonSegmentButton>
+            )}
             <IonSegmentButton value="shipped">
               <IonLabel>ارسال‌شده</IonLabel>
             </IonSegmentButton>

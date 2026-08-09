@@ -69,6 +69,22 @@ interface Dash {
   periodLabel?: string;
   salesCount: number;
   pendingApprovals?: number;
+  shippedSplit?: {
+    paid: {
+      sales: number;
+      profit: number;
+      cost: number;
+      kg: number;
+      invoiceCount: number;
+    };
+    credit: {
+      sales: number;
+      profit: number;
+      cost: number;
+      kg: number;
+      invoiceCount: number;
+    };
+  };
   inventory?: {
     totalKg: number;
     totalTons: number;
@@ -362,36 +378,68 @@ const Dashboard: React.FC = () => {
                   این ماه
                 </IonChip>
               </div>
-              <div className="ios-kpi-grid">
-                <div className="ios-kpi blue">
-                  <div className="k-label">فروش</div>
-                  <div className="k-value">{formatToman(data.totalSales)}</div>
-                  {(data.creditSales || 0) > 0 && (
-                    <div className="ios-caption" style={{ marginTop: 4 }}>
-                      نسیه باز جدا: {formatToman(Number(data.creditSales || 0))}
+              <div className="day-split-grid">
+                <div className="day-split-card paid">
+                  <div className="day-split-title">پرداخت‌شده</div>
+                  <p className="day-split-sub">ارسال + نقد / پوز / کارت</p>
+                  <div className="day-split-row">
+                    <span>فروش</span>
+                    <strong>
+                      {formatToman(data.shippedSplit?.paid.sales ?? data.totalSales)}
+                    </strong>
+                  </div>
+                  <div className="day-split-row">
+                    <span>تناژ</span>
+                    <strong>{formatKg(data.shippedSplit?.paid.kg ?? data.soldKg)}</strong>
+                  </div>
+                  {showProfit && (
+                    <div className="day-split-row">
+                      <span>سود</span>
+                      <strong className="success">
+                        {formatToman(data.shippedSplit?.paid.profit ?? data.totalProfit ?? 0)}
+                      </strong>
                     </div>
                   )}
-                </div>
-                <div className="ios-kpi orange">
-                  <div className="k-label">تناژ</div>
-                  <div className="k-value">{formatKg(data.soldKg)}</div>
-                </div>
-                {showProfit ? (
-                  <div className="ios-kpi green">
-                    <div className="k-label">سود فروش</div>
-                    <div className="k-value">{formatToman(data.totalProfit || 0)}</div>
+                  <div className="day-split-row">
+                    <span>فاکتور</span>
+                    <strong>
+                      {data.shippedSplit?.paid.invoiceCount ?? data.salesCount}
+                    </strong>
                   </div>
-                ) : (
-                  <div className="ios-kpi green dash-kpi-locked">
-                    <div className="k-label">سود فروش</div>
-                    <div className="k-value">••••</div>
+                </div>
+                <div className="day-split-card credit">
+                  <div className="day-split-title">نسیه ارسال‌شده</div>
+                  <p className="day-split-sub">بار رفته، پول هنوز نیامده</p>
+                  <div className="day-split-row">
+                    <span>فروش</span>
+                    <strong>
+                      {formatToman(
+                        data.shippedSplit?.credit.sales ?? Number(data.creditSales || 0)
+                      )}
+                    </strong>
                   </div>
-                )}
-                <div className="ios-kpi gray">
-                  <div className="k-label">فاکتور</div>
-                  <div className="k-value">{data.salesCount}</div>
+                  <div className="day-split-row">
+                    <span>تناژ</span>
+                    <strong>{formatKg(data.shippedSplit?.credit.kg ?? 0)}</strong>
+                  </div>
+                  {showProfit && (
+                    <div className="day-split-row">
+                      <span>سود در نسیه</span>
+                      <strong>
+                        {formatToman(data.shippedSplit?.credit.profit ?? 0)}
+                      </strong>
+                    </div>
+                  )}
+                  <div className="day-split-row">
+                    <span>فاکتور</span>
+                    <strong>{data.shippedSplit?.credit.invoiceCount ?? 0}</strong>
+                  </div>
                 </div>
               </div>
+              <p className="hint" style={{ marginTop: 8 }}>
+                سود خالص پایین فقط از ستون پرداخت‌شده منهای هزینه است. نسیه تا تسویه در صندوق نقدی
+                روز نمی‌آید.
+              </p>
 
               {showProfit && data.profitAverages && (
                 <div className="ios-glass-card" style={{ marginTop: 10 }}>

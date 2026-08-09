@@ -735,6 +735,7 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
           marketerId,
           driverId,
           status: p.status as never,
+          shippingQueue: p.shippingQueue === true,
         }),
       };
     }
