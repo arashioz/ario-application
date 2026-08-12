@@ -413,53 +413,41 @@ const Dashboard: React.FC = () => {
                   className={kpiPeriod === 'week' ? 'ios-chip-active' : 'ios-chip'}
                   onClick={() => setPeriod('week')}
                 >
-                  ۷ روز تا این تاریخ
+                  ۷ روز
                 </IonChip>
                 <IonChip
                   className={kpiPeriod === 'month' ? 'ios-chip-active' : 'ios-chip'}
                   onClick={() => setPeriod('month')}
                 >
-                  این ماه تا این تاریخ
+                  این ماه
                 </IonChip>
               </div>
 
-              <div className="day-split-grid stack">
+              <div className="day-split-grid">
                 <div className="day-split-card paid">
-                  <div className="day-split-title">
-                    {kpiPeriod === 'today' ? 'فروش این روز' : kpiPeriod === 'week' ? 'فروش این ۷ روز' : 'فروش این ماه'}
-                  </div>
-                  <p className="day-split-sub">فاکتورهایی که تاریخ‌شان در این بازه است — بار رفته</p>
+                  <div className="day-split-title">پرداخت‌شده</div>
+                  <p className="day-split-sub">ارسال + نقد / پوز / کارت</p>
                   <div className="day-split-row">
-                    <span>مبلغ فروخته‌شده</span>
+                    <span>فروش</span>
                     <strong>
-                      {formatToman(data.dayLedger?.soldGross ?? data.totalSales)}
-                    </strong>
-                  </div>
-                  <div className="day-split-row">
-                    <span>نقد / پوز همان فاکتورها</span>
-                    <strong>{formatToman(data.dayLedger?.soldPaid ?? data.shippedSplit?.paid.sales ?? 0)}</strong>
-                  </div>
-                  <div className="day-split-row">
-                    <span>نسیه همین فاکتورها</span>
-                    <strong>
-                      {formatToman(data.dayLedger?.soldCredit ?? data.shippedSplit?.credit.sales ?? 0)}
+                      {formatToman(data.shippedSplit?.paid.sales ?? data.dayLedger?.soldPaid ?? data.totalSales)}
                     </strong>
                   </div>
                   <div className="day-split-row">
                     <span>تناژ</span>
-                    <strong>{formatKg(data.dayLedger?.soldKg ?? data.soldKg)}</strong>
+                    <strong>{formatKg(data.shippedSplit?.paid.kg ?? data.soldKg)}</strong>
                   </div>
                   {showProfit && (
                     <div className="day-split-row">
-                      <span>سود این فروش</span>
+                      <span>سود</span>
                       <strong className="success">
-                        {formatToman(data.dayLedger?.soldProfit ?? data.totalProfit ?? 0)}
+                        {formatToman(data.shippedSplit?.paid.profit ?? data.totalProfit ?? 0)}
                       </strong>
                     </div>
                   )}
                   <div className="day-split-row">
                     <span>فاکتور</span>
-                    <strong>{data.dayLedger?.soldCount ?? data.salesCount}</strong>
+                    <strong>{data.shippedSplit?.paid.invoiceCount ?? data.salesCount}</strong>
                   </div>
                   <IonButton
                     expand="block"
@@ -468,7 +456,7 @@ const Dashboard: React.FC = () => {
                     className="ion-margin-top"
                     onClick={() =>
                       history.push(
-                        `/day-ledger?period=${kpiPeriod}&date=${encodeURIComponent(viewDate)}&tab=sold`
+                        `/day-ledger?period=${kpiPeriod}&date=${encodeURIComponent(viewDate)}&tab=paid`
                       )
                     }
                   >
@@ -476,25 +464,33 @@ const Dashboard: React.FC = () => {
                   </IonButton>
                 </div>
 
-                <div className="day-split-card collect">
-                  <div className="day-split-title">
-                    {kpiPeriod === 'today' ? 'تسویه نسیه این روز' : 'تسویه نسیه این بازه'}
-                  </div>
-                  <p className="day-split-sub">
-                    نسیهٔ قبل که در این تاریخ پاس شده — روی فروش این روز حساب نمی‌شود
-                  </p>
+                <div className="day-split-card credit">
+                  <div className="day-split-title">نسیه ارسال‌شده</div>
+                  <p className="day-split-sub">بار رفته، پول هنوز نیامده</p>
                   <div className="day-split-row">
-                    <span>وصول نسیهٔ قبلی</span>
+                    <span>فروش</span>
                     <strong>
-                      {formatToman(data.dayLedger?.priorCreditCollected ?? 0)}
+                      {formatToman(
+                        data.shippedSplit?.credit.sales ??
+                          data.dayLedger?.soldCredit ??
+                          Number(data.creditSales || 0)
+                      )}
                     </strong>
                   </div>
-                  {(data.dayLedger?.sameDayCreditCollected || 0) > 0 && (
+                  <div className="day-split-row">
+                    <span>تناژ</span>
+                    <strong>{formatKg(data.shippedSplit?.credit.kg ?? 0)}</strong>
+                  </div>
+                  {showProfit && (
                     <div className="day-split-row">
-                      <span>نسیه همین‌روز که امروز گرفته شد</span>
-                      <strong>{formatToman(data.dayLedger?.sameDayCreditCollected || 0)}</strong>
+                      <span>سود در نسیه</span>
+                      <strong>{formatToman(data.shippedSplit?.credit.profit ?? 0)}</strong>
                     </div>
                   )}
+                  <div className="day-split-row">
+                    <span>فاکتور</span>
+                    <strong>{data.shippedSplit?.credit.invoiceCount ?? 0}</strong>
+                  </div>
                   <IonButton
                     expand="block"
                     fill="outline"
@@ -502,17 +498,17 @@ const Dashboard: React.FC = () => {
                     className="ion-margin-top"
                     onClick={() =>
                       history.push(
-                        `/day-ledger?period=${kpiPeriod}&date=${encodeURIComponent(viewDate)}&tab=collect`
+                        `/day-ledger?period=${kpiPeriod}&date=${encodeURIComponent(viewDate)}&tab=credit`
                       )
                     }
                   >
-                    لیست تسویه‌ها
+                    لیست فاکتورها
                   </IonButton>
                 </div>
               </div>
               <p className="hint" style={{ marginTop: 8 }}>
-                فروش هر روز روی تاریخ فاکتور می‌ماند. اگر تاریخ قدیم بزنی همان روز را می‌بینی.
-                پولی که از نسیهٔ روزهای قبل امروز بیاید این‌جا جدا نوشته می‌شود.
+                سود خالص پایین فقط از ستون پرداخت‌شده منهای هزینه است. نسیه تا تسویه در صندوق نقدی روز
+                نمی‌آید.
               </p>
 
               {showProfit && data.profitAverages && (

@@ -73,6 +73,54 @@ export function formatDate(date: string | Date): string {
   return new Date(date).toLocaleDateString('fa-IR');
 }
 
+/** جستجوی فاکتور: نام / مبلغ / تاریخ / شماره فاکتور / موبایل */
+export function matchesInvoiceSearch(
+  q: string,
+  row: {
+    invoiceNumber?: string;
+    customerName?: string;
+    customerPhone?: string;
+    supplier?: string;
+    totalAmount?: number;
+    date?: string | Date;
+  }
+): boolean {
+  const raw = toEnglishDigits(q || '').trim();
+  if (!raw) return true;
+  const needle = raw.toLowerCase();
+  const digits = digitsOnly(raw);
+
+  const name = String(row.customerName || row.supplier || '').toLowerCase();
+  const phone = digitsOnly(row.customerPhone || '');
+  const invNo = toEnglishDigits(String(row.invoiceNumber || '')).toLowerCase();
+  const amount = String(Math.round(row.totalAmount || 0));
+  const amountGrouped = amount.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+
+  let dateFa = '';
+  let dateIso = '';
+  if (row.date) {
+    const d = new Date(row.date);
+    if (!Number.isNaN(d.getTime())) {
+      dateFa = d.toLocaleDateString('fa-IR');
+      dateIso = d.toISOString().slice(0, 10); // YYYY-MM-DD
+    }
+  }
+
+  if (name.includes(needle)) return true;
+  if (invNo.includes(needle)) return true;
+  if (digits) {
+    if (phone.includes(digits)) return true;
+    if (amount.includes(digits)) return true;
+    if (amountGrouped.includes(digits)) return true;
+    if (digitsOnly(dateFa).includes(digits)) return true;
+    if (dateIso.replace(/-/g, '').includes(digits)) return true;
+    if (dateIso.includes(needle)) return true;
+  }
+  if (dateFa.includes(raw) || dateFa.includes(needle)) return true;
+  if (dateIso.includes(needle)) return true;
+  return false;
+}
+
 export function formatDateTime(date: string | Date): string {
   return new Date(date).toLocaleString('fa-IR', {
     year: 'numeric',

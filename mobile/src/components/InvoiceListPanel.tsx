@@ -16,6 +16,7 @@ import {
   IonToggle,
   IonToolbar,
   IonButtons,
+  IonSearchbar,
 } from '@ionic/react';
 import { createOutline, eyeOutline, trashOutline, documentOutline } from 'ionicons/icons';
 import { wsClient } from '../api/ws';
@@ -29,6 +30,7 @@ import {
   INVOICE_PERIODS,
   periodRange,
   InvoicePeriod,
+  matchesInvoiceSearch,
 } from '../utils/format';
 import { buildInvoiceShareText, copyText, pickDefaultBankCard, invoiceIsSettled } from '../utils/invoiceShare';
 import { useAuth } from '../auth/AuthContext';
@@ -162,6 +164,7 @@ export const InvoiceListPanel: React.FC<Props> = ({
 }) => {
   const { isAdmin } = useAuth();
   const [period, setPeriod] = useState<InvoicePeriod>('today');
+  const [search, setSearch] = useState('');
   const [sales, setSales] = useState<SaleInvRow[]>([]);
   const [purchases, setPurchases] = useState<PurchaseInvRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -228,10 +231,24 @@ export const InvoiceListPanel: React.FC<Props> = ({
       const range = periodRange(period);
       if (kind === 'sale') {
         const list = await wsClient.request<SaleInvRow[]>('sale.list', range);
-        setSales(Array.isArray(list) ? list : []);
+        const rows = Array.isArray(list) ? list : [];
+        rows.sort((a, b) => {
+          const da = new Date(a.date).getTime();
+          const db = new Date(b.date).getTime();
+          if (db !== da) return db - da;
+          return String(b._id).localeCompare(String(a._id));
+        });
+        setSales(rows);
       } else {
         const list = await wsClient.request<PurchaseInvRow[]>('purchase.list', range);
-        setPurchases(Array.isArray(list) ? list : []);
+        const rows = Array.isArray(list) ? list : [];
+        rows.sort((a, b) => {
+          const da = new Date(a.date).getTime();
+          const db = new Date(b.date).getTime();
+          if (db !== da) return db - da;
+          return String(b._id).localeCompare(String(a._id));
+        });
+        setPurchases(rows);
       }
     } catch (e) {
       onToast?.(e instanceof Error ? e.message : 'خطا در لود فاکتورها', 'danger');
@@ -246,14 +263,20 @@ export const InvoiceListPanel: React.FC<Props> = ({
   }, [load, refreshKey]);
 
   const list = kind === 'sale' ? sales : purchases;
+  const filtered = useMemo(() => {
+    if (kind === 'sale') {
+      return (list as SaleInvRow[]).filter((inv) => matchesInvoiceSearch(search, inv));
+    }
+    return (list as PurchaseInvRow[]).filter((inv) => matchesInvoiceSearch(search, inv));
+  }, [kind, list, search]);
   const summary = useMemo(() => {
-    const rows = list as Array<{ totalAmount?: number; totalKg?: number }>;
+    const rows = filtered as Array<{ totalAmount?: number; totalKg?: number }>;
     return {
       count: rows.length,
       amount: rows.reduce((s, r) => s + (r.totalAmount || 0), 0),
       kg: rows.reduce((s, r) => s + (r.totalKg || 0), 0),
     };
-  }, [list]);
+  }, [filtered]);
   useEffect(() => {
     const unsub = wsClient.onEvent('data_changed', (payload: unknown) => {
       const p = payload as { entity?: string };
@@ -482,6 +505,14 @@ export const InvoiceListPanel: React.FC<Props> = ({
         ))}
       </div>
 
+      <IonSearchbar
+        value={search}
+        placeholder="جستجو: نام، مبلغ، تاریخ…"
+        className="ios-search"
+        debounce={200}
+        onIonInput={(e) => setSearch(e.detail.value || '')}
+      />
+
       <div className="inv-summary-bar">
         <div>
           <span className="inv-sum-label">تعداد</span>
@@ -498,15 +529,17 @@ export const InvoiceListPanel: React.FC<Props> = ({
       </div>
 
       <div className="inv-card-list">
-        {loading && list.length === 0 && (
+        {loading && filtered.length === 0 && (
           <div style={{ textAlign: 'center', padding: 12 }}>
             <IonSpinner name="crescent" />
           </div>
         )}
-        {!loading && list.length === 0 && <p className="hint">در این بازه فاکتوری نیست</p>}
+        {!loading && filtered.length === 0 && (
+          <p className="hint">{search.trim() ? 'چیزی پیدا نشد' : 'در این بازه فاکتوری نیست'}</p>
+        )}
 
         {kind === 'sale' &&
-          (list as SaleInvRow[]).slice(0, 80).map((inv) => (
+          (filtered as SaleInvRow[]).slice(0, 80).map((inv) => (
             <div key={inv._id} className={`inv-card${inv.isGolden ? ' gold' : ''}`}>
               <div className="inv-card-top">
                 <div>
@@ -571,7 +604,7 @@ export const InvoiceListPanel: React.FC<Props> = ({
           ))}
 
         {kind === 'purchase' &&
-          (list as PurchaseInvRow[]).slice(0, 80).map((inv) => (
+          (filtered as PurchaseInvRow[]).slice(0, 80).map((inv) => (
             <div key={inv._id} className="inv-card">
               <div className="inv-card-top">
                 <div>

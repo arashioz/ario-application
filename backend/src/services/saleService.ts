@@ -1202,7 +1202,7 @@ export async function listSaleInvoices(opts?: {
       { priceTier: { $exists: false }, status: 'pending' },
     ];
   }
-  return SaleInvoice.find(filter).sort({ createdAt: -1 });
+  return SaleInvoice.find(filter).sort({ date: -1, createdAt: -1 });
 }
 
 export async function recordDebtPayment(

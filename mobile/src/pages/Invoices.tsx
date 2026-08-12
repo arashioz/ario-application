@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   IonPage,
   IonHeader,
@@ -22,13 +22,25 @@ import {
   IonToggle,
   IonSelect,
   IonSelectOption,
+  IonSearchbar,
   useIonViewWillEnter,
   RefresherEventDetail,
 } from '@ionic/react';
 import { createOutline, documentOutline, eyeOutline, trashOutline } from 'ionicons/icons';
 import { wsClient } from '../api/ws';
 import { useAuth } from '../auth/AuthContext';
-import { formatToman, formatKg, formatDate, formatMoneyInput, parseAmount, normalizePhone, INVOICE_PERIODS, periodRange, InvoicePeriod } from '../utils/format';
+import {
+  formatToman,
+  formatKg,
+  formatDate,
+  formatMoneyInput,
+  parseAmount,
+  normalizePhone,
+  INVOICE_PERIODS,
+  periodRange,
+  InvoicePeriod,
+  matchesInvoiceSearch,
+} from '../utils/format';
 import { LocationPicker } from '../components/LocationPicker';
 import { DigitInput } from '../components/DigitInput';
 import { QtyStepper } from '../components/QtyStepper';
@@ -143,6 +155,7 @@ const Invoices: React.FC = () => {
   const { isAdmin } = useAuth();
   const [mode, setMode] = useState<'sale' | 'purchase'>('sale');
   const [period, setPeriod] = useState<InvoicePeriod>('today');
+  const [search, setSearch] = useState('');
   const [sales, setSales] = useState<SaleRow[]>([]);
   const [purchases, setPurchases] = useState<PurchaseRow[]>([]);
   const [page, setPage] = useState(1);
@@ -292,8 +305,22 @@ const Invoices: React.FC = () => {
           ? wsClient.request<PurchaseRow[]>('purchase.list', range)
           : Promise.resolve([] as PurchaseRow[]),
       ]);
-      setSales(Array.isArray(s) ? s : []);
-      setPurchases(Array.isArray(p) ? p : []);
+      const salesRows = Array.isArray(s) ? [...s] : [];
+      salesRows.sort((a, b) => {
+        const da = new Date(a.date).getTime();
+        const db = new Date(b.date).getTime();
+        if (db !== da) return db - da;
+        return String(b._id).localeCompare(String(a._id));
+      });
+      const purchaseRows = Array.isArray(p) ? [...p] : [];
+      purchaseRows.sort((a, b) => {
+        const da = new Date(a.date).getTime();
+        const db = new Date(b.date).getTime();
+        if (db !== da) return db - da;
+        return String(b._id).localeCompare(String(a._id));
+      });
+      setSales(salesRows);
+      setPurchases(purchaseRows);
     } catch (e) {
       setToast({
         open: true,
@@ -314,8 +341,14 @@ const Invoices: React.FC = () => {
   }, [period, load]);
 
   const list = mode === 'sale' ? sales : purchases;
-  const pages = Math.max(1, Math.ceil(list.length / PAGE));
-  const slice = list.slice((page - 1) * PAGE, page * PAGE);
+  const filtered = useMemo(() => {
+    if (mode === 'sale') {
+      return (list as SaleRow[]).filter((inv) => matchesInvoiceSearch(search, inv));
+    }
+    return (list as PurchaseRow[]).filter((inv) => matchesInvoiceSearch(search, inv));
+  }, [mode, list, search]);
+  const pages = Math.max(1, Math.ceil(filtered.length / PAGE));
+  const slice = filtered.slice((page - 1) * PAGE, page * PAGE);
 
   const openPdf = async (id: string) => {
     try {
@@ -486,15 +519,26 @@ const Invoices: React.FC = () => {
             ))}
           </div>
 
+          <IonSearchbar
+            value={search}
+            placeholder="جستجو: نام، مبلغ، تاریخ…"
+            className="ios-search"
+            debounce={200}
+            onIonInput={(e) => {
+              setSearch(e.detail.value || '');
+              setPage(1);
+            }}
+          />
+
           <div className="inv-summary-bar">
             <div>
               <span className="inv-sum-label">تعداد</span>
-              <strong>{list.length.toLocaleString('fa-IR')}</strong>
+              <strong>{filtered.length.toLocaleString('fa-IR')}</strong>
             </div>
             <div>
               <span className="inv-sum-label">مبلغ</span>
               <strong>
-                {formatToman(list.reduce((s, r) => s + (r.totalAmount || 0), 0))}
+                {formatToman(filtered.reduce((s, r) => s + (r.totalAmount || 0), 0))}
               </strong>
             </div>
           </div>
@@ -516,7 +560,9 @@ const Invoices: React.FC = () => {
           )}
 
           <div className="inv-card-list" style={{ marginTop: 12 }}>
-            {slice.length === 0 && <p className="hint">در این بازه فاکتوری نیست</p>}
+            {slice.length === 0 && (
+              <p className="hint">{search.trim() ? 'چیزی پیدا نشد' : 'در این بازه فاکتوری نیست'}</p>
+            )}
 
             {mode === 'sale' &&
               (slice as SaleRow[]).map((inv) => (

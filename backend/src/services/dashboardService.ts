@@ -790,7 +790,7 @@ export async function getDashboard(
       priorCreditCollected: dayLedger.priorCreditCollected,
       sameDayCreditCollected: dayLedger.sameDayCreditCollected,
       collections: dayLedger.collections.slice(0, 40),
-      soldInvoices: dayLedger.soldInvoices.slice(0, 40),
+      soldInvoices: dayLedger.soldInvoices.slice(0, 200),
     },
     expenseCount: expenses.filter((e) => operatingExpenseAmount(e.type, e.amount) > 0).length,
     inventory,
