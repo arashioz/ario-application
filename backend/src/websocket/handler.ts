@@ -270,7 +270,7 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
     case 'dashboard.get': {
       const user = await requireAuth(ws, msg);
       const marketerId = user.role === 'marketer' ? user.userId : (p.marketerId as string | undefined);
-      const date = p.date ? new Date(String(p.date)) : undefined;
+      const date = p.date ? parseLocalDateInput(String(p.date)) : undefined;
       const period =
         p.period === 'week' || p.period === 'month' || p.period === 'today'
           ? (p.period as 'today' | 'week' | 'month')

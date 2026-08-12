@@ -1,4 +1,15 @@
-import { formatToman, formatKg, formatDate } from '../utils/format';
+import { useState } from 'react';
+import { IonButton, IonIcon, IonToast } from '@ionic/react';
+import { copyOutline } from 'ionicons/icons';
+import { formatToman, formatKg, formatDateTime, normalizePhone } from '../utils/format';
+import { wsClient } from '../api/ws';
+import {
+  buildInvoiceShareText,
+  copyText,
+  invoiceIsSettled,
+  openSmsComposer,
+  pickDefaultBankCard,
+} from '../utils/invoiceShare';
 
 export type SaleDetailItem = {
   productId?: string;
@@ -14,6 +25,14 @@ export type SaleDetailItem = {
   qtyPackages?: number;
 };
 
+export type PaymentEventRow = {
+  amount: number;
+  method?: 'cash' | 'card' | 'card_to_card' | string;
+  date: string;
+  kind?: 'invoice' | 'credit_settle' | string;
+  note?: string;
+};
+
 export type SaleDetailInv = {
   invoiceNumber?: string;
   customerName?: string;
@@ -27,11 +46,13 @@ export type SaleDetailInv = {
   status?: string;
   paymentMethod?: string;
   payment?: { cash?: number; card?: number; credit?: number };
+  paymentEvents?: PaymentEventRow[];
   priceTier?: string;
   isGolden?: boolean;
   notes?: string;
   shippingNotes?: string;
   shippedAt?: string;
+  deliveredAt?: string;
   paidAt?: string;
   lastPaymentAt?: string;
   isPaid?: boolean;
@@ -81,13 +102,102 @@ export function summarizeSaleItems(items: SaleDetailItem[] = []) {
 type Props = {
   inv: SaleDetailInv;
   showHeader?: boolean;
+  onToast?: (msg: string, color?: string) => void;
 };
 
+async function invoiceShareText(inv: SaleDetailInv): Promise<string> {
+  const shareItems = (inv.items || []).map((it) => ({
+    productName: it.productName,
+    qtyKg: it.qtyKg,
+    qtyInput: it.qtyInput,
+    unit: it.unit === 'package' ? ('package' as const) : ('kg' as const),
+    unitPricePerKg: it.unitPricePerKg,
+    totalPrice: it.totalPrice,
+    discount: it.discount,
+  }));
+  const payload = {
+    invoiceNumber: inv.invoiceNumber,
+    customerName: inv.customerName,
+    customerPhone: inv.customerPhone,
+    date: inv.date,
+    totalAmount: inv.totalAmount,
+    totalKg: inv.totalKg,
+    discount: inv.discount,
+    paymentMethod: inv.paymentMethod,
+    isGolden: inv.isGolden,
+    items: shareItems,
+    payment: inv.payment,
+    isPaid: inv.isPaid,
+  };
+  const settled = invoiceIsSettled(inv);
+  if (!settled) {
+    try {
+      const s = await wsClient.request<{
+        shopName?: string;
+        bankCards?: Array<{
+          label: string;
+          cardNumber: string;
+          accountHolder?: string;
+          bankName?: string;
+          isDefault?: boolean;
+        }>;
+      }>('settings.get');
+      const picked = pickDefaultBankCard(s.bankCards || []);
+      const defaultCard = picked
+        ? {
+            label: picked.label,
+            cardNumber: picked.cardNumber,
+            accountHolder: picked.accountHolder,
+            bankName: picked.bankName,
+          }
+        : undefined;
+      return buildInvoiceShareText(
+        { ...payload, shopName: s.shopName },
+        defaultCard ? { defaultCard } : undefined
+      );
+    } catch {
+      /* بدون تنظیمات */
+    }
+  }
+  return buildInvoiceShareText(payload);
+}
+
 /** جزئیات غنی فاکتور فروش — تعداد اقلام، کیلو، بسته و خطوط */
-export const SaleInvoiceDetailBody: React.FC<Props> = ({ inv, showHeader = true }) => {
+export const SaleInvoiceDetailBody: React.FC<Props> = ({ inv, showHeader = true, onToast }) => {
   const items = inv.items || [];
   const sum = summarizeSaleItems(items);
   const kg = inv.totalKg != null ? inv.totalKg : sum.totalKg;
+  const [toast, setToast] = useState({ open: false, msg: '', color: 'success' });
+
+  const notify = (msg: string, color = 'success') => {
+    onToast?.(msg, color);
+    setToast({ open: true, msg, color });
+  };
+
+  const copyPhone = async () => {
+    const phone = normalizePhone(inv.customerPhone) || inv.customerPhone || '';
+    if (!phone) {
+      notify('شماره‌ای ثبت نشده', 'warning');
+      return;
+    }
+    const ok = await copyText(phone);
+    notify(ok ? 'شماره کپی شد' : 'کپی نشد', ok ? 'success' : 'danger');
+  };
+
+  const smsWithInvoice = async () => {
+    if (!inv.customerPhone) {
+      notify('شماره‌ای ثبت نشده', 'warning');
+      return;
+    }
+    const text = await invoiceShareText(inv);
+    const copied = await copyText(text);
+    const opened = openSmsComposer(inv.customerPhone, text);
+    if (opened) {
+      notify(copied ? 'متن فاکتور کپی شد — پیامک باز شد' : 'پیامک باز شد');
+    } else {
+      notify(copied ? 'متن فاکتور کپی شد' : 'کپی نشد', copied ? 'success' : 'danger');
+    }
+  };
 
   return (
     <>
@@ -98,10 +208,37 @@ export const SaleInvoiceDetailBody: React.FC<Props> = ({ inv, showHeader = true 
         </p>
       )}
       {showHeader && (inv.customerName || inv.customerPhone) && (
-        <p>
-          <b>مشتری:</b> {inv.customerName || '—'}
-          {inv.customerPhone ? ` · ${inv.customerPhone}` : ''}
-        </p>
+        <div style={{ marginBottom: 10 }}>
+          <p style={{ marginBottom: inv.customerPhone ? 6 : 0 }}>
+            <b>مشتری:</b> {inv.customerName || '—'}
+            {inv.customerPhone ? (
+              <>
+                {' · '}
+                <button
+                  type="button"
+                  onClick={() => void smsWithInvoice()}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    padding: 0,
+                    color: 'var(--ion-color-primary)',
+                    font: 'inherit',
+                    textDecoration: 'underline',
+                    cursor: 'pointer',
+                  }}
+                >
+                  {inv.customerPhone}
+                </button>
+              </>
+            ) : null}
+          </p>
+          {inv.customerPhone ? (
+            <IonButton size="small" fill="outline" onClick={() => void copyPhone()}>
+              <IonIcon slot="start" icon={copyOutline} />
+              کپی شماره
+            </IonButton>
+          ) : null}
+        </div>
       )}
       {inv.customerAddress ? (
         <p>
@@ -110,9 +247,53 @@ export const SaleInvoiceDetailBody: React.FC<Props> = ({ inv, showHeader = true 
       ) : null}
       {inv.date ? (
         <p>
-          <b>تاریخ:</b> {formatDate(inv.date)}
+          <b>تاریخ فاکتور:</b> {formatDateTime(inv.date)}
         </p>
       ) : null}
+
+      <div className="ios-glass-card" style={{ marginBottom: 12 }}>
+        <div className="ios-section-title" style={{ marginTop: 0 }}>
+          زمان‌بندی فاکتور
+        </div>
+        <div className="stat-row">
+          <span>ثبت / فروش</span>
+          <span>{inv.date ? formatDateTime(inv.date) : '—'}</span>
+        </div>
+        <div className="stat-row">
+          <span>کی برده (ارسال)</span>
+          <span>{inv.shippedAt ? formatDateTime(inv.shippedAt) : 'هنوز نبرده'}</span>
+        </div>
+        {inv.deliveredAt ? (
+          <div className="stat-row">
+            <span>تحویل</span>
+            <span>{formatDateTime(inv.deliveredAt)}</span>
+          </div>
+        ) : null}
+        <div className="stat-row">
+          <span>آخرین پرداخت</span>
+          <span>
+            {inv.lastPaymentAt
+              ? formatDateTime(inv.lastPaymentAt)
+              : inv.paidAt
+                ? formatDateTime(inv.paidAt)
+                : 'پرداختی ثبت نشده'}
+          </span>
+        </div>
+        <div className="stat-row">
+          <span>کی تسویه شده</span>
+          <span>
+            {inv.isPaid === false
+              ? 'هنوز کامل تسویه نشده'
+              : inv.paidAt
+                ? formatDateTime(inv.paidAt)
+                : inv.payment && (inv.payment.credit || 0) <= 0
+                  ? inv.date
+                    ? formatDateTime(inv.date)
+                    : 'تسویه'
+                  : '—'}
+          </span>
+        </div>
+      </div>
 
       <div className="ios-glass-card" style={{ marginBottom: 12 }}>
         <div className="ios-section-title" style={{ marginTop: 0 }}>
@@ -180,20 +361,29 @@ export const SaleInvoiceDetailBody: React.FC<Props> = ({ inv, showHeader = true 
         </div>
       )}
 
+      {(inv.paymentEvents || []).length > 0 && (
+        <div className="ios-glass-card">
+          <div className="ios-section-title" style={{ marginTop: 0 }}>
+            کی پول داده
+          </div>
+          {(inv.paymentEvents || []).map((ev, i) => (
+            <div key={`${ev.date}-${i}`} className="stat-row" style={{ alignItems: 'flex-start' }}>
+              <span>
+                {ev.kind === 'credit_settle' ? 'وصول نسیه' : 'پرداخت فاکتور'}
+                {' · '}
+                {PAY[ev.method || ''] || ev.method || '—'}
+                {ev.note ? ` · ${ev.note}` : ''}
+                <div className="ios-caption">{formatDateTime(ev.date)}</div>
+              </span>
+              <span>{formatToman(ev.amount)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
       {inv.status ? (
         <p>
           <b>وضعیت:</b> {STATUS[inv.status] || inv.status}
-        </p>
-      ) : null}
-      {inv.shippedAt ? (
-        <p>
-          <b>ارسال شده:</b> {formatDate(inv.shippedAt)}
-        </p>
-      ) : null}
-      {inv.paidAt || inv.lastPaymentAt ? (
-        <p>
-          <b>پرداخت شده:</b> {formatDate(inv.paidAt || inv.lastPaymentAt!)}
-          {inv.isPaid === false ? ' (جزئی)' : ''}
         </p>
       ) : null}
       {inv.shippingNotes ? (
@@ -247,6 +437,13 @@ export const SaleInvoiceDetailBody: React.FC<Props> = ({ inv, showHeader = true 
           })}
         </div>
       )}
+      <IonToast
+        isOpen={toast.open}
+        message={toast.msg}
+        color={toast.color}
+        duration={1800}
+        onDidDismiss={() => setToast((t) => ({ ...t, open: false }))}
+      />
     </>
   );
 };

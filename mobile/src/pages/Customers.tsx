@@ -40,6 +40,7 @@ import {
   formatToman,
   formatKg,
   formatDate,
+  formatDateTime,
   normalizePhone,
   parseAmount,
 } from '../utils/format';
@@ -71,6 +72,8 @@ interface CustomerRow {
   monthInvoices?: number;
   loyaltyTier?: 'gold' | 'silver' | 'bronze' | 'new';
   tierLabel?: string;
+  priceTier?: 'retail' | 'supermarket' | 'wholesale' | 'none';
+  priceTierLabel?: string;
 }
 
 interface CreditPayRow {
@@ -222,8 +225,17 @@ const Customers: React.FC = () => {
   const history = useHistory();
   const { isAdmin } = useAuth();
   const [list, setList] = useState<CustomerRow[]>([]);
-  const [summary, setSummary] = useState({ gold: 0, silver: 0, bronze: 0, new: 0 });
-  const [tab, setTab] = useState<'all' | 'gold' | 'silver' | 'bronze' | 'new'>('all');
+  const [summary, setSummary] = useState({
+    gold: 0,
+    silver: 0,
+    bronze: 0,
+    new: 0,
+    retail: 0,
+    supermarket: 0,
+    wholesale: 0,
+    none: 0,
+  });
+  const [tab, setTab] = useState<'all' | 'retail' | 'supermarket' | 'wholesale'>('all');
   const [search, setSearch] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState('');
@@ -257,10 +269,29 @@ const Customers: React.FC = () => {
   const load = useCallback(async (q?: string) => {
     const data = await wsClient.request<{
       customers: CustomerRow[];
-      summary: { gold: number; silver: number; bronze: number; new: number };
+      summary: {
+        gold: number;
+        silver: number;
+        bronze: number;
+        new: number;
+        retail?: number;
+        supermarket?: number;
+        wholesale?: number;
+        none?: number;
+      };
     }>('customer.directory', { search: q || undefined });
     setList(data.customers || []);
-    setSummary(data.summary || { gold: 0, silver: 0, bronze: 0, new: 0 });
+    const s = data.summary;
+    setSummary({
+      gold: s?.gold ?? 0,
+      silver: s?.silver ?? 0,
+      bronze: s?.bronze ?? 0,
+      new: s?.new ?? 0,
+      retail: s?.retail ?? 0,
+      supermarket: s?.supermarket ?? 0,
+      wholesale: s?.wholesale ?? 0,
+      none: s?.none ?? 0,
+    });
   }, []);
 
   const reloadSelected = useCallback(async (id: string, base?: CustomerRow | null) => {
@@ -562,10 +593,10 @@ const Customers: React.FC = () => {
     }
   };
 
-  const filtered = list.filter((c) => (tab === 'all' ? true : c.loyaltyTier === tab));
+  const filtered = list.filter((c) => (tab === 'all' ? true : c.priceTier === tab));
 
-  const tierColor = (t?: string) =>
-    t === 'gold' ? 'warning' : t === 'silver' ? 'medium' : t === 'bronze' ? 'tertiary' : 'primary';
+  const priceTierColor = (t?: string) =>
+    t === 'wholesale' ? 'warning' : t === 'supermarket' ? 'success' : t === 'retail' ? 'primary' : 'medium';
 
   return (
     <IonPage>
@@ -592,21 +623,21 @@ const Customers: React.FC = () => {
         </IonRefresher>
         <div className="ion-padding compact">
           <div className="ios-kpi-grid">
-            <div className="ios-kpi orange">
-              <div className="k-label">طلایی</div>
-              <div className="k-value">{summary.gold}</div>
-            </div>
-            <div className="ios-kpi gray">
-              <div className="k-label">نقره‌ای ≥۲تن</div>
-              <div className="k-value">{summary.silver}</div>
+            <div className="ios-kpi blue">
+              <div className="k-label">تکی</div>
+              <div className="k-value">{summary.retail}</div>
             </div>
             <div className="ios-kpi green">
-              <div className="k-label">برنزی</div>
-              <div className="k-value">{summary.bronze}</div>
+              <div className="k-label">سوپرمارکت</div>
+              <div className="k-value">{summary.supermarket}</div>
             </div>
-            <div className="ios-kpi blue">
-              <div className="k-label">جدید</div>
-              <div className="k-value">{summary.new}</div>
+            <div className="ios-kpi orange">
+              <div className="k-label">عمده</div>
+              <div className="k-value">{summary.wholesale}</div>
+            </div>
+            <div className="ios-kpi gray">
+              <div className="k-label">بدون سابقه</div>
+              <div className="k-value">{summary.none}</div>
             </div>
           </div>
 
@@ -634,14 +665,14 @@ const Customers: React.FC = () => {
             <IonSegmentButton value="all">
               <IonLabel>همه</IonLabel>
             </IonSegmentButton>
-            <IonSegmentButton value="silver">
-              <IonLabel>نقره</IonLabel>
+            <IonSegmentButton value="retail">
+              <IonLabel>تکی</IonLabel>
             </IonSegmentButton>
-            <IonSegmentButton value="gold">
-              <IonLabel>طلا</IonLabel>
+            <IonSegmentButton value="supermarket">
+              <IonLabel>سوپر</IonLabel>
             </IonSegmentButton>
-            <IonSegmentButton value="bronze">
-              <IonLabel>برنز</IonLabel>
+            <IonSegmentButton value="wholesale">
+              <IonLabel>عمده</IonLabel>
             </IonSegmentButton>
           </IonSegment>
 
@@ -685,7 +716,9 @@ const Customers: React.FC = () => {
                     </div>
                   )}
                 </div>
-                <IonBadge color={tierColor(c.loyaltyTier)}>{c.tierLabel || 'جدید'}</IonBadge>
+                <IonBadge color={priceTierColor(c.priceTier)}>
+                  {c.priceTierLabel || 'بدون سابقه'}
+                </IonBadge>
               </div>
             </div>
           ))}
@@ -1068,10 +1101,15 @@ const Customers: React.FC = () => {
                       )}
                     {(inv.shippedAt || inv.paidAt || inv.lastPaymentAt) && (
                       <div className="ios-caption" style={{ marginTop: 4 }}>
-                        {inv.shippedAt ? `ارسال ${formatDate(inv.shippedAt)}` : ''}
-                        {inv.shippedAt && (inv.paidAt || inv.lastPaymentAt) ? ' · ' : ''}
-                        {inv.paidAt || inv.lastPaymentAt
-                          ? `پرداخت ${formatDate(inv.paidAt || inv.lastPaymentAt!)}`
+                        {inv.shippedAt ? `برده ${formatDateTime(inv.shippedAt)}` : ''}
+                        {inv.shippedAt && (inv.lastPaymentAt || inv.paidAt) ? ' · ' : ''}
+                        {inv.lastPaymentAt
+                          ? `پرداخت ${formatDateTime(inv.lastPaymentAt)}`
+                          : inv.paidAt
+                            ? `پرداخت ${formatDateTime(inv.paidAt)}`
+                            : ''}
+                        {inv.isPaid !== false && inv.paidAt
+                          ? ` · تسویه ${formatDateTime(inv.paidAt)}`
                           : ''}
                       </div>
                     )}
@@ -1206,6 +1244,7 @@ const Customers: React.FC = () => {
                     customerPhone: invDetail.customerPhone || selected?.phone,
                     customerAddress: invDetail.customerAddress || selected?.address,
                   }}
+                  onToast={(msg, color) => setToast({ open: true, msg, color: color || 'success' })}
                 />
                 {isAdmin && invDetail._id && (
                   <IonButton

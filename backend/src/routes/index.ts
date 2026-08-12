@@ -18,6 +18,7 @@ import {
 import { localLlm, parseSms } from '../chatbot/engine';
 import { SmsMessage } from '../models';
 import { getShopOpeningDate } from '../config/database';
+import { parseLocalDateInput } from '../utils/persian';
 
 const router = Router();
 
@@ -116,7 +117,7 @@ router.post('/debtors/:id/pay', asyncHandler(async (req, res) => {
 
 // ─── Dashboard ───
 router.get('/dashboard', asyncHandler(async (req, res) => {
-  const date = req.query.date ? new Date(req.query.date as string) : undefined;
+  const date = req.query.date ? parseLocalDateInput(String(req.query.date)) : undefined;
   res.json(await getDashboard(date));
 }));
 

@@ -15,18 +15,20 @@ import {
 } from './productService';
 import { PaymentMethod, PriceTier, SaleStatus } from '../models/SaleInvoice';
 import { createCustomer, normalizePhoneDigits, findCustomerByPhone, getCustomerPreferredTier } from './customerService';
-import { startOfDay } from '../utils/persian';
+import { startOfDay, roundToman } from '../utils/persian';
 
-/** تاریخ فاکتور قبل از امروز محلی → برای ثبت‌های گذشته «ارسال‌شده» حساب شود */
+/** تاریخ فاکتور قبل از امروز محلی */
 function isPastInvoiceDate(date: Date): boolean {
   return startOfDay(date).getTime() < startOfDay(new Date()).getTime();
 }
 
-/** تکی‌ها صف ارسال ندارند؛ تاریخ گذشته هم مستقیم ارسال می‌شود */
+/**
+ * فقط فروش تکی صف ارسال ندارد (حتی با تاریخ گذشته).
+ * عمده/سوپرمارکت — امروز یا قبل — باید در «آماده ارسال» بمانند تا روند ارسال نشکند.
+ */
 function shouldSkipShippingQueue(invoice: InstanceType<typeof SaleInvoice>): boolean {
   const tier = (invoice.priceTier || 'retail') as PriceTier;
-  if (tier === 'retail') return true;
-  return !!invoice.date && isPastInvoiceDate(invoice.date);
+  return tier === 'retail';
 }
 
 async function autoShipIfNoQueue(invoice: InstanceType<typeof SaleInvoice>) {
@@ -41,6 +43,55 @@ async function autoShipIfNoQueue(invoice: InstanceType<typeof SaleInvoice>) {
   if (!invoice.shippingBy) invoice.shippingBy = 'none';
   await invoice.save();
   return invoice;
+}
+
+function pushPaymentEvent(
+  invoice: InstanceType<typeof SaleInvoice>,
+  ev: {
+    amount: number;
+    method: 'cash' | 'card' | 'card_to_card';
+    date: Date;
+    kind: 'invoice' | 'credit_settle';
+    note?: string;
+  }
+) {
+  if (ev.amount <= 0) return;
+  if (!Array.isArray(invoice.paymentEvents)) invoice.paymentEvents = [];
+  invoice.paymentEvents.push(ev);
+  invoice.markModified('paymentEvents');
+}
+
+function seedInvoicePaymentEvents(
+  invoice: InstanceType<typeof SaleInvoice>,
+  payment: { cash: number; card: number; credit: number },
+  method: PaymentMethod,
+  at: Date
+) {
+  const cardMethod: 'card' | 'card_to_card' =
+    method === 'card_to_card' ? 'card_to_card' : 'card';
+  if (payment.cash > 0) {
+    pushPaymentEvent(invoice, {
+      amount: payment.cash,
+      method: 'cash',
+      date: at,
+      kind: 'invoice',
+      note: 'پرداخت هنگام ثبت فاکتور',
+    });
+  }
+  if (payment.card > 0) {
+    pushPaymentEvent(invoice, {
+      amount: payment.card,
+      method: cardMethod,
+      date: at,
+      kind: 'invoice',
+      note: 'پرداخت هنگام ثبت فاکتور',
+    });
+  }
+  if (payment.cash + payment.card > 0) invoice.lastPaymentAt = at;
+  if (payment.credit === 0) {
+    invoice.paidAt = invoice.paidAt || at;
+    invoice.isPaid = true;
+  }
 }
 
 interface SaleItemInput {
@@ -92,19 +143,19 @@ async function buildSaleItems(
       costBasis
     );
     let unitPricePerKg = pricing.salePricePerKg;
-    let unitPricePerPackage = pricing.salePricePerPackage;
-    let gross = Math.round(unitPricePerKg * qtyKg);
+    let unitPricePerPackage = roundToman(pricing.salePricePerPackage, 100);
+    let gross = roundToman(unitPricePerKg * qtyKg, 100);
 
     if (item.unitPrice != null) {
       const resolved = resolveLineAmount({
         unit,
-        unitPrice: item.unitPrice,
+        unitPrice: roundToman(item.unitPrice, 100),
         qtyInput,
         kgPerPackage,
       });
-      unitPricePerKg = Math.round(resolved.unitPricePerKg);
-      unitPricePerPackage = resolved.unitPricePerPackage;
-      gross = resolved.totalPrice;
+      unitPricePerKg = roundToman(resolved.unitPricePerKg, 100);
+      unitPricePerPackage = roundToman(resolved.unitPricePerPackage, 100);
+      gross = roundToman(resolved.totalPrice, 100);
     }
 
     const lineDisc = Math.max(0, Math.min(Math.round(item.discount || 0), gross));
@@ -404,6 +455,7 @@ export async function createSaleInvoice(data: {
         deliveryMode: data.deliveryMode === 'self' ? 'self' : 'company',
         stockApplied: false,
         approvedAt: requiresApproval ? undefined : new Date(),
+        paymentEvents: [],
       });
       break;
     } catch (err: unknown) {
@@ -412,6 +464,9 @@ export async function createSaleInvoice(data: {
     }
   }
   if (!invoice) throw new Error('ثبت فاکتور فروش ناموفق بود');
+
+  seedInvoicePaymentEvents(invoice, payment, data.paymentMethod, date);
+  await invoice.save();
 
   if (invoice.creditIsCheck && payment.credit > 0) {
     try {
@@ -611,6 +666,13 @@ async function settleInvoiceCreditOnShip(
   invoice.isPaid = pay.credit === 0;
   invoice.paidAt = now;
   invoice.lastPaymentAt = now;
+  pushPaymentEvent(invoice, {
+    amount: remaining,
+    method,
+    date: now,
+    kind: 'credit_settle',
+    note: 'تسویه نسیه هنگام ارسال',
+  });
   return invoice;
 }
 
@@ -685,9 +747,42 @@ async function reverseSaleEffects(invoice: InstanceType<typeof SaleInvoice>) {
 
   const debtors = await Debtor.find({ saleInvoiceId: invoice._id });
   for (const d of debtors) {
-    if ((d.paidAmount || 0) > 0) {
-      throw new Error('بدهی این فاکتور پرداخت جزئی دارد و قابل ویرایش/حذف نیست');
+    const debtPays = await CashTransaction.find({
+      type: 'debt_payment',
+      referenceId: d._id.toString(),
+      referenceModel: 'Debtor',
+    });
+    let cashDelta = 0;
+    let cardDelta = 0;
+    for (const tx of debtPays) {
+      if (tx.direction === 'in') {
+        const method = tx.paymentMethod;
+        const desc = String(tx.description || '');
+        if (
+          method === 'card' ||
+          method === 'card_to_card' ||
+          desc.includes('پوز') ||
+          desc.includes('کارت')
+        ) {
+          cardDelta -= tx.amount;
+        } else {
+          cashDelta -= tx.amount;
+        }
+      }
+      await tx.deleteOne();
     }
+    if (cashDelta !== 0 || cardDelta !== 0) {
+      await updateBalances(cashDelta, cardDelta);
+    }
+
+    // پرداخت‌های قبلی از totalCredit کم شده؛ فقط مانده باز را برگردان
+    if (invoice.stockApplied && d.customerId) {
+      const remaining = Math.max(0, (d.amount || 0) - (d.paidAmount || 0));
+      if (remaining > 0) {
+        await Customer.findByIdAndUpdate(d.customerId, { $inc: { totalCredit: -remaining } });
+      }
+    }
+    await d.deleteOne();
   }
 
   if (invoice.stockApplied) {
@@ -717,16 +812,7 @@ async function reverseSaleEffects(invoice: InstanceType<typeof SaleInvoice>) {
       await updateBalances(cashDelta, cardDelta);
     }
 
-    for (const d of debtors) {
-      if (d.customerId && d.amount > 0) {
-        await Customer.findByIdAndUpdate(d.customerId, { $inc: { totalCredit: -d.amount } });
-      }
-      await d.deleteOne();
-    }
-
     invoice.stockApplied = false;
-  } else {
-    await Debtor.deleteMany({ saleInvoiceId: invoice._id });
   }
 
   try {
@@ -918,7 +1004,12 @@ export async function updateSaleInvoice(
     if (sum === 0) payment.card = totalAmount;
     else if (Math.abs(sum - totalAmount) > 1) {
       const diff = totalAmount - sum;
-      payment.credit = Math.max(0, payment.credit + diff);
+      // اگر نسیه را صفر کرده‌اند، باقی‌مانده را دوباره نسیه نکن
+      if (payment.credit <= 0) {
+        payment.cash = Math.max(0, payment.cash + diff);
+      } else {
+        payment.credit = Math.max(0, payment.credit + diff);
+      }
       const sum2 = payment.cash + payment.card + payment.credit;
       if (Math.abs(sum2 - totalAmount) > 2) {
         throw new Error(
@@ -1176,6 +1267,13 @@ export async function recordDebtPayment(
       } else {
         inv.paymentMethod = 'mixed';
       }
+      pushPaymentEvent(inv, {
+        amount: payAmount,
+        method,
+        date: now,
+        kind: 'credit_settle',
+        note: methodLabel,
+      });
       await inv.save();
     }
   }

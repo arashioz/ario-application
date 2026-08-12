@@ -767,7 +767,10 @@ const Debtors: React.FC = () => {
                   </div>
                 </div>
                 {debtSaleDetail ? (
-                  <SaleInvoiceDetailBody inv={debtSaleDetail} />
+                  <SaleInvoiceDetailBody
+                    inv={debtSaleDetail}
+                    onToast={(msg, color) => setToast({ open: true, msg, color: color || 'success' })}
+                  />
                 ) : (
                   <>
                     <p>

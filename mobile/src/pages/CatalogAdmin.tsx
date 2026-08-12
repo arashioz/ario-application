@@ -28,7 +28,7 @@ import { copyOutline, openOutline, imageOutline, trashOutline, createOutline, cu
 import { IonIcon } from '@ionic/react';
 import { wsClient } from '../api/ws';
 import { resolveMediaUrl } from '../api/client';
-import { formatToman, formatMoneyInput, parseAmount, sanitizeNumberInput, priceFromPercent, roundToman, formatKg } from '../utils/format';
+import { formatToman, formatMoneyInput, parseAmount, sanitizeNumberInput, priceFromPercent, roundToman, roundProfitPercent, formatKg } from '../utils/format';
 import { useAuth } from '../auth/AuthContext';
 import { DigitInput } from '../components/DigitInput';
 import { QtyStepper } from '../components/QtyStepper';
@@ -96,7 +96,7 @@ function tierPricePerKg(p: Product, tier: PriceTier): number {
 
 function pctFromPrice(cost: number, price: number): number {
   if (cost <= 0) return 0;
-  return Math.round(((price / cost - 1) * 100) * 10) / 10;
+  return roundProfitPercent((price / cost - 1) * 100);
 }
 
 const CatalogAdmin: React.FC = () => {
@@ -295,9 +295,9 @@ const CatalogAdmin: React.FC = () => {
   const syncPctFromPrice = (tier: PriceTier, priceStr: string) => {
     if (!editProduct) return;
     const cost = productCost(editProduct);
-    const price = parseAmount(priceStr) || 0;
+    const price = roundToman(parseAmount(priceStr) || 0, 100);
     const pct = pctFromPrice(cost, price);
-    const formatted = formatMoneyInput(priceStr);
+    const formatted = formatMoneyInput(String(price));
     if (tier === 'retail') {
       setEditRetailPrice(formatted);
       setEditRetailPct(String(pct));
@@ -319,10 +319,10 @@ const CatalogAdmin: React.FC = () => {
     }
     setEditSaving(true);
     try {
-      const retailPct = parseFloat(editRetailPct) || 0;
-      const superPct = parseFloat(editSuperPct) || 0;
-      const wholePct = parseFloat(editWholePct) || 0;
-      const retailPrice = parseAmount(editRetailPrice) || 0;
+      const retailPct = roundProfitPercent(parseFloat(editRetailPct) || 0);
+      const superPct = roundProfitPercent(parseFloat(editSuperPct) || 0);
+      const wholePct = roundProfitPercent(parseFloat(editWholePct) || 0);
+      const retailPrice = roundToman(parseAmount(editRetailPrice) || 0, 100);
       const cost = productCost(editProduct);
       const computedRetail = priceFromPercent(cost, retailPct);
       await wsClient.request('product.update', {
@@ -348,9 +348,9 @@ const CatalogAdmin: React.FC = () => {
 
   const applyBulk = async (scope: 'category' | 'all') => {
     if (!isAdmin) return;
-    const retail = parseFloat(bulkRetail) || 0;
-    const supermarket = parseFloat(bulkSuper) || 0;
-    const wholesale = parseFloat(bulkWholesale) || 0;
+    const retail = roundProfitPercent(parseFloat(bulkRetail) || 0);
+    const supermarket = roundProfitPercent(parseFloat(bulkSuper) || 0);
+    const wholesale = roundProfitPercent(parseFloat(bulkWholesale) || 0);
     let targets = products;
     if (scope === 'category') {
       if (!bulkCatId) {
@@ -732,10 +732,10 @@ const CatalogAdmin: React.FC = () => {
                     try {
                       await wsClient.request('category.create', {
                         name: catName.trim(),
-                        profitRetail: parseFloat(catRetail) || 15,
-                        profitSupermarket: parseFloat(catSuper) || 10,
-                        profitWholesale: parseFloat(catWholesale) || 6,
-                        profitPercent: parseFloat(catRetail) || 15,
+                        profitRetail: roundProfitPercent(parseFloat(catRetail) || 15),
+                        profitSupermarket: roundProfitPercent(parseFloat(catSuper) || 10),
+                        profitWholesale: roundProfitPercent(parseFloat(catWholesale) || 6),
+                        profitPercent: roundProfitPercent(parseFloat(catRetail) || 15),
                       });
                       setCatName('');
                       await load();
@@ -832,9 +832,9 @@ const CatalogAdmin: React.FC = () => {
                         const e = catEdits[c._id];
                         await wsClient.request('category.update', {
                           id: c._id,
-                          profitRetail: parseFloat(e?.retail || '0'),
-                          profitSupermarket: parseFloat(e?.supermarket || '0'),
-                          profitWholesale: parseFloat(e?.wholesale || '0'),
+                          profitRetail: roundProfitPercent(parseFloat(e?.retail || '0')),
+                          profitSupermarket: roundProfitPercent(parseFloat(e?.supermarket || '0')),
+                          profitWholesale: roundProfitPercent(parseFloat(e?.wholesale || '0')),
                         });
                         await load();
                         setToast({ open: true, msg: 'درصد دسته ذخیره شد', color: 'success' });

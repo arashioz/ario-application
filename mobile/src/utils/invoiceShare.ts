@@ -1,4 +1,4 @@
-import { formatToman, formatKg, formatDate } from './format';
+import { formatToman, formatKg, formatDate, normalizePhone } from './format';
 
 export type ShareInvoiceItem = {
   productName: string;
@@ -100,8 +100,9 @@ export function buildInvoiceShareText(
   lines.push('────────────');
   lines.push('با تشکر 🙏');
 
+  const settled = inv.isPaid === true || (inv.payment != null && credit <= 0);
   const bankCard = opts?.defaultCard;
-  if (bankCard?.cardNumber) {
+  if (!settled && bankCard?.cardNumber) {
     const spaced = bankCard.cardNumber.replace(/(\d{4})(?=\d)/g, '$1 ').trim();
     const due = credit > 0 ? credit : inv.totalAmount;
     lines.push('');
@@ -145,6 +146,28 @@ export function buildCardTransferText(opts: {
     'لطفاً پس از واریز رسید را ارسال کنید.',
   ].filter(Boolean);
   return lines.join('\n');
+}
+
+/** فاکتور تسویه‌شده — کارت بانکی در متن پیامک/کپی نیاید */
+export function invoiceIsSettled(inv: {
+  isPaid?: boolean;
+  payment?: { credit?: number };
+}): boolean {
+  if (inv.isPaid === true) return true;
+  if (!inv.payment) return false;
+  return Math.round(Number(inv.payment.credit) || 0) <= 0;
+}
+
+/** باز کردن پیامک با متن فاکتور */
+export function openSmsComposer(phone: string | undefined, body: string): boolean {
+  const digits = normalizePhone(phone);
+  if (!digits) return false;
+  const ios = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+  const href = ios
+    ? `sms:${digits}&body=${encodeURIComponent(body)}`
+    : `sms:${digits}?body=${encodeURIComponent(body)}`;
+  window.location.href = href;
+  return true;
 }
 
 export async function copyText(text: string): Promise<boolean> {

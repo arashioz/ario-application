@@ -56,6 +56,7 @@ import {
   roundToman,
   roundPerKgDiscount,
   priceFromPercent,
+  saleUnitPrice,
 } from '../utils/format';
 import { paymentMethods } from '../theme/colors';
 import { PersianDateField } from '../components/PersianDateField';
@@ -744,7 +745,8 @@ const Sale: React.FC = () => {
     for (const l of lines) {
       const qty = parseFloat(l.qtyInput) || 0;
       const price = parseAmount(l.unitPrice) || 0;
-      const { qtyKg, lineAmount } = resolveLineAmount(l.unit, price, qty, l.kgPerPackage);
+      const { qtyKg, lineAmount: rawLine } = resolveLineAmount(l.unit, price, qty, l.kgPerPackage);
+      const lineAmount = roundToman(rawLine, 100);
       let disc = 0;
       if (discountMode === 'product') {
         // تخفیف محصول = تومان به ازای هر کیلو
@@ -1285,7 +1287,7 @@ const Sale: React.FC = () => {
       const cost = productCost(p, costBasis);
       const suggested = priceFromPercent(cost, percent);
       const unit = sl.unit || 'package';
-      const price = unit === 'package' ? suggested * (p.kgPerPackage || 5) : suggested;
+      const price = saleUnitPrice(suggested, unit, p.kgPerPackage || 5);
       next.push({
         key: newLineKey(),
         productId: p._id,
@@ -1470,7 +1472,7 @@ const Sale: React.FC = () => {
       setProdModalEditKey(null);
       setProdModalUnit('package');
       setProdModalQty('1');
-      setProdModalPrice(formatMoneyInput(String(Math.round(suggested * (p.kgPerPackage || 5)))));
+      setProdModalPrice(formatMoneyInput(String(saleUnitPrice(suggested, 'package', p.kgPerPackage || 5))));
     }
     setProdModalProduct(p);
     setProdModalOpen(true);
@@ -1491,7 +1493,7 @@ const Sale: React.FC = () => {
     // قیمت فعلی را بین کیلو ↔ بسته تبدیل کن (نه برگشت به قیمت پیشنهادی)
     if (currentPrice > 0) {
       const { perKg, perPackage } = resolvePrices(prodModalUnit, currentPrice, kgPer);
-      const next = unit === 'package' ? Math.round(perPackage) : Math.round(perKg);
+      const next = unit === 'package' ? roundToman(perPackage, 100) : roundToman(perKg, 100);
       setProdModalPrice(formatMoneyInput(String(Math.max(0, next))));
       return;
     }
@@ -1500,9 +1502,7 @@ const Sale: React.FC = () => {
     const percent = tierPercent(p, calcTier);
     const cost = productCost(p, costBasis);
     const suggested = priceFromPercent(cost, percent);
-    setProdModalPrice(
-      formatMoneyInput(String(Math.round(unit === 'package' ? suggested * kgPer : suggested)))
-    );
+    setProdModalPrice(formatMoneyInput(String(saleUnitPrice(suggested, unit, kgPer))));
   };
 
   const confirmProductModal = () => {
@@ -1525,7 +1525,8 @@ const Sale: React.FC = () => {
     const percent = tierPercent(p, calcTier);
     const cost = productCost(p, costBasis);
     const suggested = priceFromPercent(cost, percent);
-    const priceStr = prodModalPrice || formatMoneyInput(String(Math.round(suggested)));
+    const raw = parseAmount(prodModalPrice) || saleUnitPrice(suggested, prodModalUnit, p.kgPerPackage || 5);
+    const priceStr = formatMoneyInput(String(roundToman(raw, 100)));
 
     setLines((prev) => {
       if (prodModalEditKey) {
@@ -1599,8 +1600,8 @@ const Sale: React.FC = () => {
         const percent = tierPercent(p, calcTier);
         const cost = productCost(p, costBasis);
         const suggested = priceFromPercent(cost, percent);
-        const price = l.unit === 'package' ? suggested * (l.kgPerPackage || 5) : suggested;
-        return { ...l, suggestedPerKg: suggested, unitPrice: formatMoneyInput(String(Math.round(price))) };
+        const price = saleUnitPrice(suggested, l.unit, l.kgPerPackage || 5);
+        return { ...l, suggestedPerKg: suggested, unitPrice: formatMoneyInput(String(price)) };
       })
     );
   }, [priceTier, costBasis]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1700,7 +1701,8 @@ const Sale: React.FC = () => {
           items: lines.map((l) => {
             const qty = parseFloat(l.qtyInput) || 0;
             const price = parseAmount(l.unitPrice) || 0;
-            const { qtyKg, lineAmount } = resolveLineAmount(l.unit, price, qty, l.kgPerPackage);
+            const { qtyKg, lineAmount: rawLine } = resolveLineAmount(l.unit, price, qty, l.kgPerPackage);
+            const lineAmount = roundToman(rawLine, 100);
             const disc =
               discountMode === 'product'
                 ? Math.max(
@@ -1712,7 +1714,7 @@ const Sale: React.FC = () => {
               productId: l.productId,
               unit: l.unit,
               qtyInput: qty,
-              unitPrice: price || undefined,
+              unitPrice: roundToman(price, 100) || undefined,
               discount: disc,
             };
           }),
@@ -1724,6 +1726,10 @@ const Sale: React.FC = () => {
         setToast({ open: true, msg: 'آفلاین در صف قرار گرفت — بعد از وصل ثبت می‌شود', color: 'warning' });
       } else {
         const defaultCard = pickDefaultBankCard(bankCards);
+        let creditAmt = 0;
+        if (paymentMethod === 'credit') creditAmt = totals.net;
+        else if (paymentMethod === 'mixed') creditAmt = parseAmount(payCredit) || 0;
+        const settled = creditAmt <= 0;
         const shareText = buildInvoiceShareText(
           {
             invoiceNumber: invoice.invoiceNumber,
@@ -1737,6 +1743,22 @@ const Sale: React.FC = () => {
             isGolden,
             appliedOffer: appliedOffer || undefined,
             shopName: shopName || undefined,
+            payment: {
+              cash:
+                paymentMethod === 'cash'
+                  ? totals.net
+                  : paymentMethod === 'mixed'
+                    ? parseAmount(payCash) || 0
+                    : 0,
+              card:
+                paymentMethod === 'card' || paymentMethod === 'card_to_card'
+                  ? totals.net
+                  : paymentMethod === 'mixed'
+                    ? parseAmount(payCard) || 0
+                    : 0,
+              credit: creditAmt,
+            },
+            isPaid: settled,
             items: lines.map((l) => {
               const qty = parseFloat(l.qtyInput) || 0;
               const price = parseAmount(l.unitPrice) || 0;
@@ -1751,12 +1773,12 @@ const Sale: React.FC = () => {
                 qtyKg,
                 qtyInput: qty,
                 unit: l.unit,
-                unitPricePerKg: Math.round(perKg),
-                totalPrice: lineAmount,
+                unitPricePerKg: roundToman(perKg, 100),
+                totalPrice: roundToman(lineAmount, 100),
               };
             }),
           },
-          defaultCard
+          !settled && defaultCard
             ? {
                 defaultCard: {
                   label: defaultCard.label,
@@ -2252,12 +2274,13 @@ const Sale: React.FC = () => {
             {lines.map((l, idx) => {
               const qty = parseFloat(l.qtyInput) || 0;
               const price = parseAmount(l.unitPrice) || 0;
-              const { qtyKg, qtyPackages, lineAmount } = resolveLineAmount(
+              const { qtyKg, qtyPackages, lineAmount: rawLine } = resolveLineAmount(
                 l.unit,
                 price,
                 qty,
                 l.kgPerPackage
               );
+              const lineAmount = roundToman(rawLine, 100);
               const lineDiscAmt =
                 discountMode === 'product'
                   ? Math.max(
@@ -3119,6 +3142,10 @@ const Sale: React.FC = () => {
                     pattern="[0-9]*"
                     value={prodModalPrice}
                     onIonInput={(e) => setProdModalPrice(formatMoneyInput(e.detail.value || ''))}
+                    onIonBlur={() => {
+                      const n = parseAmount(prodModalPrice) || 0;
+                      if (n > 0) setProdModalPrice(formatMoneyInput(String(roundToman(n, 100))));
+                    }}
                   />
                 </IonItem>
 
@@ -3131,7 +3158,7 @@ const Sale: React.FC = () => {
                   return (
                     <p className="hint convert-hint">
                       {formatKg(qtyKg)} · {Math.round(qtyPackages).toLocaleString('fa-IR')} بسته · جمع{' '}
-                      {formatToman(Math.round(perKg * qtyKg))}
+                      {formatToman(roundToman(perKg * qtyKg, 100))}
                       {price > 0
                         ? prodModalUnit === 'package'
                           ? ` · معادل ${formatToman(Math.round(perKg))}/کیلو`

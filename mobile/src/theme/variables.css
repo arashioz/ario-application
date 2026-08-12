@@ -162,8 +162,30 @@ body {
 .day-split-card.paid {
   border-top: 3px solid #10b981;
 }
-.day-split-card.credit {
-  border-top: 3px solid #f59e0b;
+.day-split-card.collect {
+  border-top: 3px solid #0ea5e9;
+}
+.day-ledger-list {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.day-ledger-item {
+  font-size: 12px;
+  line-height: 1.45;
+  color: #334155;
+  padding: 6px 0;
+  border-top: 1px solid rgba(15, 39, 68, 0.06);
+}
+.day-ledger-item:first-child {
+  border-top: 0;
+}
+.day-ledger-item strong {
+  color: #0f2744;
+}
+.day-split-grid.stack {
+  grid-template-columns: 1fr;
 }
 .day-split-title {
   font-size: 13px;

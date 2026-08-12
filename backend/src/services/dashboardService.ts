@@ -18,8 +18,8 @@ function operatingExpenseAmount(type: string | undefined, amount: number): numbe
 }
 
 /**
- * نسیهٔ تسویه‌نشده در فروش/سود/تناژ «نقدی روز» حساب نمی‌شود.
- * بعد از تسویه، مبلغ به نقد/کارت منتقل شده و روی همان تاریخ فاکتور می‌نشیند.
+ * سهم پرداخت‌شدهٔ فعلی فاکتور (نقد+کارت بعد از تسویه‌ها).
+ * برای صندوق لحظه‌ای است؛ فروش روز را با originalInvoiceSplit / dayLedger بسنج.
  */
 export function recognizedSaleMetrics(inv: {
   totalAmount?: number;
@@ -95,6 +95,375 @@ function emptyShippedBucket(): ShippedBucket {
   return { sales: 0, profit: 0, cost: 0, kg: 0, invoiceCount: 0 };
 }
 
+type PaymentEventLike = {
+  amount?: number;
+  method?: string;
+  date?: Date | string;
+  kind?: string;
+  note?: string;
+};
+
+/**
+ * پرداخت هنگام ثبت فاکتور در برابر نسیهٔ همان فاکتور — بدون اینکه تسویهٔ بعدی
+ * فروشِ روز فاکتور را بالا ببرد. تسویه روی روز پرداخت جدا حساب می‌شود.
+ */
+export function originalInvoiceSplit(inv: {
+  totalAmount?: number;
+  totalProfit?: number;
+  totalCost?: number;
+  totalKg?: number;
+  payment?: { cash?: number; card?: number; credit?: number } | null;
+  paymentEvents?: PaymentEventLike[] | null;
+  extraSettled?: number;
+}) {
+  const total = Math.max(0, Math.round(inv.totalAmount || 0));
+  const currentCredit = Math.max(0, Math.round(inv.payment?.credit || 0));
+  const events = Array.isArray(inv.paymentEvents) ? inv.paymentEvents : [];
+  const settledFromEvents = events
+    .filter((e) => e.kind === 'credit_settle')
+    .reduce((s, e) => s + Math.max(0, Math.round(e.amount || 0)), 0);
+  const settled =
+    settledFromEvents > 0 ? settledFromEvents : Math.max(0, Math.round(inv.extraSettled || 0));
+  const originalCredit = Math.min(total, currentCredit + settled);
+  const invoicePaid = events
+    .filter((e) => e.kind === 'invoice')
+    .reduce((s, e) => s + Math.max(0, Math.round(e.amount || 0)), 0);
+  const originalPaid =
+    invoicePaid > 0 ? Math.min(total, invoicePaid) : Math.max(0, total - originalCredit);
+
+  const pRatio = total > 0 ? originalPaid / total : 0;
+  const cRatio = total > 0 ? originalCredit / total : 0;
+
+  let cash = 0;
+  let card = 0;
+  const invoiceEv = events.filter((e) => e.kind === 'invoice');
+  if (invoiceEv.length) {
+    for (const e of invoiceEv) {
+      if (e.method === 'cash') cash += Math.round(e.amount || 0);
+      else card += Math.round(e.amount || 0);
+    }
+  } else {
+    cash = Math.max(0, Math.round(inv.payment?.cash || 0));
+    card = Math.max(0, Math.round(inv.payment?.card || 0));
+    const sum = cash + card;
+    if (sum > originalPaid && sum > 0) {
+      cash = Math.round((cash / sum) * originalPaid);
+      card = originalPaid - cash;
+    }
+  }
+
+  return {
+    sold: total,
+    paid: originalPaid,
+    credit: originalCredit,
+    cash,
+    card,
+    profit: Math.round(inv.totalProfit || 0),
+    paidProfit: Math.round((inv.totalProfit || 0) * pRatio),
+    creditProfit: Math.round((inv.totalProfit || 0) * cRatio),
+    cost: Math.round(inv.totalCost || 0),
+    paidCost: Math.round((inv.totalCost || 0) * pRatio),
+    creditCost: Math.round((inv.totalCost || 0) * cRatio),
+    kg: Math.round((inv.totalKg || 0) * 100) / 100,
+    paidKg: Math.round((inv.totalKg || 0) * pRatio * 100) / 100,
+    creditKg: Math.round((inv.totalKg || 0) * cRatio * 100) / 100,
+  };
+}
+
+export type DayCollectionItem = {
+  invoiceId?: string;
+  invoiceNumber?: string;
+  customerName: string;
+  amount: number;
+  method: 'cash' | 'card' | 'card_to_card';
+  date: string;
+  invoiceDate?: string;
+  isPriorCredit: boolean;
+  note?: string;
+};
+
+export type DaySoldItem = {
+  invoiceId: string;
+  invoiceNumber: string;
+  customerName: string;
+  totalAmount: number;
+  totalKg: number;
+  paid: number;
+  credit: number;
+  date: string;
+};
+
+export type DayLedgerBucket = {
+  date: string;
+  soldGross: number;
+  soldKg: number;
+  soldProfit: number;
+  soldCost: number;
+  soldCount: number;
+  soldPaid: number;
+  soldCredit: number;
+  collectionsTotal: number;
+  priorCreditCollected: number;
+};
+
+export type DayLedger = {
+  soldGross: number;
+  soldKg: number;
+  soldProfit: number;
+  soldCost: number;
+  soldCount: number;
+  soldPaid: number;
+  soldCredit: number;
+    soldCash: number;
+    soldCard: number;
+    soldPaidProfit: number;
+    soldCreditProfit: number;
+    collectionsTotal: number;
+  priorCreditCollected: number;
+  sameDayCreditCollected: number;
+  collections: DayCollectionItem[];
+  soldInvoices: DaySoldItem[];
+  daily: DayLedgerBucket[];
+};
+
+function emptyLedgerBucket(date: string): DayLedgerBucket {
+  return {
+    date,
+    soldGross: 0,
+    soldKg: 0,
+    soldProfit: 0,
+    soldCost: 0,
+    soldCount: 0,
+    soldPaid: 0,
+    soldCredit: 0,
+    collectionsTotal: 0,
+    priorCreditCollected: 0,
+  };
+}
+
+function dayKeyOf(d: Date | string): string {
+  return startOfDay(new Date(d)).toISOString().split('T')[0];
+}
+
+function inDayRange(d: Date | string | undefined, from: Date, to: Date): boolean {
+  if (!d) return false;
+  const t = new Date(d).getTime();
+  return t >= from.getTime() && t <= to.getTime();
+}
+
+function normalizePayMethod(m?: string): 'cash' | 'card' | 'card_to_card' {
+  if (m === 'card_to_card' || m === 'card' || m === 'cash') return m;
+  return 'cash';
+}
+
+export async function buildDayLedger(
+  rangeStart: Date,
+  rangeEnd: Date,
+  marketerId?: string
+): Promise<DayLedger> {
+  const saleFilter: Record<string, unknown> = {
+    date: { $gte: rangeStart, $lte: rangeEnd },
+    status: REVENUE_STATUSES,
+  };
+  if (marketerId) saleFilter.marketerId = marketerId;
+
+  const collectFilter: Record<string, unknown> = {
+    paymentEvents: {
+      $elemMatch: { kind: 'credit_settle', date: { $gte: rangeStart, $lte: rangeEnd } },
+    },
+  };
+  if (marketerId) collectFilter.marketerId = marketerId;
+
+  const soldInvs = await SaleInvoice.find(saleFilter).select(
+    'invoiceNumber customerName totalAmount totalProfit totalCost totalKg payment paymentEvents date'
+  );
+
+  const [collectInvs, debtors] = await Promise.all([
+    SaleInvoice.find(collectFilter).select('invoiceNumber customerName paymentEvents date marketerId'),
+    Debtor.find({
+      $or: [
+        { 'payments.date': { $gte: rangeStart, $lte: rangeEnd } },
+        { saleInvoiceId: { $in: soldInvs.map((s) => s._id) } },
+      ],
+    }).select('name saleInvoiceId payments'),
+  ]);
+
+  const extraSettled = new Map<string, number>();
+  for (const d of debtors) {
+    const id = d.saleInvoiceId ? String(d.saleInvoiceId) : '';
+    if (!id) continue;
+    const sum = (d.payments || []).reduce((s, p) => s + Math.max(0, Math.round(p.amount || 0)), 0);
+    extraSettled.set(id, (extraSettled.get(id) || 0) + sum);
+  }
+
+  const byDay = new Map<string, DayLedgerBucket>();
+  const bucket = (date: Date | string) => {
+    const key = dayKeyOf(date);
+    let b = byDay.get(key);
+    if (!b) {
+      b = emptyLedgerBucket(key);
+      byDay.set(key, b);
+    }
+    return b;
+  };
+
+  const soldInvoices: DaySoldItem[] = [];
+  let soldGross = 0;
+  let soldKg = 0;
+  let soldProfit = 0;
+  let soldCost = 0;
+  let soldPaid = 0;
+  let soldCredit = 0;
+  let soldCash = 0;
+  let soldCard = 0;
+  let soldPaidProfit = 0;
+  let soldCreditProfit = 0;
+
+  for (const inv of soldInvs) {
+    const orig = originalInvoiceSplit({
+      totalAmount: inv.totalAmount,
+      totalProfit: inv.totalProfit,
+      totalCost: inv.totalCost,
+      totalKg: inv.totalKg,
+      payment: inv.payment,
+      paymentEvents: inv.paymentEvents,
+      extraSettled: extraSettled.get(String(inv._id)),
+    });
+    soldGross += orig.sold;
+    soldKg += orig.kg;
+    soldProfit += orig.profit;
+    soldCost += orig.cost;
+    soldPaid += orig.paid;
+    soldCredit += orig.credit;
+    soldCash += orig.cash;
+    soldCard += orig.card;
+    soldPaidProfit += orig.paidProfit;
+    soldCreditProfit += orig.creditProfit;
+    const day = bucket(inv.date);
+    day.soldGross += orig.sold;
+    day.soldKg += orig.kg;
+    day.soldProfit += orig.profit;
+    day.soldCost += orig.cost;
+    day.soldCount += 1;
+    day.soldPaid += orig.paid;
+    day.soldCredit += orig.credit;
+    soldInvoices.push({
+      invoiceId: String(inv._id),
+      invoiceNumber: inv.invoiceNumber,
+      customerName: inv.customerName || 'بدون نام',
+      totalAmount: orig.sold,
+      totalKg: orig.kg,
+      paid: orig.paid,
+      credit: orig.credit,
+      date: new Date(inv.date).toISOString(),
+    });
+  }
+
+  const collections: DayCollectionItem[] = [];
+  const usedInvoicePayKeys = new Set<string>();
+
+  const pushCollection = (item: DayCollectionItem) => {
+    if (item.amount <= 0) return;
+    collections.push(item);
+    const day = bucket(item.date);
+    day.collectionsTotal += item.amount;
+    if (item.isPriorCredit) day.priorCreditCollected += item.amount;
+  };
+
+  for (const inv of collectInvs) {
+    const invDay = dayKeyOf(inv.date);
+    for (const ev of inv.paymentEvents || []) {
+      if (ev.kind !== 'credit_settle' || !inDayRange(ev.date, rangeStart, rangeEnd)) continue;
+      const payDay = dayKeyOf(ev.date);
+      const amount = Math.max(0, Math.round(ev.amount || 0));
+      pushCollection({
+        invoiceId: String(inv._id),
+        invoiceNumber: inv.invoiceNumber,
+        customerName: inv.customerName || 'بدون نام',
+        amount,
+        method: normalizePayMethod(ev.method),
+        date: new Date(ev.date).toISOString(),
+        invoiceDate: new Date(inv.date).toISOString(),
+        isPriorCredit: payDay !== invDay,
+        note: ev.note,
+      });
+      usedInvoicePayKeys.add(`${String(inv._id)}:${payDay}:${amount}`);
+    }
+  }
+
+  const collectInvIds = new Set(collectInvs.map((i) => String(i._id)));
+  const missingInvIds = [
+    ...new Set(
+      debtors
+        .filter((d) => d.saleInvoiceId && !collectInvIds.has(String(d.saleInvoiceId)))
+        .map((d) => String(d.saleInvoiceId))
+    ),
+  ];
+  const fallbackInvs =
+    missingInvIds.length > 0
+      ? await SaleInvoice.find({ _id: { $in: missingInvIds } }).select(
+          'invoiceNumber customerName date marketerId paymentEvents'
+        )
+      : [];
+  const fallbackById = new Map(fallbackInvs.map((i) => [String(i._id), i]));
+
+  for (const d of debtors) {
+    const invId = d.saleInvoiceId ? String(d.saleInvoiceId) : '';
+    const inv = invId
+      ? collectInvs.find((i) => String(i._id) === invId) || fallbackById.get(invId)
+      : undefined;
+    if (inv && (inv.paymentEvents || []).some((e) => e.kind === 'credit_settle')) continue;
+    if (marketerId && inv && String(inv.marketerId || '') !== String(marketerId)) continue;
+    for (const p of d.payments || []) {
+      if (!inDayRange(p.date, rangeStart, rangeEnd)) continue;
+      const amount = Math.max(0, Math.round(p.amount || 0));
+      const payDay = dayKeyOf(p.date);
+      const key = invId ? `${invId}:${payDay}:${amount}` : '';
+      if (key && usedInvoicePayKeys.has(key)) continue;
+      const invDay = inv ? dayKeyOf(inv.date) : '';
+      pushCollection({
+        invoiceId: invId || undefined,
+        invoiceNumber: inv?.invoiceNumber,
+        customerName: inv?.customerName || d.name || 'بدون نام',
+        amount,
+        method: normalizePayMethod(p.method),
+        date: new Date(p.date).toISOString(),
+        invoiceDate: inv ? new Date(inv.date).toISOString() : undefined,
+        isPriorCredit: !inv || payDay !== invDay,
+        note: p.note,
+      });
+    }
+  }
+
+  collections.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  soldInvoices.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+  const priorCreditCollected = collections
+    .filter((c) => c.isPriorCredit)
+    .reduce((s, c) => s + c.amount, 0);
+  const collectionsTotal = collections.reduce((s, c) => s + c.amount, 0);
+
+  return {
+    soldGross: Math.round(soldGross),
+    soldKg: Math.round(soldKg * 100) / 100,
+    soldProfit: Math.round(soldProfit),
+    soldCost: Math.round(soldCost),
+    soldCount: soldInvs.length,
+    soldPaid: Math.round(soldPaid),
+    soldCredit: Math.round(soldCredit),
+    soldCash: Math.round(soldCash),
+    soldCard: Math.round(soldCard),
+    soldPaidProfit: Math.round(soldPaidProfit),
+    soldCreditProfit: Math.round(soldCreditProfit),
+    collectionsTotal: Math.round(collectionsTotal),
+    priorCreditCollected: Math.round(priorCreditCollected),
+    sameDayCreditCollected: Math.round(collectionsTotal - priorCreditCollected),
+    collections,
+    soldInvoices,
+    daily: Array.from(byDay.values()).sort((a, b) => a.date.localeCompare(b.date)),
+  };
+}
+
 export function aggregateShippedSplit(
   sales: Array<{
     totalAmount?: number;
@@ -102,24 +471,26 @@ export function aggregateShippedSplit(
     totalCost?: number;
     totalKg?: number;
     payment?: { cash?: number; card?: number; credit?: number } | null;
+    paymentEvents?: PaymentEventLike[] | null;
+    extraSettled?: number;
   }>
 ): { paid: ShippedBucket; credit: ShippedBucket } {
   const paid = emptyShippedBucket();
   const credit = emptyShippedBucket();
   for (const sale of sales) {
-    const s = splitSaleMetrics(sale);
-    if (s.paid.amount > 0) {
-      paid.sales += s.paid.amount;
-      paid.profit += s.paid.profit;
-      paid.cost += s.paid.cost;
-      paid.kg += s.paid.kg;
+    const s = originalInvoiceSplit(sale);
+    if (s.paid > 0) {
+      paid.sales += s.paid;
+      paid.profit += s.paidProfit;
+      paid.cost += s.paidCost;
+      paid.kg += s.paidKg;
       paid.invoiceCount += 1;
     }
-    if (s.credit.amount > 0) {
-      credit.sales += s.credit.amount;
-      credit.profit += s.credit.profit;
-      credit.cost += s.credit.cost;
-      credit.kg += s.credit.kg;
+    if (s.credit > 0) {
+      credit.sales += s.credit;
+      credit.profit += s.creditProfit;
+      credit.cost += s.creditCost;
+      credit.kg += s.creditKg;
       credit.invoiceCount += 1;
     }
   }
@@ -182,17 +553,17 @@ function summarizeProfitBucket(
   let marginN = 0;
   let invoiceCount = 0;
   for (const sale of sales) {
-    const rec = recognizedSaleMetrics(sale);
-    if (rec.amount <= 0) continue;
+    const orig = originalInvoiceSplit(sale);
+    if (orig.sold <= 0) continue;
     invoiceCount += 1;
-    totalSales += rec.amount;
-    totalProfit += rec.profit;
-    totalKg += rec.kg;
-    if (rec.cost > 0) {
-      markupSum += (rec.profit / rec.cost) * 100;
+    totalSales += orig.sold;
+    totalProfit += orig.profit;
+    totalKg += orig.kg;
+    if (orig.cost > 0) {
+      markupSum += (orig.profit / orig.cost) * 100;
       markupN += 1;
     }
-    marginSum += (rec.profit / rec.amount) * 100;
+    marginSum += (orig.profit / orig.sold) * 100;
     marginN += 1;
   }
   return {
@@ -310,7 +681,7 @@ export async function getDashboard(
 
   const ACTIVE = REVENUE_STATUSES;
 
-  const [sales, monthSales, expenses, settings, debtors, cardDeposits, company, checks, crm, readyShip, pendingCount, inventory, profitAverages] =
+  const [sales, monthSales, expenses, settings, debtors, cardDeposits, company, checks, crm, readyShip, pendingCount, inventory, profitAverages, dayLedger] =
     await Promise.all([
       SaleInvoice.find({ ...saleFilterRange, status: ACTIVE }),
       SaleInvoice.find({ ...saleFilterMonth, status: ACTIVE }),
@@ -334,12 +705,13 @@ export async function getDashboard(
       SaleInvoice.countDocuments({ status: 'pending' }),
       getInventorySnapshot(),
       getProfitAverages(targetDate),
+      buildDayLedger(rangeStart, dayEnd, marketerId),
     ]);
 
-  const totalSales = sales.reduce((s, inv) => s + recognizedSaleMetrics(inv).amount, 0);
-  const soldKg = sales.reduce((s, inv) => s + recognizedSaleMetrics(inv).kg, 0);
-  const totalProfit = sales.reduce((s, inv) => s + recognizedSaleMetrics(inv).profit, 0);
-  const totalCost = sales.reduce((s, inv) => s + recognizedSaleMetrics(inv).cost, 0);
+  const totalSales = dayLedger.soldGross;
+  const soldKg = dayLedger.soldKg;
+  const totalProfit = dayLedger.soldProfit;
+  const totalCost = dayLedger.soldCost;
   const shippedSplit = aggregateShippedSplit(sales);
 
   const expenseByType: Record<string, number> = {};
@@ -358,13 +730,13 @@ export async function getDashboard(
   }
   const netProfit = totalProfit - totalExpenses;
 
-  const monthSalesAmount = monthSales.reduce((s, inv) => s + recognizedSaleMetrics(inv).amount, 0);
-  const monthSoldKg = monthSales.reduce((s, inv) => s + recognizedSaleMetrics(inv).kg, 0);
-  const monthProfit = monthSales.reduce((s, inv) => s + recognizedSaleMetrics(inv).profit, 0);
+  const monthSalesAmount = monthSales.reduce((s, inv) => s + originalInvoiceSplit(inv).sold, 0);
+  const monthSoldKg = monthSales.reduce((s, inv) => s + originalInvoiceSplit(inv).kg, 0);
+  const monthProfit = monthSales.reduce((s, inv) => s + originalInvoiceSplit(inv).profit, 0);
 
-  const cashSales = sales.reduce((s, inv) => s + recognizedSaleMetrics(inv).cash, 0);
-  const cardSales = sales.reduce((s, inv) => s + recognizedSaleMetrics(inv).card, 0);
-  const creditSales = sales.reduce((s, inv) => s + recognizedSaleMetrics(inv).creditOpen, 0);
+  const cashSales = dayLedger.soldCash;
+  const cardSales = dayLedger.soldCard;
+  const creditSales = dayLedger.soldCredit;
   const cardDepositTotal = cardDeposits.reduce((s, t) => s + t.amount, 0);
 
   const overdueDebtors = debtors.filter((d) => new Date(d.dueDate) < new Date());
@@ -404,9 +776,22 @@ export async function getDashboard(
     cardDepositTotal,
     cashBalance: settings.cashBalance,
     cardBalance: settings.cardBalance,
-    salesCount: sales.length,
-    /** دو ستون خلاصه روز: پرداخت‌شده | نسیه ارسال‌شده */
+    salesCount: dayLedger.soldCount,
+    /** دو ستون خلاصه روز: پرداخت‌شده هنگام فاکتور | نسیه همان فاکتورها */
     shippedSplit,
+    dayLedger: {
+      soldGross: dayLedger.soldGross,
+      soldKg: dayLedger.soldKg,
+      soldProfit: dayLedger.soldProfit,
+      soldCount: dayLedger.soldCount,
+      soldPaid: dayLedger.soldPaid,
+      soldCredit: dayLedger.soldCredit,
+      collectionsTotal: dayLedger.collectionsTotal,
+      priorCreditCollected: dayLedger.priorCreditCollected,
+      sameDayCreditCollected: dayLedger.sameDayCreditCollected,
+      collections: dayLedger.collections.slice(0, 40),
+      soldInvoices: dayLedger.soldInvoices.slice(0, 40),
+    },
     expenseCount: expenses.filter((e) => operatingExpenseAmount(e.type, e.amount) > 0).length,
     inventory,
     month: {
@@ -493,15 +878,23 @@ export async function getPeriodSummary(from: Date, to: Date, marketerId?: string
   if (marketerId) saleFilter.marketerId = marketerId;
 
   const activeStatuses = REVENUE_STATUSES;
-  const [sales, expenses, settings] = await Promise.all([
+  const [sales, expenses, settings, dayLedger] = await Promise.all([
     SaleInvoice.find({ ...saleFilter, status: activeStatuses }),
     Expense.find({ date: { $gte: rangeFrom, $lte: rangeTo } }),
     getOrCreateSettings(),
+    buildDayLedger(rangeFrom, rangeTo, marketerId),
   ]);
 
   const dailyMap = new Map<
     string,
-    { sales: number; profit: number; expenses: number; soldKg: number }
+    {
+      sales: number;
+      profit: number;
+      expenses: number;
+      soldKg: number;
+      creditCollected: number;
+      priorCreditCollected: number;
+    }
   >();
 
   let cashSales = 0;
@@ -514,26 +907,59 @@ export async function getPeriodSummary(from: Date, to: Date, marketerId?: string
 
   for (const sale of sales) {
     const key = startOfDay(sale.date).toISOString().split('T')[0];
-    const entry = dailyMap.get(key) || { sales: 0, profit: 0, expenses: 0, soldKg: 0 };
-    const rec = recognizedSaleMetrics(sale);
-    entry.sales += rec.amount;
-    entry.profit += rec.profit;
-    entry.soldKg += rec.kg;
+    const entry = dailyMap.get(key) || {
+      sales: 0,
+      profit: 0,
+      expenses: 0,
+      soldKg: 0,
+      creditCollected: 0,
+      priorCreditCollected: 0,
+    };
+    const orig = originalInvoiceSplit(sale);
+    entry.sales += orig.sold;
+    entry.profit += orig.profit;
+    entry.soldKg += orig.kg;
     dailyMap.set(key, entry);
 
-    cashSales += rec.cash;
-    cardSales += rec.card;
-    creditSales += rec.creditOpen;
+    cashSales += orig.cash;
+    cardSales += orig.card;
+    creditSales += orig.credit;
     if (sale.isGolden) {
       goldenCount += 1;
-      goldenAmount += rec.amount;
-      goldenKg += rec.kg;
+      goldenAmount += orig.sold;
+      goldenKg += orig.kg;
     }
+  }
+
+  for (const d of dayLedger.daily) {
+    const entry = dailyMap.get(d.date) || {
+      sales: 0,
+      profit: 0,
+      expenses: 0,
+      soldKg: 0,
+      creditCollected: 0,
+      priorCreditCollected: 0,
+    };
+    entry.creditCollected = d.collectionsTotal;
+    entry.priorCreditCollected = d.priorCreditCollected;
+    if (entry.sales === 0 && d.soldGross > 0) {
+      entry.sales = d.soldGross;
+      entry.profit = d.soldProfit;
+      entry.soldKg = d.soldKg;
+    }
+    dailyMap.set(d.date, entry);
   }
 
   for (const expense of expenses) {
     const key = startOfDay(expense.date).toISOString().split('T')[0];
-    const entry = dailyMap.get(key) || { sales: 0, profit: 0, expenses: 0, soldKg: 0 };
+    const entry = dailyMap.get(key) || {
+      sales: 0,
+      profit: 0,
+      expenses: 0,
+      soldKg: 0,
+      creditCollected: 0,
+      priorCreditCollected: 0,
+    };
     entry.expenses += operatingExpenseAmount(expense.type, expense.amount);
     dailyMap.set(key, entry);
   }
@@ -547,10 +973,10 @@ export async function getPeriodSummary(from: Date, to: Date, marketerId?: string
     }))
     .sort((a, b) => a.date.localeCompare(b.date));
 
-  const totalSales = sales.reduce((s, i) => s + recognizedSaleMetrics(i).amount, 0);
-  const soldKg = sales.reduce((s, i) => s + recognizedSaleMetrics(i).kg, 0);
-  const totalProfit = sales.reduce((s, i) => s + recognizedSaleMetrics(i).profit, 0);
-  const totalCost = sales.reduce((s, i) => s + recognizedSaleMetrics(i).cost, 0);
+  const totalSales = dayLedger.soldGross;
+  const soldKg = dayLedger.soldKg;
+  const totalProfit = dayLedger.soldProfit;
+  const totalCost = dayLedger.soldCost;
   const shippedSplit = aggregateShippedSplit(sales);
   const expenseByType: Record<string, number> = {};
   let totalExpenses = 0;
@@ -583,16 +1009,12 @@ export async function getPeriodSummary(from: Date, to: Date, marketerId?: string
     })),
   };
 
-  /** فروش انبار در بازه — به تفکیک محصول (تناژ / بسته / مبلغ) — فقط سهم شناساییشده */
+  /** فروش انبار در بازه — به تفکیک محصول روی تاریخ فاکتور (کل بار فروخته‌شده) */
   const soldMap = new Map<
     string,
     { productId: string; name: string; soldKg: number; soldPackages: number; revenue: number }
   >();
   for (const sale of sales) {
-    const rec = recognizedSaleMetrics(sale);
-    const ratio =
-      (sale.totalAmount || 0) > 0 ? Math.min(1, rec.amount / (sale.totalAmount || 1)) : 0;
-    if (ratio <= 0) continue;
     for (const it of sale.items || []) {
       const pid = it.productId ? String(it.productId) : it.productName || 'unknown';
       const cur = soldMap.get(pid) || {
@@ -602,9 +1024,9 @@ export async function getPeriodSummary(from: Date, to: Date, marketerId?: string
         soldPackages: 0,
         revenue: 0,
       };
-      cur.soldKg += (it.qtyKg || 0) * ratio;
-      cur.soldPackages += (it.qtyPackages || 0) * ratio;
-      cur.revenue += (it.totalPrice || 0) * ratio;
+      cur.soldKg += it.qtyKg || 0;
+      cur.soldPackages += it.qtyPackages || 0;
+      cur.revenue += it.totalPrice || 0;
       if (it.productName) cur.name = it.productName;
       soldMap.set(pid, cur);
     }
@@ -676,7 +1098,7 @@ export async function getPeriodSummary(from: Date, to: Date, marketerId?: string
     { name: string; phone?: string; credit: number; kg: number; invoices: number }
   >();
   for (const sale of sales) {
-    const credit = sale.payment?.credit || 0;
+    const credit = originalInvoiceSplit(sale).credit;
     if (credit <= 0) continue;
     const key = sale.customerId
       ? `c:${sale.customerId}`
@@ -718,13 +1140,13 @@ export async function getPeriodSummary(from: Date, to: Date, marketerId?: string
   let marginSum = 0;
   let marginN = 0;
   for (const sale of sales) {
-    const rec = recognizedSaleMetrics(sale);
-    if (rec.amount <= 0) continue;
-    if (rec.cost > 0) {
-      markupSum += (rec.profit / rec.cost) * 100;
+    const orig = originalInvoiceSplit(sale);
+    if (orig.sold <= 0) continue;
+    if (orig.cost > 0) {
+      markupSum += (orig.profit / orig.cost) * 100;
       markupN += 1;
     }
-    marginSum += (rec.profit / rec.amount) * 100;
+    marginSum += (orig.profit / orig.sold) * 100;
     marginN += 1;
   }
   const avgMarkupPercent = markupN > 0 ? Math.round((markupSum / markupN) * 10) / 10 : 0;
@@ -790,6 +1212,19 @@ export async function getPeriodSummary(from: Date, to: Date, marketerId?: string
       paidToCompany: Math.round(company.totalPaidToCompany || 0),
     },
     daily,
+    dayLedger: {
+      soldGross: dayLedger.soldGross,
+      soldKg: dayLedger.soldKg,
+      soldProfit: dayLedger.soldProfit,
+      soldCount: dayLedger.soldCount,
+      soldPaid: dayLedger.soldPaid,
+      soldCredit: dayLedger.soldCredit,
+      collectionsTotal: dayLedger.collectionsTotal,
+      priorCreditCollected: dayLedger.priorCreditCollected,
+      sameDayCreditCollected: dayLedger.sameDayCreditCollected,
+      collections: dayLedger.collections.slice(0, 80),
+      soldInvoices: dayLedger.soldInvoices.slice(0, 80),
+    },
   };
 }
 

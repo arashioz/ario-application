@@ -23,6 +23,7 @@ import {
   formatToman,
   formatKg,
   formatDate,
+  formatDateTime,
   todayIso,
   monthStartIso,
   daysAgoIso,
@@ -118,7 +119,38 @@ interface Period {
     profit?: number;
     netProfit: number;
     expenses?: number;
+    creditCollected?: number;
+    priorCreditCollected?: number;
   }>;
+  dayLedger?: {
+    soldGross: number;
+    soldKg: number;
+    soldProfit: number;
+    soldCount: number;
+    soldPaid: number;
+    soldCredit: number;
+    collectionsTotal: number;
+    priorCreditCollected: number;
+    sameDayCreditCollected: number;
+    collections: Array<{
+      invoiceId?: string;
+      invoiceNumber?: string;
+      customerName: string;
+      amount: number;
+      method: string;
+      date: string;
+      invoiceDate?: string;
+      isPriorCredit: boolean;
+    }>;
+    soldInvoices: Array<{
+      invoiceId: string;
+      invoiceNumber: string;
+      customerName: string;
+      totalAmount: number;
+      paid: number;
+      credit: number;
+    }>;
+  };
 }
 
 type CompanyDebt = {
@@ -368,82 +400,107 @@ const History: React.FC = () => {
           </div>
 
           {/* سود واقعی فروش */}
-          <div className="cash-section-title">خلاصه فروش ارسال‌شده</div>
+          <div className="cash-section-title">فروش بازه (روی تاریخ فاکتور)</div>
           <div className="day-split-grid">
             <div className="day-split-card paid">
-              <div className="day-split-title">پرداخت‌شده</div>
-              <p className="day-split-sub">نقد / پوز / کارت — می‌آید تو صندوق</p>
+              <div className="day-split-title">فروخته‌شده</div>
+              <p className="day-split-sub">بار این بازه — جدا از وصول نسیهٔ قدیمی</p>
               <div className="day-split-row">
                 <span>فروش</span>
                 <strong>
-                  {formatToman(period?.shippedSplit?.paid.sales ?? period?.totalSales ?? 0)}
+                  {formatToman(period?.dayLedger?.soldGross ?? period?.totalSales ?? 0)}
                 </strong>
               </div>
               <div className="day-split-row">
                 <span>تناژ</span>
-                <strong>{formatKg(period?.shippedSplit?.paid.kg ?? period?.soldKg ?? 0)}</strong>
+                <strong>{formatKg(period?.dayLedger?.soldKg ?? period?.soldKg ?? 0)}</strong>
               </div>
               <div className="day-split-row">
                 <span>سود</span>
                 <strong className="success">
-                  {formatToman(period?.shippedSplit?.paid.profit ?? profit)}
+                  {formatToman(period?.dayLedger?.soldProfit ?? profit)}
                 </strong>
               </div>
               <div className="day-split-row">
                 <span>فاکتور</span>
                 <strong>
-                  {period?.shippedSplit?.paid.invoiceCount ?? period?.invoiceCount ?? 0}
+                  {period?.dayLedger?.soldCount ?? period?.invoiceCount ?? 0}
                 </strong>
               </div>
             </div>
             <div className="day-split-card credit">
-              <div className="day-split-title">نسیه ارسال‌شده</div>
-              <p className="day-split-sub">بار رفته — پول هنوز نیامده</p>
+              <div className="day-split-title">نسیه همین فاکتورها</div>
+              <p className="day-split-sub">از فروش همین بازه هنوز مانده</p>
               <div className="day-split-row">
-                <span>فروش</span>
+                <span>نسیه باز شده</span>
                 <strong>
                   {formatToman(
-                    period?.shippedSplit?.credit.sales ?? period?.payment?.credit ?? 0
+                    period?.dayLedger?.soldCredit ?? period?.shippedSplit?.credit.sales ?? period?.payment?.credit ?? 0
                   )}
                 </strong>
               </div>
               <div className="day-split-row">
-                <span>تناژ</span>
-                <strong>{formatKg(period?.shippedSplit?.credit.kg ?? 0)}</strong>
+                <span>نقد / پوز هنگام فاکتور</span>
+                <strong>{formatToman(period?.dayLedger?.soldPaid ?? period?.shippedSplit?.paid.sales ?? 0)}</strong>
               </div>
               <div className="day-split-row">
                 <span>سود در نسیه</span>
                 <strong>{formatToman(period?.shippedSplit?.credit.profit ?? 0)}</strong>
               </div>
               <div className="day-split-row">
-                <span>فاکتور</span>
+                <span>فاکتور نسیه</span>
                 <strong>{period?.shippedSplit?.credit.invoiceCount ?? 0}</strong>
               </div>
             </div>
           </div>
 
-          <div className="cash-section-title">سود واقعی (با پرداخت‌شده)</div>
+          <div className="day-split-card collect" style={{ marginBottom: 12 }}>
+            <div className="day-split-title">تسویه نسیه در این بازه</div>
+            <p className="day-split-sub">نسیهٔ قبل که در این تاریخ‌ها پاس شده — روی فروش روز فاکتور نمی‌رود</p>
+            <div className="day-split-row">
+              <span>وصول نسیهٔ قبلی</span>
+              <strong>{formatToman(period?.dayLedger?.priorCreditCollected ?? 0)}</strong>
+            </div>
+            {(period?.dayLedger?.collections || []).filter((c) => c.isPriorCredit).length > 0 && (
+              <div className="day-ledger-list">
+                {(period?.dayLedger?.collections || [])
+                  .filter((c) => c.isPriorCredit)
+                  .slice(0, 12)
+                  .map((c, i) => (
+                    <div key={`${c.invoiceId || c.customerName}-${i}`} className="day-ledger-item">
+                      <strong>{c.customerName}</strong>
+                      {' پرداخت کرد · '}
+                      {formatToman(c.amount)}
+                      {c.invoiceNumber ? ` · فاکتور ${c.invoiceNumber}` : ''}
+                      <div className="ios-caption">{formatDateTime(c.date)}</div>
+                    </div>
+                  ))}
+              </div>
+            )}
+          </div>
+
+          <div className="cash-section-title">سود فروش این بازه</div>
           <div className={`cash-profit-card ${profit >= 0 ? 'ok' : 'bad'}`}>
-            <div className="cash-profit-label">سود فروش پرداخت‌شده (بازه انتخابی)</div>
+            <div className="cash-profit-label">سود فاکتورهای همین بازه (روی تاریخ فروش)</div>
             <div className="cash-profit-value">{formatToman(profit)}</div>
             <div className="cash-profit-meta">
               {from && to ? `${formatDate(from)} تا ${formatDate(to)}` : 'بازه را انتخاب کنید'}
-              {period?.shippedSplit
-                ? ` · ${period.shippedSplit.paid.invoiceCount} فاکتور پرداختی`
+              {period?.dayLedger
+                ? ` · ${period.dayLedger.soldCount} فاکتور`
                 : period?.invoiceCount != null
                   ? ` · ${period.invoiceCount} فاکتور`
                   : ''}
-              {period ? ` · فروش پرداختی ${formatToman(period.shippedSplit?.paid.sales ?? period.totalSales)}` : ''}
+              {period ? ` · فروش ${formatToman(period.dayLedger?.soldGross ?? period.totalSales)}` : ''}
             </div>
           </div>
 
           <div className="cash-summary-card">
             <div className="cash-sum-row">
-              <span>هزینه خرید کالای پرداخت‌شده</span>
-              <strong>{formatToman(period?.shippedSplit?.paid.cost ?? cost)}</strong>
+              <span>بهای کالای فروخته‌شده</span>
+              <strong>{formatToman(cost)}</strong>
             </div>
             <div className="cash-sum-row good">
-              <span>اینقدر سود کردی (فروش پرداختی − بهای کالا)</span>
+              <span>سود فروش این بازه (فروش − بهای کالا)</span>
               <strong>{formatToman(profit)}</strong>
             </div>
             <div className="cash-sum-row cost">
@@ -461,9 +518,8 @@ const History: React.FC = () => {
               <strong>{formatToman(Math.abs(net))}</strong>
             </div>
             <p className="hint" style={{ margin: '10px 0 0' }}>
-              ستون راست = بارهایی که رفته و پولش آمده. ستون چپ = نسیهٔ ارسال‌شده (کنارش می‌بینی
-              ولی از سود خالص صندوق کم/زیاد نمی‌شود تا تسویه شود). فقط وضعیت ارسال‌شده/تحویل در این
-              خلاصه می‌آید.
+              فروش هر روز روی تاریخ فاکتور ذخیره می‌شود. وصول نسیهٔ قدیمی روی روز پرداخت جدا می‌آید
+              و فروش آن روز را بالا نمی‌برد.
             </p>
             {profit < 0 && (
               <p className="hint" style={{ margin: '8px 0 0', color: '#b91c1c' }}>
@@ -535,7 +591,12 @@ const History: React.FC = () => {
                   {period.daily.slice(-7).map((d) => (
                     <div key={d.date} className="cash-day-line">
                       <span>{formatDate(d.date)}</span>
-                      <span>{formatToman(d.sales)}</span>
+                      <span>
+                        {formatToman(d.sales)}
+                        {(d.priorCreditCollected || 0) > 0
+                          ? ` · وصول ${formatToman(d.priorCreditCollected || 0)}`
+                          : ''}
+                      </span>
                       <span className={(d.profit ?? d.netProfit) >= 0 ? 'success' : 'danger'}>
                         {formatToman(d.profit ?? d.netProfit)}
                       </span>

@@ -22,7 +22,7 @@ import { addOutline, checkmarkCircleOutline, imageOutline, trashOutline, walletO
 import { useHistory } from 'react-router-dom';
 import { wsClient, newMutationId } from '../api/ws';
 import { resolveMediaUrl } from '../api/client';
-import { parseAmount, formatRial, formatKg, resolveLineAmount, todayIso, formatMoneyInput, formatToman, sanitizeNumberInput } from '../utils/format';
+import { parseAmount, formatRial, formatKg, resolveLineAmount, todayIso, formatMoneyInput, formatToman, sanitizeNumberInput, roundProfitPercent } from '../utils/format';
 import { PersianDateField } from '../components/PersianDateField';
 import { InvoiceListPanel } from '../components/InvoiceListPanel';
 import { useAuth } from '../auth/AuthContext';
@@ -218,9 +218,9 @@ const Purchase: React.FC = () => {
             qtyInput: parseFloat(i.qtyInput) || 0,
             unitPrice: parseAmount(i.unitPrice) || 0,
             kgPerPackage: parseFloat(i.kgPerPackage) || 5,
-            profitRetail: parseFloat(i.profitRetail) || 15,
-            profitSupermarket: parseFloat(i.profitSupermarket) || 10,
-            profitWholesale: parseFloat(i.profitWholesale) || 6,
+            profitRetail: roundProfitPercent(parseFloat(i.profitRetail) || 15),
+            profitSupermarket: roundProfitPercent(parseFloat(i.profitSupermarket) || 10),
+            profitWholesale: roundProfitPercent(parseFloat(i.profitWholesale) || 6),
           })),
         },
         { clientMutationId: newMutationId(), queueIfOffline: true }
@@ -299,9 +299,9 @@ const Purchase: React.FC = () => {
     try {
       await wsClient.request('category.update', {
         id: s.categoryId,
-        profitRetail: parseFloat(e.retail) || 0,
-        profitSupermarket: parseFloat(e.supermarket) || 0,
-        profitWholesale: parseFloat(e.wholesale) || 0,
+        profitRetail: roundProfitPercent(parseFloat(e.retail) || 0),
+        profitSupermarket: roundProfitPercent(parseFloat(e.supermarket) || 0),
+        profitWholesale: roundProfitPercent(parseFloat(e.wholesale) || 0),
       });
       setToast({ open: true, msg: `درصد سود «${s.name}» ذخیره شد`, color: 'success' });
     } catch (err) {

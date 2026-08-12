@@ -902,14 +902,55 @@ export async function listCustomerDirectory(search?: string) {
   const now = new Date();
   const monthStart = startOfDay(new Date(now.getFullYear(), now.getMonth(), 1));
   const customers = await listCustomers(search, { all: true, limit: 400 });
-  const [sales, openDebts] = await Promise.all([
+  const [sales, openDebts, lastTiers] = await Promise.all([
     SaleInvoice.find({
       date: { $gte: monthStart, $lte: now },
       status: { $in: ['approved', 'shipped', 'delivered'] },
       customerId: { $ne: null },
     }),
     Debtor.find({ isSettled: false }).select('customerId amount paidAmount dueDate'),
+    SaleInvoice.aggregate([
+      {
+        $match: {
+          customerId: { $ne: null },
+          status: { $nin: ['cancelled', 'inactive'] },
+        },
+      },
+      { $sort: { date: -1 } },
+      {
+        $group: {
+          _id: '$customerId',
+          lastTier: { $first: '$priceTier' },
+          retail: { $sum: { $cond: [{ $eq: ['$priceTier', 'retail'] }, 1, 0] } },
+          supermarket: { $sum: { $cond: [{ $eq: ['$priceTier', 'supermarket'] }, 1, 0] } },
+          wholesale: { $sum: { $cond: [{ $eq: ['$priceTier', 'wholesale'] }, 1, 0] } },
+        },
+      },
+    ]),
   ]);
+
+  const priceTierByCustomer = new Map<string, 'retail' | 'supermarket' | 'wholesale'>();
+  for (const row of lastTiers as Array<{
+    _id: unknown;
+    lastTier?: string;
+    retail: number;
+    supermarket: number;
+    wholesale: number;
+  }>) {
+    const counts: Array<['retail' | 'supermarket' | 'wholesale', number]> = [
+      ['retail', row.retail || 0],
+      ['supermarket', row.supermarket || 0],
+      ['wholesale', row.wholesale || 0],
+    ];
+    counts.sort((a, b) => b[1] - a[1]);
+    const preferred =
+      counts[0][1] > 0
+        ? counts[0][0]
+        : row.lastTier === 'supermarket' || row.lastTier === 'wholesale'
+          ? row.lastTier
+          : 'retail';
+    priceTierByCustomer.set(String(row._id), preferred);
+  }
 
   const stats = new Map<
     string,
@@ -961,10 +1002,19 @@ export async function listCustomerDirectory(search?: string) {
       Math.round(ratio * 70 + (debt.overdue > 0 ? 30 : 0) + (debt.overdue / Math.max(openCredit, 1)) * 20)
     );
 
-    let tier: CustomerLoyaltyTier = 'new';
-    if (s.kg >= 5000) tier = 'gold';
-    else if (s.kg >= 2000) tier = 'silver';
-    else if (s.count > 0) tier = 'bronze';
+    let loyaltyTier: CustomerLoyaltyTier = 'new';
+    if (s.kg >= 5000) loyaltyTier = 'gold';
+    else if (s.kg >= 2000) loyaltyTier = 'silver';
+    else if (s.count > 0) loyaltyTier = 'bronze';
+    const priceTier = priceTierByCustomer.get(id) || 'none';
+    const priceTierLabel =
+      priceTier === 'wholesale'
+        ? 'عمده'
+        : priceTier === 'supermarket'
+          ? 'سوپرمارکت'
+          : priceTier === 'retail'
+            ? 'تکی'
+            : 'بدون سابقه';
     return {
       ...c.toObject(),
       monthKg: Math.round(s.kg * 100) / 100,
@@ -983,21 +1033,23 @@ export async function listCustomerDirectory(search?: string) {
             : riskLevel === 'medium'
               ? 'ریسک متوسط'
               : 'ریسک کم',
-      loyaltyTier: tier,
+      loyaltyTier,
       tierLabel:
-        tier === 'gold'
+        loyaltyTier === 'gold'
           ? 'طلایی'
-          : tier === 'silver'
+          : loyaltyTier === 'silver'
             ? 'نقره‌ای'
-            : tier === 'bronze'
+            : loyaltyTier === 'bronze'
               ? 'برنزی'
               : 'جدید',
+      priceTier,
+      priceTierLabel,
     };
   });
 
   rows.sort((a, b) => {
-    const order = { gold: 0, silver: 1, bronze: 2, new: 3 };
-    const d = order[a.loyaltyTier] - order[b.loyaltyTier];
+    const order: Record<string, number> = { wholesale: 0, supermarket: 1, retail: 2, none: 3 };
+    const d = (order[a.priceTier] ?? 3) - (order[b.priceTier] ?? 3);
     if (d !== 0) return d;
     return b.monthKg - a.monthKg;
   });
@@ -1009,6 +1061,10 @@ export async function listCustomerDirectory(search?: string) {
       silver: rows.filter((r) => r.loyaltyTier === 'silver').length,
       bronze: rows.filter((r) => r.loyaltyTier === 'bronze').length,
       new: rows.filter((r) => r.loyaltyTier === 'new').length,
+      retail: rows.filter((r) => r.priceTier === 'retail').length,
+      supermarket: rows.filter((r) => r.priceTier === 'supermarket').length,
+      wholesale: rows.filter((r) => r.priceTier === 'wholesale').length,
+      none: rows.filter((r) => r.priceTier === 'none').length,
     },
   };
 }

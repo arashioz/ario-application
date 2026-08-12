@@ -30,11 +30,11 @@ import {
   periodRange,
   InvoicePeriod,
 } from '../utils/format';
-import { buildInvoiceShareText, copyText, pickDefaultBankCard } from '../utils/invoiceShare';
+import { buildInvoiceShareText, copyText, pickDefaultBankCard, invoiceIsSettled } from '../utils/invoiceShare';
 import { useAuth } from '../auth/AuthContext';
 import { DigitInput } from './DigitInput';
 import { QtyStepper } from './QtyStepper';
-import { SaleInvoiceDetailBody } from './SaleInvoiceDetailBody';
+import { SaleInvoiceDetailBody, PaymentEventRow } from './SaleInvoiceDetailBody';
 
 export interface SaleInvRow {
   _id: string;
@@ -70,6 +70,8 @@ export interface SaleInvRow {
   paidAt?: string;
   lastPaymentAt?: string;
   isPaid?: boolean;
+  paymentEvents?: PaymentEventRow[];
+  deliveredAt?: string;
 }
 
 export interface PurchaseInvRow {
@@ -134,6 +136,8 @@ type EditPurchaseItem = {
   qtyInput: string;
   unitPrice: string;
   kgPerPackage: number;
+  avgCostPerKg?: number;
+  lastPurchasePricePerKg?: number;
 };
 
 type Props = {
@@ -184,7 +188,15 @@ export const InvoiceListPanel: React.FC<Props> = ({
   const [editSaleItems, setEditSaleItems] = useState<EditSaleItem[]>([]);
   const [editPurchaseItems, setEditPurchaseItems] = useState<EditPurchaseItem[]>([]);
   const [productOptions, setProductOptions] = useState<
-    Array<{ _id: string; name: string; kgPerPackage?: number; stockKg?: number }>
+    Array<{
+      _id: string;
+      name: string;
+      kgPerPackage?: number;
+      stockKg?: number;
+      avgCostPerKg?: number;
+      lastPurchasePricePerKg?: number;
+      purchasePrice?: number;
+    }>
   >([]);
   const [addProductId, setAddProductId] = useState('');
   const [deactivateOpen, setDeactivateOpen] = useState(false);
@@ -306,23 +318,50 @@ export const InvoiceListPanel: React.FC<Props> = ({
       const p = inv as PurchaseInvRow;
       setEditSupplier(p.supplier || 'شرکت');
       setEditPaidNow(!!p.paidNow);
-      setEditPurchaseItems(
-        (p.items || []).map((it) => {
-          const unit = it.unit || 'kg';
-          const unitPrice =
-            it.unitPrice ??
-            (unit === 'kg' ? it.unitPricePerKg : undefined) ??
-            (it.qtyKg > 0 ? Math.round(it.totalPrice / it.qtyKg) : 0);
-          return {
-            productId: it.productId ? String(it.productId) : '',
-            productName: it.productName,
-            unit,
-            qtyInput: String(it.qtyInput ?? it.qtyKg ?? 0),
-            unitPrice: formatMoneyInput(String(unitPrice || 0)),
-            kgPerPackage: it.kgPerPackage || 5,
-          };
-        })
-      );
+      const mapped = (p.items || []).map((it) => {
+        const unit = it.unit || 'kg';
+        const unitPrice =
+          it.unitPrice ??
+          (unit === 'kg' ? it.unitPricePerKg : undefined) ??
+          (it.qtyKg > 0 ? Math.round(it.totalPrice / it.qtyKg) : 0);
+        const pid = it.productId ? String(it.productId) : '';
+        const prod =
+          productOptions.find((x) => x._id === pid) ||
+          productOptions.find((x) => x.name === it.productName);
+        return {
+          productId: pid,
+          productName: it.productName,
+          unit,
+          qtyInput: String(it.qtyInput ?? it.qtyKg ?? 0),
+          unitPrice: formatMoneyInput(String(unitPrice || 0)),
+          kgPerPackage: it.kgPerPackage || 5,
+          avgCostPerKg: prod?.avgCostPerKg || prod?.purchasePrice,
+          lastPurchasePricePerKg: prod?.lastPurchasePricePerKg || prod?.purchasePrice,
+        };
+      });
+      setEditPurchaseItems(mapped);
+      void (async () => {
+        try {
+          const fetched = await wsClient.request<typeof productOptions>('product.list', {});
+          if (!Array.isArray(fetched)) return;
+          setProductOptions(fetched);
+          setEditPurchaseItems((prev) =>
+            prev.map((row) => {
+              const prod =
+                fetched.find((x) => x._id === row.productId) ||
+                fetched.find((x) => x.name === row.productName);
+              if (!prod) return row;
+              return {
+                ...row,
+                avgCostPerKg: prod.avgCostPerKg || prod.purchasePrice,
+                lastPurchasePricePerKg: prod.lastPurchasePricePerKg || prod.purchasePrice,
+              };
+            })
+          );
+        } catch {
+          /* keep mapped */
+        }
+      })();
     }
     setEditOpen(true);
   };
@@ -600,13 +639,14 @@ export const InvoiceListPanel: React.FC<Props> = ({
         <IonContent className="ion-padding">
           {detail && kind === 'sale' && (
             <>
-              <SaleInvoiceDetailBody inv={detail as SaleInvRow} />
+              <SaleInvoiceDetailBody inv={detail as SaleInvRow} onToast={onToast} />
               <IonButton
                 expand="block"
                 fill="outline"
                 onClick={() => {
                   const inv = detail as SaleInvRow;
                   void (async () => {
+                    const settled = invoiceIsSettled(inv);
                     let defaultCard:
                       | {
                           label: string;
@@ -615,27 +655,29 @@ export const InvoiceListPanel: React.FC<Props> = ({
                           bankName?: string;
                         }
                       | undefined;
-                    try {
-                      const s = await wsClient.request<{
-                        bankCards?: Array<{
-                          label: string;
-                          cardNumber: string;
-                          accountHolder?: string;
-                          bankName?: string;
-                          isDefault?: boolean;
-                        }>;
-                      }>('settings.get');
-                      const picked = pickDefaultBankCard(s.bankCards || []);
-                      if (picked) {
-                        defaultCard = {
-                          label: picked.label,
-                          cardNumber: picked.cardNumber,
-                          accountHolder: picked.accountHolder,
-                          bankName: picked.bankName,
-                        };
+                    if (!settled) {
+                      try {
+                        const s = await wsClient.request<{
+                          bankCards?: Array<{
+                            label: string;
+                            cardNumber: string;
+                            accountHolder?: string;
+                            bankName?: string;
+                            isDefault?: boolean;
+                          }>;
+                        }>('settings.get');
+                        const picked = pickDefaultBankCard(s.bankCards || []);
+                        if (picked) {
+                          defaultCard = {
+                            label: picked.label,
+                            cardNumber: picked.cardNumber,
+                            accountHolder: picked.accountHolder,
+                            bankName: picked.bankName,
+                          };
+                        }
+                      } catch {
+                        /* ignore */
                       }
-                    } catch {
-                      /* ignore */
                     }
                     const text = buildInvoiceShareText(
                       {
@@ -656,7 +698,11 @@ export const InvoiceListPanel: React.FC<Props> = ({
                     );
                     const ok = await copyText(text);
                     onToast?.(
-                      ok ? 'متن فاکتور با کارت پیش‌فرض کپی شد' : 'کپی نشد',
+                      ok
+                        ? settled
+                          ? 'متن فاکتور کپی شد'
+                          : 'متن فاکتور با کارت پیش‌فرض کپی شد'
+                        : 'کپی نشد',
                       ok ? 'success' : 'danger'
                     );
                   })();
@@ -1087,6 +1133,17 @@ export const InvoiceListPanel: React.FC<Props> = ({
                       }}
                     />
                   </IonItem>
+                  {(it.lastPurchasePricePerKg || it.avgCostPerKg) ? (
+                    <p className="hint" style={{ marginTop: 4 }}>
+                      قیمت اولیه
+                      {it.lastPurchasePricePerKg
+                        ? ` · آخرین خرید ${formatToman(it.lastPurchasePricePerKg)}`
+                        : ''}
+                      {it.avgCostPerKg
+                        ? ` · میانگین ${formatToman(it.avgCostPerKg)}`
+                        : ''}
+                    </p>
+                  ) : null}
                 </div>
               ))}
             </>

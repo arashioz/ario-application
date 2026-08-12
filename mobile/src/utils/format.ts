@@ -45,6 +45,17 @@ export function priceFromPercent(cost: number, percent: number): number {
   return roundToman(cost * (1 + (percent || 0) / 100), 100);
 }
 
+/** درصد سود بدون خرده (عدد صحیح) */
+export function roundProfitPercent(pct: number): number {
+  return Math.round(Number(pct) || 0);
+}
+
+/** قیمت واحد فروش — رند به ۱۰۰ تومان تا خرده نماند */
+export function saleUnitPrice(perKg: number, unit: 'kg' | 'package', kgPerPackage = 5): number {
+  if (unit === 'package') return roundToman(perKg * (kgPerPackage || 5), 100);
+  return roundToman(perKg, 100);
+}
+
 export function formatToman(amount: number): string {
   return formatGrouped(amount) + ' تومان';
 }
@@ -60,6 +71,16 @@ export function formatKg(kg: number): string {
 
 export function formatDate(date: string | Date): string {
   return new Date(date).toLocaleDateString('fa-IR');
+}
+
+export function formatDateTime(date: string | Date): string {
+  return new Date(date).toLocaleString('fa-IR', {
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 /** فقط ارقام خام (بدون جداکننده) */

@@ -1,5 +1,5 @@
 import { Category, Product, ShopSettings } from '../models';
-import { normalizeProductName, isValidBackdate } from '../utils/persian';
+import { normalizeProductName, isValidBackdate, roundToman } from '../utils/persian';
 import { getShopOpeningDate } from '../config/database';
 import { Types } from 'mongoose';
 
@@ -329,17 +329,18 @@ export async function calculateSalePrice(
   const cost = resolveProductCost(product, costBasis);
   // رند به نزدیک‌ترین ۱۰۰ تومان — عدد خرد نداشته باشیم
   const salePricePerKg = Math.round((cost * (1 + percent / 100)) / 100) * 100;
+  const kgPer = product.kgPerPackage || 5;
   return {
     salePrice: salePricePerKg,
     salePricePerKg,
-    salePricePerPackage: Math.round(salePricePerKg * (product.kgPerPackage || 5)),
+    salePricePerPackage: roundToman(salePricePerKg * kgPer, 100),
     percent,
     priceTier,
     costBasis,
     purchasePrice: cost,
     avgCostPerKg: product.avgCostPerKg ?? product.purchasePrice ?? 0,
     lastPurchasePricePerKg: product.lastPurchasePricePerKg || 0,
-    kgPerPackage: product.kgPerPackage || 5,
+    kgPerPackage: kgPer,
   };
 }
 
@@ -585,7 +586,7 @@ export async function getPublicCatalog() {
     const kgPer = p.kgPerPackage || 5;
     const retailPerKg =
       p.catalogPricePerKg && p.catalogPricePerKg > 0
-        ? Math.round(p.catalogPricePerKg)
+        ? roundToman(p.catalogPricePerKg, 100)
         : retail.salePricePerKg;
 
     items.push({
@@ -598,24 +599,24 @@ export async function getPublicCatalog() {
       note: p.catalogNote || null,
       /** سازگاری قدیمی */
       pricePerKg: retailPerKg,
-      pricePerPackage: Math.round(retailPerKg * kgPer),
+      pricePerPackage: roundToman(retailPerKg * kgPer, 100),
       prices: {
         retail: {
           label: 'تکی / خرده‌فروشی',
           pricePerKg: retailPerKg,
-          pricePerPackage: Math.round(retailPerKg * kgPer),
+          pricePerPackage: roundToman(retailPerKg * kgPer, 100),
         },
         supermarket: {
           label: `از ${supermarketMinKg.toLocaleString('fa-IR')} کیلو`,
           minKg: supermarketMinKg,
           pricePerKg: supermarket.salePricePerKg,
-          pricePerPackage: Math.round(supermarket.salePricePerKg * kgPer),
+          pricePerPackage: roundToman(supermarket.salePricePerKg * kgPer, 100),
         },
         wholesale: {
           label: `از ${(wholesaleMinKg / 1000).toLocaleString('fa-IR')} تن`,
           minKg: wholesaleMinKg,
           pricePerKg: wholesale.salePricePerKg,
-          pricePerPackage: Math.round(wholesale.salePricePerKg * kgPer),
+          pricePerPackage: roundToman(wholesale.salePricePerKg * kgPer, 100),
         },
       },
     });

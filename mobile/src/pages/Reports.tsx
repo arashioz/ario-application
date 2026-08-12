@@ -46,6 +46,8 @@ type DailyPoint = {
   profit?: number;
   netProfit: number;
   expenses?: number;
+  creditCollected?: number;
+  priorCreditCollected?: number;
 };
 
 type Period = {
@@ -71,6 +73,17 @@ type Period = {
     invoices: number;
   }>;
   daily?: DailyPoint[];
+  dayLedger?: {
+    soldGross: number;
+    priorCreditCollected: number;
+    collections: Array<{
+      customerName: string;
+      amount: number;
+      invoiceNumber?: string;
+      date: string;
+      isPriorCredit: boolean;
+    }>;
+  };
 };
 
 const EXPENSE_LABELS: Record<string, string> = Object.fromEntries(
@@ -235,7 +248,12 @@ const Reports: React.FC = () => {
                             }}
                           />
                         </div>
-                        <span className="pa-trend-val">{formatToman(d.sales)}</span>
+                        <span className="pa-trend-val">
+                          {formatToman(d.sales)}
+                          {(d.priorCreditCollected || 0) > 0
+                            ? ` · وصول ${formatToman(d.priorCreditCollected || 0)}`
+                            : ''}
+                        </span>
                       </div>
                     ))}
                   </div>
@@ -316,9 +334,15 @@ const Reports: React.FC = () => {
               </div>
               <div className="cash-summary-card">
                 <div className="cash-sum-row">
-                  <span>فروش</span>
+                  <span>فروش (تاریخ فاکتور)</span>
                   <strong>{formatToman(period.totalSales)}</strong>
                 </div>
+                {(period.dayLedger?.priorCreditCollected || 0) > 0 && (
+                  <div className="cash-sum-row">
+                    <span>وصول نسیهٔ قبلی در این بازه</span>
+                    <strong>{formatToman(period.dayLedger?.priorCreditCollected || 0)}</strong>
+                  </div>
+                )}
                 <div className="cash-sum-row">
                   <span>هزینه خرید کالا (بهای تمام‌شده)</span>
                   <strong>{formatToman(cost)}</strong>

@@ -12,6 +12,15 @@ export interface IPaymentBreakdown {
   credit: number;
 }
 
+export interface IPaymentEvent {
+  amount: number;
+  method: 'cash' | 'card' | 'card_to_card';
+  date: Date;
+  /** invoice = همراه ثبت فاکتور · credit_settle = وصول نسیه بعدی */
+  kind: 'invoice' | 'credit_settle';
+  note?: string;
+}
+
 export interface ISaleItem {
   productId: Types.ObjectId;
   productName: string;
@@ -77,6 +86,8 @@ export interface ISaleInvoice extends Document {
   lastPaymentAt?: Date;
   /** نسیه با چک بوده */
   creditIsCheck?: boolean;
+  /** ریز دریافت‌ها — تاریخ واقعی پول (جدا از تاریخ فاکتور) */
+  paymentEvents?: IPaymentEvent[];
   priceTier: PriceTier;
   isGolden: boolean;
   status: SaleStatus;
@@ -124,6 +135,17 @@ const PaymentBreakdownSchema = new Schema<IPaymentBreakdown>(
     cash: { type: Number, default: 0 },
     card: { type: Number, default: 0 },
     credit: { type: Number, default: 0 },
+  },
+  { _id: false }
+);
+
+const PaymentEventSchema = new Schema<IPaymentEvent>(
+  {
+    amount: { type: Number, required: true, min: 0 },
+    method: { type: String, enum: ['cash', 'card', 'card_to_card'], default: 'cash' },
+    date: { type: Date, required: true, default: Date.now },
+    kind: { type: String, enum: ['invoice', 'credit_settle'], default: 'invoice' },
+    note: { type: String },
   },
   { _id: false }
 );
@@ -178,6 +200,7 @@ const SaleInvoiceSchema = new Schema<ISaleInvoice>(
     paidAt: { type: Date },
     lastPaymentAt: { type: Date },
     creditIsCheck: { type: Boolean, default: false },
+    paymentEvents: { type: [PaymentEventSchema], default: [] },
     priceTier: {
       type: String,
       enum: ['retail', 'supermarket', 'wholesale'],
