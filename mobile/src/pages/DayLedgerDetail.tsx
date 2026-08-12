@@ -7,18 +7,22 @@ import {
   IonContent,
   IonButtons,
   IonBackButton,
+  IonButton,
+  IonModal,
   IonRefresher,
   IonRefresherContent,
   IonSpinner,
   IonSegment,
   IonSegmentButton,
   IonLabel,
+  IonToast,
   useIonViewWillEnter,
   RefresherEventDetail,
 } from '@ionic/react';
 import { useLocation } from 'react-router-dom';
 import { wsClient } from '../api/ws';
 import { formatKg, formatToman, formatDate, todayIso } from '../utils/format';
+import { SaleInvoiceDetailBody, SaleDetailInv } from '../components/SaleInvoiceDetailBody';
 
 type Period = 'today' | 'week' | 'month';
 type Tab = 'paid' | 'credit';
@@ -52,8 +56,7 @@ function qs(search: string) {
   const period = (p.get('period') as Period) || 'today';
   const date = p.get('date') || todayIso();
   const rawTab = p.get('tab') || 'paid';
-  const tab: Tab =
-    rawTab === 'credit' || rawTab === 'collect' ? 'credit' : 'paid';
+  const tab: Tab = rawTab === 'credit' || rawTab === 'collect' ? 'credit' : 'paid';
   return {
     period: period === 'week' || period === 'month' ? period : ('today' as Period),
     date,
@@ -70,6 +73,9 @@ const DayLedgerDetail: React.FC = () => {
   const [data, setData] = useState<DashPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [detail, setDetail] = useState<SaleDetailInv | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [toast, setToast] = useState({ open: false, msg: '', color: 'success' });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -92,6 +98,25 @@ const DayLedgerDetail: React.FC = () => {
   const onRefresh = async (ev: CustomEvent<RefresherEventDetail>) => {
     await load();
     ev.detail.complete();
+  };
+
+  const openInvoice = async (invoiceId: string) => {
+    setDetailLoading(true);
+    setDetail(null);
+    try {
+      const inv = await wsClient.request<SaleDetailInv & { _id?: string }>('sale.get', {
+        id: invoiceId,
+      });
+      setDetail(inv);
+    } catch (e) {
+      setToast({
+        open: true,
+        msg: e instanceof Error ? e.message : 'فاکتور لود نشد',
+        color: 'danger',
+      });
+    } finally {
+      setDetailLoading(false);
+    }
   };
 
   const title =
@@ -126,6 +151,8 @@ const DayLedgerDetail: React.FC = () => {
             {period === 'today'
               ? formatDate(date + 'T12:00:00')
               : data?.periodLabel || 'بازه انتخاب‌شده'}
+            {' · '}
+            روی فاکتور بزن تا جزئیات باز شود
           </p>
 
           <IonSegment
@@ -177,7 +204,21 @@ const DayLedgerDetail: React.FC = () => {
                 </p>
               ) : (
                 list.map((inv) => (
-                  <div key={inv.invoiceId} className="ios-glass-card" style={{ marginTop: 8 }}>
+                  <button
+                    key={inv.invoiceId}
+                    type="button"
+                    className="ios-glass-card tap"
+                    style={{
+                      marginTop: 8,
+                      width: '100%',
+                      textAlign: 'right',
+                      border: 'none',
+                      cursor: 'pointer',
+                      font: 'inherit',
+                      color: 'inherit',
+                    }}
+                    onClick={() => void openInvoice(inv.invoiceId)}
+                  >
                     <div className="ios-row">
                       <div>
                         <strong>{inv.customerName}</strong>
@@ -186,9 +227,7 @@ const DayLedgerDetail: React.FC = () => {
                           {inv.date ? ` · ${formatDate(inv.date)}` : ''}
                         </div>
                       </div>
-                      <strong>
-                        {formatToman(tab === 'paid' ? inv.paid : inv.credit)}
-                      </strong>
+                      <strong>{formatToman(tab === 'paid' ? inv.paid : inv.credit)}</strong>
                     </div>
                     <div className="ios-caption" style={{ marginTop: 4 }}>
                       مبلغ فاکتور {formatToman(inv.totalAmount)} · {formatKg(inv.totalKg)}
@@ -196,12 +235,58 @@ const DayLedgerDetail: React.FC = () => {
                         ? ` · نقد/کارت ${formatToman(inv.paid)} · نسیه ${formatToman(inv.credit)}`
                         : ''}
                     </div>
-                  </div>
+                  </button>
                 ))
               )}
             </>
           )}
         </div>
+
+        <IonModal
+          isOpen={!!detail || detailLoading}
+          onDidDismiss={() => {
+            setDetail(null);
+            setDetailLoading(false);
+          }}
+        >
+          <IonHeader>
+            <IonToolbar>
+              <IonTitle>جزئیات فاکتور</IonTitle>
+              <IonButtons slot="end">
+                <IonButton
+                  onClick={() => {
+                    setDetail(null);
+                    setDetailLoading(false);
+                  }}
+                >
+                  بستن
+                </IonButton>
+              </IonButtons>
+            </IonToolbar>
+          </IonHeader>
+          <IonContent className="ion-padding">
+            {detailLoading && !detail ? (
+              <div className="center-pad">
+                <IonSpinner />
+              </div>
+            ) : detail ? (
+              <SaleInvoiceDetailBody
+                inv={detail}
+                onToast={(msg, color) =>
+                  setToast({ open: true, msg, color: color || 'success' })
+                }
+              />
+            ) : null}
+          </IonContent>
+        </IonModal>
+
+        <IonToast
+          isOpen={toast.open}
+          message={toast.msg}
+          color={toast.color}
+          duration={2000}
+          onDidDismiss={() => setToast((t) => ({ ...t, open: false }))}
+        />
       </IonContent>
     </IonPage>
   );
