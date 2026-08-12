@@ -25,6 +25,7 @@ import { AuthProvider, useAuth } from './auth/AuthContext';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Notes from './pages/Notes';
+import DayLedgerDetail from './pages/DayLedgerDetail';
 import Purchase from './pages/Purchase';
 import Sale from './pages/Sale';
 import Expense from './pages/Expense';
@@ -143,6 +144,7 @@ const AuthedApp: React.FC = () => {
     <IonTabs>
       <IonRouterOutlet>
         <Route exact path="/dashboard" component={Dashboard} />
+        <Route exact path="/day-ledger" component={DayLedgerDetail} />
         <Route exact path="/notes" component={Notes} />
         <Route exact path="/purchase" component={Purchase} />
         <Route exact path="/sale" component={Sale} />

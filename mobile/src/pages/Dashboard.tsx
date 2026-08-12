@@ -37,7 +37,7 @@ import {
 } from 'ionicons/icons';
 import { wsClient } from '../api/ws';
 import { useAuth } from '../auth/AuthContext';
-import { formatKg, formatToman, formatDate, formatDateTime, todayIso } from '../utils/format';
+import { formatKg, formatToman, formatDate, todayIso } from '../utils/format';
 import { useHistory } from 'react-router-dom';
 import { PersianDateField } from '../components/PersianDateField';
 
@@ -461,20 +461,19 @@ const Dashboard: React.FC = () => {
                     <span>فاکتور</span>
                     <strong>{data.dayLedger?.soldCount ?? data.salesCount}</strong>
                   </div>
-                  {(data.dayLedger?.soldInvoices || []).length > 0 && (
-                    <div className="day-ledger-list">
-                      {(data.dayLedger?.soldInvoices || []).slice(0, 8).map((inv) => (
-                        <div key={inv.invoiceId} className="day-ledger-item">
-                          <strong>{inv.customerName}</strong>
-                          {' · '}
-                          {inv.invoiceNumber}
-                          {' · '}
-                          {formatToman(inv.totalAmount)}
-                          {inv.credit > 0 ? ` · نسیه ${formatToman(inv.credit)}` : ''}
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                  <IonButton
+                    expand="block"
+                    fill="outline"
+                    size="small"
+                    className="ion-margin-top"
+                    onClick={() =>
+                      history.push(
+                        `/day-ledger?period=${kpiPeriod}&date=${encodeURIComponent(viewDate)}&tab=sold`
+                      )
+                    }
+                  >
+                    لیست فاکتورها
+                  </IonButton>
                 </div>
 
                 <div className="day-split-card collect">
@@ -496,32 +495,19 @@ const Dashboard: React.FC = () => {
                       <strong>{formatToman(data.dayLedger?.sameDayCreditCollected || 0)}</strong>
                     </div>
                   )}
-                  {(data.dayLedger?.collections || []).filter((c) => c.isPriorCredit).length === 0 ? (
-                    <p className="hint" style={{ margin: '8px 0 0' }}>
-                      وصول نسیهٔ قدیمی در این بازه نبوده
-                    </p>
-                  ) : (
-                    <div className="day-ledger-list">
-                      {(data.dayLedger?.collections || [])
-                        .filter((c) => c.isPriorCredit)
-                        .slice(0, 10)
-                        .map((c, i) => (
-                          <div key={`${c.invoiceId || c.customerName}-${c.date}-${i}`} className="day-ledger-item">
-                            <strong>{c.customerName}</strong>
-                            {' پرداخت کرد · '}
-                            {formatToman(c.amount)}
-                            {c.method === 'cash'
-                              ? ' نقد'
-                              : c.method === 'card_to_card'
-                                ? ' کارت‌به‌کارت'
-                                : ' پوز'}
-                            {c.invoiceNumber ? ` · فاکتور ${c.invoiceNumber}` : ''}
-                            {c.invoiceDate ? ` · فاکتور ${formatDate(c.invoiceDate)}` : ''}
-                            <div className="ios-caption">{formatDateTime(c.date)}</div>
-                          </div>
-                        ))}
-                    </div>
-                  )}
+                  <IonButton
+                    expand="block"
+                    fill="outline"
+                    size="small"
+                    className="ion-margin-top"
+                    onClick={() =>
+                      history.push(
+                        `/day-ledger?period=${kpiPeriod}&date=${encodeURIComponent(viewDate)}&tab=collect`
+                      )
+                    }
+                  >
+                    لیست تسویه‌ها
+                  </IonButton>
                 </div>
               </div>
               <p className="hint" style={{ marginTop: 8 }}>
