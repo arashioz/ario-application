@@ -51,7 +51,7 @@ interface SaleInv {
   status: string;
   isGolden?: boolean;
   shippingNotes?: string;
-  shippingBy?: 'us' | 'customer' | 'none';
+  shippingBy?: 'us' | 'courier' | 'customer' | 'none';
   shippingCost?: number;
   driverEarned?: number;
   driverPaid?: boolean;
@@ -86,7 +86,7 @@ interface Driver {
   lastLng?: number;
 }
 
-type ShippingBy = 'us' | 'customer' | 'none';
+type ShippingBy = 'us' | 'courier' | 'customer' | 'none';
 type SettleKind = 'paid' | 'credit';
 type SettleMethod = 'cash' | 'card' | 'card_to_card';
 
@@ -100,6 +100,7 @@ const STATUS: Record<string, string> = {
 
 const SHIP_BY_LABEL: Record<ShippingBy, string> = {
   us: 'ارسال با ما',
+  courier: 'ارسال با پیک',
   customer: 'ارسال با مشتری',
   none: 'بدون ارسال',
 };
@@ -225,6 +226,7 @@ const Orders: React.FC = () => {
       setSeedEdit({
         _id: row._id,
         invoiceNumber: row.invoiceNumber,
+        customerId: (row as { customerId?: string }).customerId,
         customerName: row.customerName,
         customerPhone: row.customerPhone,
         customerAddress: row.customerAddress,
@@ -270,7 +272,9 @@ const Orders: React.FC = () => {
           driverId: dId || null,
           shippingBy: by,
           shippingCost:
-            by === 'us' ? parseAmount(shipCost[inv._id] || '') || inv.shippingCost || 0 : 0,
+            by === 'us' || by === 'courier'
+              ? parseAmount(shipCost[inv._id] || '') || inv.shippingCost || 0
+              : 0,
           settlement: settleKind,
           settleMethod: settleKind === 'paid' ? settleMethod : undefined,
         },
@@ -304,7 +308,7 @@ const Orders: React.FC = () => {
       <div className="ship-controls" style={{ width: '100%', marginTop: 8 }}>
         <p className="hint convert-hint">نوع ارسال</p>
         <div className="chip-row">
-          {(['us', 'customer', 'none'] as ShippingBy[]).map((v) => (
+          {(['us', 'courier', 'customer', 'none'] as ShippingBy[]).map((v) => (
             <IonChip
               key={v}
               className={by === v ? 'ios-chip-active' : 'ios-chip'}
@@ -317,7 +321,7 @@ const Orders: React.FC = () => {
         {by === 'us' && (
           <>
             <MoneyInput
-              label="هزینه ارسال (تومان) — اختیاری"
+              label="هزینه ارسال (تومان) — در هزینه‌ها ثبت می‌شود"
               value={
                 shipCost[inv._id] ??
                 (inv.shippingCost ? formatMoneyInput(String(inv.shippingCost)) : '')
@@ -343,7 +347,20 @@ const Orders: React.FC = () => {
             </IonItem>
           </>
         )}
-        {by !== 'us' && (
+        {by === 'courier' && (
+          <>
+            <MoneyInput
+              label="هزینه پیک (تومان) — روی فاکتور مشتری"
+              value={
+                shipCost[inv._id] ??
+                (inv.shippingCost ? formatMoneyInput(String(inv.shippingCost)) : '')
+              }
+              onChange={(v) => setShipCost({ ...shipCost, [inv._id]: v })}
+            />
+            <p className="hint">هزینه پیک به مبلغ فاکتور و نسیه مشتری اضافه می‌شود</p>
+          </>
+        )}
+        {by !== 'us' && by !== 'courier' && (
           <p className="hint">بدون راننده ثبت می‌شود و وضعیت «ارسال شده» می‌خورد</p>
         )}
         <IonItem className="ship-input">
@@ -499,7 +516,9 @@ const Orders: React.FC = () => {
                               id: inv._id,
                               shippingBy: by,
                               shippingCost:
-                                by === 'us' ? parseAmount(shipCost[inv._id] || '') || 0 : 0,
+                                by === 'us' || by === 'courier'
+                                  ? parseAmount(shipCost[inv._id] || '') || 0
+                                  : 0,
                               shippingNotes: shipNotes[inv._id] || undefined,
                               driverId: dId || null,
                             },
@@ -525,7 +544,9 @@ const Orders: React.FC = () => {
                       تأیید
                       {resolveBy(inv) === 'us' && (parseAmount(shipCost[inv._id] || '') || 0) > 0
                         ? ' + ثبت هزینه ارسال'
-                        : ''}
+                        : resolveBy(inv) === 'courier' && (parseAmount(shipCost[inv._id] || '') || 0) > 0
+                          ? ' + هزینه پیک روی فاکتور'
+                          : ''}
                     </IonButton>
                   </>
                 )}

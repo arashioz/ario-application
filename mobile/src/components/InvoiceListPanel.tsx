@@ -41,6 +41,7 @@ import { SaleInvoiceDetailBody, PaymentEventRow } from './SaleInvoiceDetailBody'
 export interface SaleInvRow {
   _id: string;
   invoiceNumber: string;
+  customerId?: string;
   customerName?: string;
   customerPhone?: string;
   customerAddress?: string;
@@ -187,6 +188,8 @@ export const InvoiceListPanel: React.FC<Props> = ({
   const [editPayCredit, setEditPayCredit] = useState('');
   const [editDiscount, setEditDiscount] = useState('');
   const [editCustomerAddress, setEditCustomerAddress] = useState('');
+  const [editCustomerId, setEditCustomerId] = useState('');
+  const [editClearCustomer, setEditClearCustomer] = useState(false);
   const [editPriceTier, setEditPriceTier] = useState<'retail' | 'supermarket' | 'wholesale'>('retail');
   const [editSaleItems, setEditSaleItems] = useState<EditSaleItem[]>([]);
   const [editPurchaseItems, setEditPurchaseItems] = useState<EditPurchaseItem[]>([]);
@@ -306,6 +309,8 @@ export const InvoiceListPanel: React.FC<Props> = ({
     setEditNotes(inv.notes || '');
     if (kind === 'sale') {
       const s = inv as SaleInvRow;
+      setEditCustomerId(s.customerId || '');
+      setEditClearCustomer(false);
       setEditCustomerName(s.customerName || '');
       setEditCustomerPhone(s.customerPhone || '');
       setEditCustomerAddress(s.customerAddress || '');
@@ -440,12 +445,14 @@ export const InvoiceListPanel: React.FC<Props> = ({
                 credit: parseAmount(editPayCredit) || 0,
               }
             : undefined;
+        const clearingCustomer = editClearCustomer && editPriceTier === 'retail';
         await wsClient.request('sale.update', {
           id: detail._id,
           password: editPw,
-          customerName: editCustomerName.trim() || undefined,
-          customerPhone: editCustomerPhone ? normalizePhone(editCustomerPhone) || undefined : undefined,
-          customerAddress: editCustomerAddress.trim() || undefined,
+          clearCustomer: clearingCustomer,
+          customerName: clearingCustomer ? '' : editCustomerName.trim(),
+          customerPhone: clearingCustomer ? '' : editCustomerPhone ? normalizePhone(editCustomerPhone) || '' : '',
+          customerAddress: clearingCustomer ? '' : editCustomerAddress.trim(),
           notes: editNotes.trim() || undefined,
           paymentMethod: editPaymentMethod,
           payment: payPayload,
@@ -886,6 +893,24 @@ export const InvoiceListPanel: React.FC<Props> = ({
                   onIonInput={(e) => setEditCustomerName(e.detail.value || '')}
                 />
               </IonItem>
+              {editPriceTier === 'retail' && (editCustomerId || editCustomerName.trim()) && (
+                <IonButton
+                  expand="block"
+                  fill="outline"
+                  color="medium"
+                  size="small"
+                  className="ion-margin-bottom"
+                  onClick={() => {
+                    setEditClearCustomer(true);
+                    setEditCustomerId('');
+                    setEditCustomerName('');
+                    setEditCustomerPhone('');
+                    setEditCustomerAddress('');
+                  }}
+                >
+                  حذف مشتری از فاکتور تکی
+                </IonButton>
+              )}
               <DigitInput
                 label="تلفن"
                 mode="phone"
@@ -906,12 +931,34 @@ export const InvoiceListPanel: React.FC<Props> = ({
                   <IonChip
                     key={t}
                     className={editPriceTier === t ? 'ios-chip-active' : 'ios-chip'}
-                    onClick={() => setEditPriceTier(t)}
+                    onClick={() => {
+                      setEditPriceTier(t);
+                      if (t === 'retail') {
+                        setEditCustomerName('');
+                        setEditCustomerPhone('');
+                        setEditCustomerAddress('');
+                      }
+                    }}
                   >
                     {TIER[t]}
                   </IonChip>
                 ))}
               </div>
+              {editPriceTier === 'retail' && (
+                <IonButton
+                  size="small"
+                  fill="outline"
+                  color="medium"
+                  className="ion-margin-bottom"
+                  onClick={() => {
+                    setEditCustomerName('');
+                    setEditCustomerPhone('');
+                    setEditCustomerAddress('');
+                  }}
+                >
+                  حذف مشتری (فاکتور تکی)
+                </IonButton>
+              )}
               <IonItem>
                 <IonLabel position="stacked">روش پرداخت</IonLabel>
                 <IonSelect

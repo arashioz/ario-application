@@ -59,6 +59,9 @@ import {
   saleUnitPrice,
 } from '../utils/format';
 import { paymentMethods } from '../theme/colors';
+
+/** روش‌های پرداخت در پاپ‌آپ فروش — بدون پوز */
+const SALE_PAY_METHODS = paymentMethods.filter((m) => m.value !== 'card');
 import { PersianDateField } from '../components/PersianDateField';
 import { MoneyInput } from '../components/MoneyInput';
 import { InvoiceListPanel } from '../components/InvoiceListPanel';
@@ -260,7 +263,7 @@ const Sale: React.FC = () => {
   const [powerLabel, setPowerLabel] = useState('');
   const [lookingUp, setLookingUp] = useState(false);
   const [lines, setLines] = useState<LineItem[]>([]);
-  const [paymentMethod, setPaymentMethod] = useState('card');
+  const [paymentMethod, setPaymentMethod] = useState('cash');
   const [payCash, setPayCash] = useState('');
   const [payCard, setPayCard] = useState('');
   const [payCardToCard, setPayCardToCard] = useState('');
@@ -311,6 +314,8 @@ const Sale: React.FC = () => {
   const [custModalLng, setCustModalLng] = useState<number | null>(null);
   /** جستجوی مشتری قبل از محصول (سوپر/عمده) — نه لیست کامل */
   const [custPickOpen, setCustPickOpen] = useState(false);
+  const [pendingSubmitAfterCustomer, setPendingSubmitAfterCustomer] = useState(false);
+  const [payModalOpen, setPayModalOpen] = useState(false);
   const [pickSearch, setPickSearch] = useState('');
   const [pickCustomers, setPickCustomers] = useState<Customer[]>([]);
   const [pickLookingUp, setPickLookingUp] = useState(false);
@@ -342,7 +347,9 @@ const Sale: React.FC = () => {
   const [prodModalUnit, setProdModalUnit] = useState<'kg' | 'package'>('package');
   const [prodModalQty, setProdModalQty] = useState('1');
   const [prodModalPrice, setProdModalPrice] = useState('');
-  const needsCustomer = priceTier != null && priceTier !== 'retail';
+  const needsCustomerOnAdd = priceTier === 'supermarket';
+  const needsCustomerOnSubmit =
+    priceTier === 'supermarket' || priceTier === 'wholesale';
   const isWholesaleCustomer = customerPreferredTier === 'wholesale';
   /** تا وقتی تیو قیمت انتخاب نشده، قیمت‌گذاری با پیش‌فرض تکی حساب می‌شود ولی UI قفل است */
   const calcTier: PriceTier = priceTier || 'retail';
@@ -390,6 +397,15 @@ const Sale: React.FC = () => {
   const continueAfterCustomerPick = async (c: Customer) => {
     await pickCustomer(c, { skipHist: true });
     setCustPickOpen(false);
+    if (pendingSubmitAfterCustomer) {
+      setPendingSubmitAfterCustomer(false);
+      if (saleTab === 'bulk') {
+        void submitInvoice();
+      } else {
+        setPayModalOpen(true);
+      }
+      return;
+    }
     const p = pendingProduct;
     setPendingProduct(null);
     if (p) openProductModal(p);
@@ -440,7 +456,7 @@ const Sale: React.FC = () => {
       setCustModalOpen(false);
       setToast({ open: true, msg: 'مشتری اضافه شد', color: 'success' });
       if (created?._id) {
-        if (pendingProduct || custPickOpen) {
+        if (pendingProduct || custPickOpen || pendingSubmitAfterCustomer) {
           await continueAfterCustomerPick(created);
         } else {
           await pickCustomer(created);
@@ -452,8 +468,16 @@ const Sale: React.FC = () => {
         setCustomerLat(custModalLat);
         setCustomerLng(custModalLng);
         setCustSearch(name);
+        setCustModalOpen(false);
         setCustPickOpen(false);
-        if (pendingProduct) {
+        if (pendingSubmitAfterCustomer) {
+          setPendingSubmitAfterCustomer(false);
+          if (saleTab === 'bulk') {
+            void submitInvoice();
+          } else {
+            setPayModalOpen(true);
+          }
+        } else if (pendingProduct) {
           const p = pendingProduct;
           setPendingProduct(null);
           openProductModal(p);
@@ -1513,7 +1537,7 @@ const Sale: React.FC = () => {
       setToast({ open: true, msg: 'تعداد معتبر وارد کنید', color: 'danger' });
       return;
     }
-    if (needsCustomer && !customerId && !customerName.trim()) {
+    if (needsCustomerOnAdd && !customerId && !customerName.trim()) {
       setToast({
         open: true,
         msg: 'اول مشتری را جستجو یا اضافه کنید',
@@ -1580,11 +1604,11 @@ const Sale: React.FC = () => {
   };
 
   const addProduct = (p: Product) => {
-    if (needsCustomer && !customerId && !customerName.trim()) {
+    if (needsCustomerOnAdd && !customerId && !customerName.trim()) {
       openCustomerPickModal(p);
       setToast({
         open: true,
-        msg: 'برای سوپر/عمده اول مشتری را جستجو یا اضافه کنید',
+        msg: 'برای سوپرمارکت اول مشتری را جستجو یا اضافه کنید',
         color: 'warning',
       });
       return;
@@ -1615,7 +1639,7 @@ const Sale: React.FC = () => {
     }
   };
 
-  const submit = async () => {
+  const submit = () => {
     if (!priceTier) {
       setToast({
         open: true,
@@ -1628,11 +1652,49 @@ const Sale: React.FC = () => {
       setToast({ open: true, msg: 'اقلامی نیست — اول محصول اضافه کنید', color: 'danger' });
       return;
     }
-    if (
-      (priceTier === 'supermarket' || priceTier === 'wholesale') &&
-      !customerId &&
-      !customerName.trim()
-    ) {
+    if (priceTier === 'supermarket' && !customerId && !customerName.trim()) {
+      setToast({
+        open: true,
+        msg: 'برای سوپرمارکت باید مشتری انتخاب یا ثبت شود',
+        color: 'danger',
+      });
+      openCustomerPickModal(null);
+      return;
+    }
+    if (priceTier === 'wholesale' && !customerId && !customerName.trim()) {
+      setPendingSubmitAfterCustomer(true);
+      openCustomerPickModal(null);
+      return;
+    }
+    if (priceTier === 'retail' && isWholesaleCustomer) {
+      setToast({
+        open: true,
+        msg: 'مشتری عمده است — فاکتور تکی مجاز نیست',
+        color: 'danger',
+      });
+      return;
+    }
+    if (saleTab === 'bulk') {
+      void submitInvoice();
+      return;
+    }
+    setPayModalOpen(true);
+  };
+
+  const submitInvoice = async () => {
+    if (!priceTier) {
+      setToast({
+        open: true,
+        msg: 'اول نوع فروش را انتخاب کنید: تکی / سوپرمارکت / عمده',
+        color: 'warning',
+      });
+      return;
+    }
+    if (!lines.length) {
+      setToast({ open: true, msg: 'اقلامی نیست — اول محصول اضافه کنید', color: 'danger' });
+      return;
+    }
+    if (needsCustomerOnSubmit && !customerId && !customerName.trim()) {
       setToast({
         open: true,
         msg: 'برای سوپرمارکت / عمده باید مشتری انتخاب یا ثبت شود',
@@ -1648,22 +1710,25 @@ const Sale: React.FC = () => {
       });
       return;
     }
+    setPayModalOpen(false);
     setLoading(true);
     try {
       const net = totals.net;
+      const effectiveMethod = saleTab === 'bulk' ? 'credit' : paymentMethod;
       let payment: { cash?: number; card?: number; credit?: number } | undefined;
-      if (paymentMethod === 'mixed') {
-        let cash = parseAmount(payCash) || 0;
-        const pos = parseAmount(payCard) || 0;
+      if (effectiveMethod === 'mixed') {
+        const cash = parseAmount(payCash) || 0;
         const c2c = parseAmount(payCardToCard) || 0;
-        let card = pos + c2c;
+        let card = c2c;
         let credit = parseAmount(payCredit) || 0;
         const sum = cash + card + credit;
-        if (sum === 0) card = net;
+        if (sum === 0) credit = net;
         else if (Math.abs(sum - net) > 1) {
           credit = Math.max(0, net - cash - card);
         }
         payment = { cash, card, credit };
+      } else if (saleTab === 'bulk') {
+        payment = { cash: 0, card: 0, credit: net };
       }
 
       const invoice = await wsClient.request<{ _id: string; invoiceNumber: string; status: string }>(
@@ -1675,17 +1740,19 @@ const Sale: React.FC = () => {
           customerAddress: customerAddress || undefined,
           customerLat: customerLat ?? undefined,
           customerLng: customerLng ?? undefined,
-          paymentMethod,
+          paymentMethod: effectiveMethod,
           payment,
           date,
           dueDate:
-            paymentMethod === 'credit' || (paymentMethod === 'mixed' && (parseAmount(payCredit) || 0) > 0)
+            effectiveMethod === 'credit' ||
+            (effectiveMethod === 'mixed' && (parseAmount(payCredit) || 0) > 0) ||
+            saleTab === 'bulk'
               ? dueDate || undefined
               : undefined,
           creditIsCheck:
             creditIsCheck &&
-            (paymentMethod === 'credit' ||
-              (paymentMethod === 'mixed' && (parseAmount(payCredit) || 0) > 0)),
+            (effectiveMethod === 'credit' ||
+              (effectiveMethod === 'mixed' && (parseAmount(payCredit) || 0) > 0)),
           priceTier,
           deliveryMode: !isAdmin ? deliveryMode : undefined,
           isGolden,
@@ -1727,8 +1794,8 @@ const Sale: React.FC = () => {
       } else {
         const defaultCard = pickDefaultBankCard(bankCards);
         let creditAmt = 0;
-        if (paymentMethod === 'credit') creditAmt = totals.net;
-        else if (paymentMethod === 'mixed') creditAmt = parseAmount(payCredit) || 0;
+        if (effectiveMethod === 'credit' || saleTab === 'bulk') creditAmt = totals.net;
+        else if (effectiveMethod === 'mixed') creditAmt = parseAmount(payCredit) || 0;
         const settled = creditAmt <= 0;
         const shareText = buildInvoiceShareText(
           {
@@ -1739,22 +1806,22 @@ const Sale: React.FC = () => {
             totalAmount: totals.net,
             totalKg: totals.kg,
             discount: totals.disc,
-            paymentMethod,
+            paymentMethod: effectiveMethod,
             isGolden,
             appliedOffer: appliedOffer || undefined,
             shopName: shopName || undefined,
             payment: {
               cash:
-                paymentMethod === 'cash'
+                effectiveMethod === 'cash'
                   ? totals.net
-                  : paymentMethod === 'mixed'
+                  : effectiveMethod === 'mixed'
                     ? parseAmount(payCash) || 0
                     : 0,
               card:
-                paymentMethod === 'card' || paymentMethod === 'card_to_card'
+                effectiveMethod === 'card_to_card'
                   ? totals.net
-                  : paymentMethod === 'mixed'
-                    ? parseAmount(payCard) || 0
+                  : effectiveMethod === 'mixed'
+                    ? parseAmount(payCardToCard) || 0
                     : 0,
               credit: creditAmt,
             },
@@ -1799,15 +1866,20 @@ const Sale: React.FC = () => {
         setToast({ open: true, msg, color: 'success' });
         if (
           priceTier === 'retail' &&
+          saleTab !== 'bulk' &&
           invoice.status !== 'pending' &&
           !(invoice as { queued?: boolean }).queued
         ) {
           let creditAmt = 0;
-          if (paymentMethod === 'credit') creditAmt = totals.net;
-          else if (paymentMethod === 'mixed') creditAmt = parseAmount(payCredit) || 0;
+          if (effectiveMethod === 'credit') creditAmt = totals.net;
+          else if (effectiveMethod === 'mixed') creditAmt = parseAmount(payCredit) || 0;
           setRetailSettleKind(creditAmt > 0 ? 'credit' : 'paid');
           setRetailSettleMethod(
-            paymentMethod === 'cash' ? 'cash' : paymentMethod === 'card_to_card' ? 'card_to_card' : 'card'
+            effectiveMethod === 'cash'
+              ? 'cash'
+              : effectiveMethod === 'card_to_card'
+                ? 'card_to_card'
+                : 'card'
           );
           setRetailShipSettle({
             id: invoice._id,
@@ -1833,7 +1905,7 @@ const Sale: React.FC = () => {
       setPayCardToCard('');
       setPayCredit('');
       if (saleTab !== 'bulk') {
-        setPaymentMethod('card');
+        setPaymentMethod('cash');
       }
       setCustomerId('');
       setCustomerName('');
@@ -2532,24 +2604,86 @@ const Sale: React.FC = () => {
             </IonItem>
           </details>
 
-          <div className="ios-glass-card sale-navy-card sale-settle">
-            <div className="sale-settle-title">تسویه · {formatToman(totals.net)}</div>
-            {appliedOffer && (
-              <div
-                className="hint convert-hint"
-                style={{
-                  margin: '0 0 10px',
-                  padding: '8px 10px',
-                  background: 'rgba(251, 146, 60, 0.12)',
-                  borderRadius: 10,
-                  border: '1px solid rgba(251, 146, 60, 0.35)',
-                }}
-              >
-                {appliedOffer}
+          {saleTab !== 'bulk' && (
+            <div className="ios-glass-card sale-navy-card sale-settle">
+              <div className="sale-settle-title">جمع فاکتور · {formatToman(totals.net)}</div>
+              {appliedOffer && (
+                <div
+                  className="hint convert-hint"
+                  style={{
+                    margin: '0 0 10px',
+                    padding: '8px 10px',
+                    background: 'rgba(251, 146, 60, 0.12)',
+                    borderRadius: 10,
+                    border: '1px solid rgba(251, 146, 60, 0.35)',
+                  }}
+                >
+                  {appliedOffer}
+                </div>
+              )}
+              <p className="hint" style={{ margin: 0 }}>
+                روش پرداخت هنگام ثبت در پاپ‌آپ مشخص می‌شود
+              </p>
+            </div>
+          )}
+
+          </div>
+
+          <IonButton
+            expand="block"
+            className="ios-primary-btn"
+            color={isGolden ? 'warning' : 'primary'}
+            onClick={submit}
+            disabled={loading || !stepsUnlocked}
+          >
+            <IonIcon slot="start" icon={isGolden ? diamondOutline : checkmarkCircleOutline} />
+            {loading ? '…' : isAdmin ? `ثبت · ${formatToman(totals.net)}` : 'ارسال برای تأیید'}
+          </IonButton>
+
+          {isAdmin && (
+            <div className="ios-glass-card sale-navy-card" style={{ marginTop: 10 }}>
+              <div className="ios-row">
+                <div className="ios-caption">
+                  نقد {formatToman(cashBalance)} · کارت {formatToman(cardBalance)}
+                </div>
+                <IonButton size="small" fill="clear" onClick={() => history.push('/history')}>
+                  صندوق
+                </IonButton>
               </div>
-            )}
+            </div>
+          )}
+
+          <IonButton
+            expand="block"
+            fill="outline"
+            size="small"
+            className="ion-margin-top"
+            onClick={() => setShowInvoiceList((v) => !v)}
+          >
+            {showInvoiceList ? 'بستن لیست فاکتورها' : 'نمایش فاکتورهای قبلی'}
+          </IonButton>
+          {showInvoiceList && (
+            <InvoiceListPanel
+              kind="sale"
+              refreshKey={listRefreshKey}
+              onToast={(msg, color) => setToast({ open: true, msg, color: color || 'success' })}
+            />
+          )}
+        </div>
+
+        {/* پاپ‌آپ روش پرداخت */}
+        <IonModal isOpen={payModalOpen} onDidDismiss={() => setPayModalOpen(false)}>
+          <IonHeader>
+            <IonToolbar>
+              <IonTitle>روش پرداخت · {formatToman(totals.net)}</IonTitle>
+              <IonButtons slot="end">
+                <IonButton onClick={() => setPayModalOpen(false)}>انصراف</IonButton>
+              </IonButtons>
+            </IonToolbar>
+          </IonHeader>
+          <IonContent className="ion-padding">
             <div className="chip-row">
-              {paymentMethods.map((m) => (
+              {SALE_PAY_METHODS.map((m) => (
                 <IonChip
                   key={m.value}
                   className={paymentMethod === m.value ? 'ios-chip-active' : 'ios-chip'}
@@ -2574,9 +2708,7 @@ const Sale: React.FC = () => {
                   کارت مقصد
                 </div>
                 {bankCards.length === 0 ? (
-                  <p className="hint">
-                    هنوز کارتی ثبت نشده — از تنظیمات اپ کارت اضافه کنید
-                  </p>
+                  <p className="hint">هنوز کارتی ثبت نشده — از تنظیمات اپ کارت اضافه کنید</p>
                 ) : (
                   bankCards.map((c, i) => (
                     <div
@@ -2641,26 +2773,13 @@ const Sale: React.FC = () => {
             {paymentMethod === 'mixed' && (
               <div className="mixed-pay">
                 <MoneyInput
-                  label="پوز / کارتخوان"
-                  value={payCard}
-                  onChange={(v) => {
-                    setPayCard(v);
-                    const cash = parseAmount(payCash) || 0;
-                    const pos = parseAmount(v) || 0;
-                    const c2c = parseAmount(payCardToCard) || 0;
-                    const rem = Math.max(0, totals.net - cash - pos - c2c);
-                    setPayCredit(rem > 0 ? formatMoneyInput(String(rem)) : '');
-                  }}
-                />
-                <MoneyInput
                   label="نقد"
                   value={payCash}
                   onChange={(v) => {
                     setPayCash(v);
                     const cash = parseAmount(v) || 0;
-                    const pos = parseAmount(payCard) || 0;
                     const c2c = parseAmount(payCardToCard) || 0;
-                    const rem = Math.max(0, totals.net - cash - pos - c2c);
+                    const rem = Math.max(0, totals.net - cash - c2c);
                     setPayCredit(rem > 0 ? formatMoneyInput(String(rem)) : '');
                   }}
                 />
@@ -2670,9 +2789,8 @@ const Sale: React.FC = () => {
                   onChange={(v) => {
                     setPayCardToCard(v);
                     const cash = parseAmount(payCash) || 0;
-                    const pos = parseAmount(payCard) || 0;
                     const c2c = parseAmount(v) || 0;
-                    const rem = Math.max(0, totals.net - cash - pos - c2c);
+                    const rem = Math.max(0, totals.net - cash - c2c);
                     setPayCredit(rem > 0 ? formatMoneyInput(String(rem)) : '');
                   }}
                 />
@@ -2681,7 +2799,7 @@ const Sale: React.FC = () => {
                   <div className="mixed-credit-value">
                     {formatToman(parseAmount(payCredit) || 0)}
                   </div>
-                  <p className="hint">خودکار: مبلغ فاکتور − (پوز + نقد + کارت‌به‌کارت)</p>
+                  <p className="hint">خودکار: مبلغ فاکتور − (نقد + کارت‌به‌کارت)</p>
                 </div>
               </div>
             )}
@@ -2705,51 +2823,17 @@ const Sale: React.FC = () => {
                 )}
               </>
             )}
-          </div>
-
-          </div>
-
-          <IonButton
-            expand="block"
-            className="ios-primary-btn"
-            color={isGolden ? 'warning' : 'primary'}
-            onClick={submit}
-            disabled={loading || !stepsUnlocked}
-          >
-            <IonIcon slot="start" icon={isGolden ? diamondOutline : checkmarkCircleOutline} />
-            {loading ? '…' : isAdmin ? `ثبت · ${formatToman(totals.net)}` : 'ارسال برای تأیید'}
-          </IonButton>
-
-          {isAdmin && (
-            <div className="ios-glass-card sale-navy-card" style={{ marginTop: 10 }}>
-              <div className="ios-row">
-                <div className="ios-caption">
-                  نقد {formatToman(cashBalance)} · کارت {formatToman(cardBalance)}
-                </div>
-                <IonButton size="small" fill="clear" onClick={() => history.push('/history')}>
-                  صندوق
-                </IonButton>
-              </div>
-            </div>
-          )}
-
-          <IonButton
-            expand="block"
-            fill="outline"
-            size="small"
-            className="ion-margin-top"
-            onClick={() => setShowInvoiceList((v) => !v)}
-          >
-            {showInvoiceList ? 'بستن لیست فاکتورها' : 'نمایش فاکتورهای قبلی'}
-          </IonButton>
-          {showInvoiceList && (
-            <InvoiceListPanel
-              kind="sale"
-              refreshKey={listRefreshKey}
-              onToast={(msg, color) => setToast({ open: true, msg, color: color || 'success' })}
-            />
-          )}
-        </div>
+            <IonButton
+              expand="block"
+              className="ios-primary-btn ion-margin-top"
+              color={isGolden ? 'warning' : 'primary'}
+              disabled={loading}
+              onClick={() => void submitInvoice()}
+            >
+              {loading ? '…' : `ثبت فاکتور · ${formatToman(totals.net)}`}
+            </IonButton>
+          </IonContent>
+        </IonModal>
 
         {/* تسویه فاکتور تکی (بدون صف ارسال) */}
         <IonModal
@@ -2874,11 +2958,14 @@ const Sale: React.FC = () => {
             setPickSearch('');
             setPickCustomers([]);
             setPendingProduct(null);
+            setPendingSubmitAfterCustomer(false);
           }}
         >
           <IonHeader>
             <IonToolbar color="primary">
-              <IonTitle>انتخاب مشتری</IonTitle>
+              <IonTitle>
+                {pendingSubmitAfterCustomer ? 'ثبت مشتری · سپس ثبت فاکتور' : 'انتخاب مشتری'}
+              </IonTitle>
               <IonButtons slot="end">
                 <IonButton
                   onClick={() => {

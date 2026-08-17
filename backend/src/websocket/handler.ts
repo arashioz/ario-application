@@ -767,7 +767,7 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
       requireAdmin(user);
       const result = await approveSale(String(p.id), user.userId, {
         driverId: p.driverId !== undefined ? (p.driverId as string | null) : undefined,
-        shippingBy: p.shippingBy as 'us' | 'customer' | 'none' | undefined,
+        shippingBy: p.shippingBy as 'us' | 'courier' | 'customer' | 'none' | undefined,
         shippingCost: p.shippingCost as number | undefined,
         shippingNotes: p.shippingNotes as string | undefined,
       });
@@ -782,7 +782,7 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
       const result = await shipSale(String(p.id), {
         shippingNotes: p.shippingNotes as string | undefined,
         driverId: p.driverId !== undefined ? (p.driverId as string | null) : undefined,
-        shippingBy: p.shippingBy as 'us' | 'customer' | 'none' | undefined,
+        shippingBy: p.shippingBy as 'us' | 'courier' | 'customer' | 'none' | undefined,
         shippingCost: p.shippingCost as number | undefined,
         settlement: p.settlement as 'paid' | 'credit' | undefined,
         settleMethod: p.settleMethod as 'cash' | 'card' | 'card_to_card' | undefined,
@@ -844,6 +844,7 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
         customerName: p.customerName as string | undefined,
         customerPhone: p.customerPhone as string | undefined,
         customerAddress: p.customerAddress as string | undefined,
+        clearCustomer: p.clearCustomer === true,
         items: p.items as never,
         paymentMethod: p.paymentMethod as never,
         payment: p.payment as never,
