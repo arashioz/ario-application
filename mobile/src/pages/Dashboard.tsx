@@ -511,6 +511,86 @@ const Dashboard: React.FC = () => {
                 نمی‌آید.
               </p>
 
+              {/* ─── جمع ورودی پول روز: فروش نقد + وصولی نسیه‌های قبلی ─── */}
+              {data.dayLedger && (
+                <div className="ios-glass-card" style={{ marginTop: 10 }}>
+                  <div className="ios-section-title" style={{ marginTop: 0 }}>
+                    💰 جمع ورودی پول {data.periodLabel || 'امروز'}
+                  </div>
+                  <div className="stat-row">
+                    <span className="stat-label">فروش نقد + پوز (فاکتور امروز)</span>
+                    <strong className="stat-value">{formatToman(data.dayLedger.soldPaid)}</strong>
+                  </div>
+                  <div className="stat-row">
+                    <span className="stat-label">وصولی نسیه روزهای قبل</span>
+                    <strong className="stat-value success">
+                      {formatToman(data.dayLedger.priorCreditCollected)}
+                    </strong>
+                  </div>
+                  {data.dayLedger.sameDayCreditCollected > 0 && (
+                    <div className="stat-row">
+                      <span className="stat-label">وصولی نسیه همین روز</span>
+                      <strong className="stat-value">
+                        {formatToman(data.dayLedger.sameDayCreditCollected)}
+                      </strong>
+                    </div>
+                  )}
+                  <div
+                    className="stat-row"
+                    style={{ borderTop: '1px solid var(--ion-color-light)', paddingTop: 8, marginTop: 4 }}
+                  >
+                    <span className="stat-label" style={{ fontWeight: 700 }}>
+                      جمع کل دریافتی
+                    </span>
+                    <strong className="stat-value success" style={{ fontSize: '1.15em' }}>
+                      {formatToman(data.dayLedger.soldPaid + data.dayLedger.collectionsTotal)}
+                    </strong>
+                  </div>
+                  <p className="hint" style={{ margin: '6px 0 0' }}>
+                    فروش نقد امروز + همه وصولی‌های نسیه = کل پولی که امروز وارد شده
+                  </p>
+
+                  {/* لیست وصولی‌های نسیه قبلی */}
+                  {data.dayLedger.collections.filter((c) => c.isPriorCredit).length > 0 && (
+                    <div style={{ marginTop: 10 }}>
+                      <div className="ios-section-title" style={{ fontSize: '0.85em', marginTop: 0 }}>
+                        جزئیات وصولی نسیه‌های قبلی
+                      </div>
+                      {data.dayLedger.collections
+                        .filter((c) => c.isPriorCredit)
+                        .map((c, i) => (
+                          <div
+                            key={i}
+                            style={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              padding: '6px 0',
+                              borderBottom: '1px solid rgba(0,0,0,0.05)',
+                              fontSize: '0.85em',
+                            }}
+                          >
+                            <div>
+                              <strong>{c.customerName}</strong>
+                              {c.invoiceNumber && (
+                                <span style={{ color: 'var(--ion-color-medium)', marginRight: 6 }}>
+                                  ف.{c.invoiceNumber}
+                                </span>
+                              )}
+                              {c.invoiceDate && (
+                                <div style={{ color: 'var(--ion-color-medium)', fontSize: '0.8em' }}>
+                                  نسیه از {formatDate(c.invoiceDate)}
+                                </div>
+                              )}
+                            </div>
+                            <strong className="success">{formatToman(c.amount)}</strong>
+                          </div>
+                        ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {showProfit && data.profitAverages && (
                 <div className="ios-glass-card" style={{ marginTop: 10 }}>
                   <div className="ios-section-title" style={{ marginTop: 0 }}>
