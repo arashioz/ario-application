@@ -769,6 +769,8 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
         driverId: p.driverId !== undefined ? (p.driverId as string | null) : undefined,
         shippingBy: p.shippingBy as 'us' | 'courier' | 'customer' | 'none' | undefined,
         shippingCost: p.shippingCost as number | undefined,
+        shippingDiscount: p.shippingDiscount as number | undefined,
+        shippingDescription: p.shippingDescription as string | undefined,
         shippingNotes: p.shippingNotes as string | undefined,
       });
       notifyDataChange('sale', 'approve', result);
@@ -784,6 +786,8 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
         driverId: p.driverId !== undefined ? (p.driverId as string | null) : undefined,
         shippingBy: p.shippingBy as 'us' | 'courier' | 'customer' | 'none' | undefined,
         shippingCost: p.shippingCost as number | undefined,
+        shippingDiscount: p.shippingDiscount as number | undefined,
+        shippingDescription: p.shippingDescription as string | undefined,
         settlement: p.settlement as 'paid' | 'credit' | undefined,
         settleMethod: p.settleMethod as 'cash' | 'card' | 'card_to_card' | undefined,
       });

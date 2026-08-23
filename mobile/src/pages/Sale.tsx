@@ -60,8 +60,7 @@ import {
 } from '../utils/format';
 import { paymentMethods } from '../theme/colors';
 
-/** روش‌های پرداخت در پاپ‌آپ فروش — بدون پوز */
-const SALE_PAY_METHODS = paymentMethods.filter((m) => m.value !== 'card');
+const SALE_PAY_METHODS = paymentMethods;
 import { PersianDateField } from '../components/PersianDateField';
 import { MoneyInput } from '../components/MoneyInput';
 import { InvoiceListPanel } from '../components/InvoiceListPanel';
@@ -320,15 +319,6 @@ const Sale: React.FC = () => {
   const [pickCustomers, setPickCustomers] = useState<Customer[]>([]);
   const [pickLookingUp, setPickLookingUp] = useState(false);
   const [pendingProduct, setPendingProduct] = useState<Product | null>(null);
-  /** تسویه تکی هنگام ارسال خودکار (مثل صفحه ارسال) */
-  const [retailShipSettle, setRetailShipSettle] = useState<{
-    id: string;
-    invoiceNumber: string;
-    credit: number;
-  } | null>(null);
-  const [retailSettleKind, setRetailSettleKind] = useState<'paid' | 'credit'>('paid');
-  const [retailSettleMethod, setRetailSettleMethod] = useState<'cash' | 'card' | 'card_to_card'>('cash');
-  const [retailSettleBusy, setRetailSettleBusy] = useState(false);
   const [histDetailId, setHistDetailId] = useState<string | null>(null);
   const [bankCards, setBankCards] = useState<BankCard[]>([]);
   const [selectedBankCard, setSelectedBankCard] = useState(0);
@@ -1718,8 +1708,9 @@ const Sale: React.FC = () => {
       let payment: { cash?: number; card?: number; credit?: number } | undefined;
       if (effectiveMethod === 'mixed') {
         const cash = parseAmount(payCash) || 0;
+        const pos = parseAmount(payCard) || 0;
         const c2c = parseAmount(payCardToCard) || 0;
-        let card = c2c;
+        let card = pos + c2c;
         let credit = parseAmount(payCredit) || 0;
         const sum = cash + card + credit;
         if (sum === 0) credit = net;
@@ -1818,10 +1809,10 @@ const Sale: React.FC = () => {
                     ? parseAmount(payCash) || 0
                     : 0,
               card:
-                effectiveMethod === 'card_to_card'
+                effectiveMethod === 'card' || effectiveMethod === 'card_to_card'
                   ? totals.net
                   : effectiveMethod === 'mixed'
-                    ? parseAmount(payCardToCard) || 0
+                    ? (parseAmount(payCard) || 0) + (parseAmount(payCardToCard) || 0)
                     : 0,
               credit: creditAmt,
             },
@@ -1864,29 +1855,6 @@ const Sale: React.FC = () => {
               ? `فاکتور ${invoice.invoiceNumber} ثبت و ارسال شد — متن کپی شد`
               : `فاکتور ${invoice.invoiceNumber} ثبت شد — متن کپی شد، بفرستید برای مشتری`;
         setToast({ open: true, msg, color: 'success' });
-        if (
-          priceTier === 'retail' &&
-          saleTab !== 'bulk' &&
-          invoice.status !== 'pending' &&
-          !(invoice as { queued?: boolean }).queued
-        ) {
-          let creditAmt = 0;
-          if (effectiveMethod === 'credit') creditAmt = totals.net;
-          else if (effectiveMethod === 'mixed') creditAmt = parseAmount(payCredit) || 0;
-          setRetailSettleKind(creditAmt > 0 ? 'credit' : 'paid');
-          setRetailSettleMethod(
-            effectiveMethod === 'cash'
-              ? 'cash'
-              : effectiveMethod === 'card_to_card'
-                ? 'card_to_card'
-                : 'card'
-          );
-          setRetailShipSettle({
-            id: invoice._id,
-            invoiceNumber: invoice.invoiceNumber,
-            credit: creditAmt,
-          });
-        }
         if (saleTab !== 'bulk') {
           await openPdf(invoice._id);
         }
@@ -2778,8 +2746,21 @@ const Sale: React.FC = () => {
                   onChange={(v) => {
                     setPayCash(v);
                     const cash = parseAmount(v) || 0;
+                    const pos = parseAmount(payCard) || 0;
                     const c2c = parseAmount(payCardToCard) || 0;
-                    const rem = Math.max(0, totals.net - cash - c2c);
+                    const rem = Math.max(0, totals.net - cash - pos - c2c);
+                    setPayCredit(rem > 0 ? formatMoneyInput(String(rem)) : '');
+                  }}
+                />
+                <MoneyInput
+                  label="پوز / کارتخوان"
+                  value={payCard}
+                  onChange={(v) => {
+                    setPayCard(v);
+                    const cash = parseAmount(payCash) || 0;
+                    const pos = parseAmount(v) || 0;
+                    const c2c = parseAmount(payCardToCard) || 0;
+                    const rem = Math.max(0, totals.net - cash - pos - c2c);
                     setPayCredit(rem > 0 ? formatMoneyInput(String(rem)) : '');
                   }}
                 />
@@ -2789,8 +2770,9 @@ const Sale: React.FC = () => {
                   onChange={(v) => {
                     setPayCardToCard(v);
                     const cash = parseAmount(payCash) || 0;
+                    const pos = parseAmount(payCard) || 0;
                     const c2c = parseAmount(v) || 0;
-                    const rem = Math.max(0, totals.net - cash - c2c);
+                    const rem = Math.max(0, totals.net - cash - pos - c2c);
                     setPayCredit(rem > 0 ? formatMoneyInput(String(rem)) : '');
                   }}
                 />
@@ -2799,7 +2781,7 @@ const Sale: React.FC = () => {
                   <div className="mixed-credit-value">
                     {formatToman(parseAmount(payCredit) || 0)}
                   </div>
-                  <p className="hint">خودکار: مبلغ فاکتور − (نقد + کارت‌به‌کارت)</p>
+                  <p className="hint">خودکار: مبلغ فاکتور − (نقد + پوز + کارت‌به‌کارت)</p>
                 </div>
               </div>
             )}
@@ -2835,120 +2817,6 @@ const Sale: React.FC = () => {
           </IonContent>
         </IonModal>
 
-        {/* تسویه فاکتور تکی (بدون صف ارسال) */}
-        <IonModal
-          isOpen={!!retailShipSettle}
-          onDidDismiss={() => setRetailShipSettle(null)}
-        >
-          <IonHeader>
-            <IonToolbar>
-              <IonTitle>پرداخت هنگام ارسال</IonTitle>
-              <IonButtons slot="end">
-                <IonButton onClick={() => setRetailShipSettle(null)}>بعداً</IonButton>
-              </IonButtons>
-            </IonToolbar>
-          </IonHeader>
-          <IonContent className="ion-padding">
-            {retailShipSettle && (
-              <>
-                <p>
-                  فاکتور تکی <b>{retailShipSettle.invoiceNumber}</b> بدون صف ارسال، مستقیم ارسال می‌شود.
-                  {retailShipSettle.credit > 0
-                    ? ` · نسیه فعلی ${formatToman(retailShipSettle.credit)}`
-                    : ''}
-                </p>
-                <p className="hint">این فاکتور پرداخت شده بود یا نسیه؟</p>
-                <div className="chip-row">
-                  <IonChip
-                    className={retailSettleKind === 'paid' ? 'ios-chip-active' : 'ios-chip'}
-                    onClick={() => setRetailSettleKind('paid')}
-                  >
-                    پرداخت شده
-                  </IonChip>
-                  <IonChip
-                    className={retailSettleKind === 'credit' ? 'ios-chip-active' : 'ios-chip'}
-                    onClick={() => setRetailSettleKind('credit')}
-                  >
-                    نسیه
-                  </IonChip>
-                </div>
-                {retailSettleKind === 'paid' && (
-                  <>
-                    <p className="hint" style={{ marginTop: 12 }}>
-                      روش دریافت (نسیه کم می‌شود)
-                    </p>
-                    <div className="chip-row">
-                      {(
-                        [
-                          ['cash', 'نقد'],
-                          ['card', 'پوز'],
-                          ['card_to_card', 'کارت‌به‌کارت'],
-                        ] as const
-                      ).map(([m, label]) => (
-                        <IonChip
-                          key={m}
-                          className={retailSettleMethod === m ? 'ios-chip-active' : 'ios-chip'}
-                          onClick={() => setRetailSettleMethod(m)}
-                        >
-                          {label}
-                        </IonChip>
-                      ))}
-                    </div>
-                  </>
-                )}
-                {retailSettleKind === 'credit' && (
-                  <p className="hint" style={{ marginTop: 12 }}>
-                    نسیه روی فاکتور می‌ماند و در بدهکاران ثبت می‌شود.
-                  </p>
-                )}
-                <IonButton
-                  expand="block"
-                  className="ios-primary-btn ion-margin-top"
-                  disabled={retailSettleBusy}
-                  onClick={() => {
-                    if (!retailShipSettle) return;
-                    setRetailSettleBusy(true);
-                    void wsClient
-                      .request(
-                        'sale.ship',
-                        {
-                          id: retailShipSettle.id,
-                          shippingBy: 'none',
-                          shippingNotes: 'فروش تکی — بدون صف ارسال',
-                          settlement: retailSettleKind,
-                          settleMethod:
-                            retailSettleKind === 'paid' ? retailSettleMethod : undefined,
-                        },
-                        { clientMutationId: newMutationId(), queueIfOffline: true }
-                      )
-                      .then(() => {
-                        setToast({
-                          open: true,
-                          msg:
-                            retailSettleKind === 'paid'
-                              ? 'تسویه و ارسال تکی ثبت شد'
-                              : 'ارسال تکی با نسیه ثبت شد',
-                          color: 'success',
-                        });
-                        setRetailShipSettle(null);
-                        setListRefreshKey((k) => k + 1);
-                      })
-                      .catch((e) =>
-                        setToast({
-                          open: true,
-                          msg: e instanceof Error ? e.message : 'تسویه نشد',
-                          color: 'danger',
-                        })
-                      )
-                      .finally(() => setRetailSettleBusy(false));
-                  }}
-                >
-                  {retailSettleBusy ? '…' : 'تأیید'}
-                </IonButton>
-              </>
-            )}
-          </IonContent>
-        </IonModal>
 
         {/* انتخاب مشتری با جستجو (سوپر / عمده) — بدون لیست کامل */}
         <IonModal

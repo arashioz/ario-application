@@ -516,6 +516,8 @@ export async function approveSale(
     driverId?: string | null;
     shippingBy?: 'us' | 'courier' | 'customer' | 'none';
     shippingCost?: number;
+    shippingDiscount?: number;
+    shippingDescription?: string;
     shippingNotes?: string;
   }
 ) {
@@ -530,6 +532,8 @@ export async function approveSale(
   if (opts?.shippingBy) invoice.shippingBy = opts.shippingBy;
   if (opts?.shippingNotes !== undefined) invoice.shippingNotes = opts.shippingNotes;
   if (opts?.shippingCost != null) invoice.shippingCost = Math.max(0, Math.round(opts.shippingCost));
+  if (opts?.shippingDiscount != null) invoice.shippingDiscount = Math.max(0, Math.round(opts.shippingDiscount));
+  if (opts?.shippingDescription !== undefined) invoice.shippingDescription = opts.shippingDescription.trim() || undefined;
 
   if (opts?.driverId !== undefined) {
     if (opts.driverId) {
@@ -588,8 +592,8 @@ async function maybeRecordShippingExpense(invoice: InstanceType<typeof SaleInvoi
   return invoice;
 }
 
-/** هزینه پیک روی مبلغ فاکتور و نسیه مشتری */
-async function applyCourierChargeToInvoice(
+/** هزینه ارسال روی مبلغ فاکتور و مانده مشتری */
+async function applyShippingChargeToInvoice(
   invoice: InstanceType<typeof SaleInvoice>,
   cost: number
 ) {
@@ -621,7 +625,7 @@ async function applyCourierChargeToInvoice(
       paidAmount: 0,
       dueDate: invoice.dueDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
       saleInvoiceId: invoice._id,
-      description: `بدهی فاکتور ${invoice.invoiceNumber} (شامل هزینه پیک)`,
+      description: `بدهی فاکتور ${invoice.invoiceNumber} (شامل هزینه ارسال)`,
     });
   }
   if (invoice.customerId) {
@@ -631,10 +635,9 @@ async function applyCourierChargeToInvoice(
 }
 
 async function applyShippingSideEffects(invoice: InstanceType<typeof SaleInvoice>) {
-  if (invoice.shippingBy === 'courier') {
-    await applyCourierChargeToInvoice(invoice, invoice.shippingCost || 0);
-  } else if (invoice.shippingBy === 'us') {
-    await maybeRecordShippingExpense(invoice);
+  if (invoice.shippingBy === 'courier' || invoice.shippingBy === 'us') {
+    const charge = Math.max(0, (invoice.shippingCost || 0) - (invoice.shippingDiscount || 0));
+    await applyShippingChargeToInvoice(invoice, charge);
   }
   return invoice;
 }
@@ -732,6 +735,8 @@ export async function shipSale(
     driverId?: string | null;
     shippingBy?: 'us' | 'courier' | 'customer' | 'none';
     shippingCost?: number;
+    shippingDiscount?: number;
+    shippingDescription?: string;
     /** پرداخت‌شده → نسیه کم شود | نسیه → بماند */
     settlement?: 'paid' | 'credit';
     /** اگر پرداخت‌شده: نقد / پوز / کارت به کارت */
@@ -752,6 +757,8 @@ export async function shipSale(
   if (shippingNotes !== undefined) invoice.shippingNotes = shippingNotes;
   if (opts?.shippingBy) invoice.shippingBy = opts.shippingBy;
   if (opts?.shippingCost != null) invoice.shippingCost = Math.max(0, Math.round(opts.shippingCost));
+  if (opts?.shippingDiscount != null) invoice.shippingDiscount = Math.max(0, Math.round(opts.shippingDiscount));
+  if (opts?.shippingDescription !== undefined) invoice.shippingDescription = opts.shippingDescription.trim() || undefined;
 
   if (driverId !== undefined) {
     if (driverId) {
@@ -1146,7 +1153,7 @@ export function buildInvoiceHtml(invoice: InstanceType<typeof SaleInvoice>) {
             ? 'تحویل شد'
             : invoice.status;
 
-  const rows = invoice.items
+  const productRows = invoice.items
     .map(
       (it) => `<tr>
       <td>${it.productName}${it.discount ? `<br/><small style="color:#c2410c">تخفیف قلم: ${it.discount.toLocaleString('fa-IR')}</small>` : ''}</td>
@@ -1156,6 +1163,12 @@ export function buildInvoiceHtml(invoice: InstanceType<typeof SaleInvoice>) {
     </tr>`
     )
     .join('');
+  const shippingCharge = Math.max(0, (invoice.shippingCost || 0) - (invoice.shippingDiscount || 0));
+  const shippingRow =
+    invoice.shippingChargedOnInvoice && shippingCharge > 0
+      ? `<tr><td>ارسال${invoice.shippingDescription ? ` — ${invoice.shippingDescription}` : ''}</td><td>۱</td><td>${shippingCharge.toLocaleString('fa-IR')}</td><td>${shippingCharge.toLocaleString('fa-IR')}</td></tr>`
+      : '';
+  const rows = productRows + shippingRow;
 
   const itemsDisc = invoice.items.reduce((s, it) => s + (it.discount || 0), 0);
   const modeLabel =
@@ -1228,8 +1241,8 @@ ${
       }${
         invoice.shippingCost
           ? ` · هزینه ${(invoice.shippingCost || 0).toLocaleString('fa-IR')} تومان${
-              invoice.shippingBy === 'courier' ? ' (روی فاکتور)' : ''
-            }`
+            invoice.shippingChargedOnInvoice ? ' (روی فاکتور)' : ''
+            }${invoice.shippingDiscount ? ` · تخفیف ${(invoice.shippingDiscount || 0).toLocaleString('fa-IR')} تومان` : ''}`
           : ''
       }</div>`
     : ''

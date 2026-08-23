@@ -75,7 +75,11 @@ export interface ISaleInvoice extends Document {
   deliveryMode?: 'company' | 'self';
   /** هزینه ارسال (تومان) — اختیاری */
   shippingCost?: number;
-  /** هزینه پیک روی فاکتور اضافه شده */
+  /** تخفیف هزینه ارسال (تومان) */
+  shippingDiscount?: number;
+  /** توضیح ردیف ارسال روی فاکتور */
+  shippingDescription?: string;
+  /** هزینه ارسال روی فاکتور اضافه شده */
   shippingChargedOnInvoice?: boolean;
   /** اگر هزینه ثبت شد، لینک به Expense */
   shippingExpenseId?: Types.ObjectId;
@@ -195,6 +199,8 @@ const SaleInvoiceSchema = new Schema<ISaleInvoice>(
       default: 'company',
     },
     shippingCost: { type: Number, default: 0 },
+    shippingDiscount: { type: Number, default: 0 },
+    shippingDescription: { type: String },
     shippingChargedOnInvoice: { type: Boolean, default: false },
     shippingExpenseId: { type: Schema.Types.ObjectId, ref: 'Expense' },
     date: { type: Date, required: true, default: Date.now },

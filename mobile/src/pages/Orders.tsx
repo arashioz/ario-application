@@ -53,6 +53,8 @@ interface SaleInv {
   shippingNotes?: string;
   shippingBy?: 'us' | 'courier' | 'customer' | 'none';
   shippingCost?: number;
+  shippingDiscount?: number;
+  shippingDescription?: string;
   driverEarned?: number;
   driverPaid?: boolean;
   date: string;
@@ -132,6 +134,8 @@ const Orders: React.FC = () => {
   const [shipDriver, setShipDriver] = useState<Record<string, string>>({});
   const [shipBy, setShipBy] = useState<Record<string, ShippingBy>>({});
   const [shipCost, setShipCost] = useState<Record<string, string>>({});
+  const [shipDiscount, setShipDiscount] = useState<Record<string, string>>({});
+  const [shipDescription, setShipDescription] = useState<Record<string, string>>({});
   const [toast, setToast] = useState({ open: false, msg: '', color: 'success' });
   const [shipConfirm, setShipConfirm] = useState<SaleInv | null>(null);
   const [settleKind, setSettleKind] = useState<SettleKind>('paid');
@@ -275,6 +279,14 @@ const Orders: React.FC = () => {
             by === 'us' || by === 'courier'
               ? parseAmount(shipCost[inv._id] || '') || inv.shippingCost || 0
               : 0,
+          shippingDiscount:
+            by === 'us' || by === 'courier'
+              ? parseAmount(shipDiscount[inv._id] || '') || inv.shippingDiscount || 0
+              : 0,
+          shippingDescription:
+            by === 'us' || by === 'courier'
+              ? shipDescription[inv._id] ?? inv.shippingDescription ?? ''
+              : '',
           settlement: settleKind,
           settleMethod: settleKind === 'paid' ? settleMethod : undefined,
         },
@@ -321,13 +333,31 @@ const Orders: React.FC = () => {
         {by === 'us' && (
           <>
             <MoneyInput
-              label="هزینه ارسال (تومان) — در هزینه‌ها ثبت می‌شود"
+              label="هزینه ارسال (تومان) — روی فاکتور مشتری"
               value={
                 shipCost[inv._id] ??
                 (inv.shippingCost ? formatMoneyInput(String(inv.shippingCost)) : '')
               }
               onChange={(v) => setShipCost({ ...shipCost, [inv._id]: v })}
             />
+            <MoneyInput
+              label="تخفیف ارسال (تومان)"
+              value={
+                shipDiscount[inv._id] ??
+                (inv.shippingDiscount ? formatMoneyInput(String(inv.shippingDiscount)) : '')
+              }
+              onChange={(v) => setShipDiscount({ ...shipDiscount, [inv._id]: v })}
+            />
+            <IonItem className="ship-input">
+              <IonInput
+                placeholder="توضیح ارسال روی فاکتور…"
+                value={shipDescription[inv._id] ?? inv.shippingDescription ?? ''}
+                onIonInput={(e) =>
+                  setShipDescription({ ...shipDescription, [inv._id]: e.detail.value || '' })
+                }
+              />
+            </IonItem>
+            <p className="hint">هزینه ارسال به مبلغ فاکتور و مانده مشتری اضافه می‌شود</p>
             <IonItem className="ship-input">
               <IonSelect
                 interface="popover"
@@ -519,6 +549,14 @@ const Orders: React.FC = () => {
                                 by === 'us' || by === 'courier'
                                   ? parseAmount(shipCost[inv._id] || '') || 0
                                   : 0,
+                              shippingDiscount:
+                                by === 'us' || by === 'courier'
+                                  ? parseAmount(shipDiscount[inv._id] || '') || 0
+                                  : 0,
+                              shippingDescription:
+                                by === 'us' || by === 'courier'
+                                  ? shipDescription[inv._id] ?? inv.shippingDescription ?? ''
+                                  : '',
                               shippingNotes: shipNotes[inv._id] || undefined,
                               driverId: dId || null,
                             },
@@ -543,7 +581,7 @@ const Orders: React.FC = () => {
                     >
                       تأیید
                       {resolveBy(inv) === 'us' && (parseAmount(shipCost[inv._id] || '') || 0) > 0
-                        ? ' + ثبت هزینه ارسال'
+                        ? ' + هزینه ارسال روی فاکتور'
                         : resolveBy(inv) === 'courier' && (parseAmount(shipCost[inv._id] || '') || 0) > 0
                           ? ' + هزینه پیک روی فاکتور'
                           : ''}
