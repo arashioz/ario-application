@@ -262,7 +262,7 @@ const Sale: React.FC = () => {
   const [powerLabel, setPowerLabel] = useState('');
   const [lookingUp, setLookingUp] = useState(false);
   const [lines, setLines] = useState<LineItem[]>([]);
-  const [paymentMethod, setPaymentMethod] = useState('cash');
+  const [paymentMethod, setPaymentMethod] = useState('card');
   const [payCash, setPayCash] = useState('');
   const [payCard, setPayCard] = useState('');
   const [payCardToCard, setPayCardToCard] = useState('');
@@ -1873,7 +1873,7 @@ const Sale: React.FC = () => {
       setPayCardToCard('');
       setPayCredit('');
       if (saleTab !== 'bulk') {
-        setPaymentMethod('cash');
+        setPaymentMethod('card');
       }
       setCustomerId('');
       setCustomerName('');
@@ -2068,29 +2068,6 @@ const Sale: React.FC = () => {
               <p className="hint convert-hint" style={{ margin: '6px 0 0' }}>
                 مشتری عمده — فاکتور تکی مجاز نیست
               </p>
-            )}
-            {stepsUnlocked && (
-              <>
-                <div className="chip-row" style={{ marginTop: 6 }}>
-                  <IonChip
-                    className={costBasis === 'last' ? 'ios-chip-active' : 'ios-chip'}
-                    onClick={() => void applyCostBasis('last')}
-                  >
-                    قیمت آخر خرید
-                  </IonChip>
-                  <IonChip
-                    className={costBasis === 'weighted' ? 'ios-chip-active' : 'ios-chip'}
-                    onClick={() => void applyCostBasis('weighted')}
-                  >
-                    میانگین موزون
-                  </IonChip>
-                </div>
-                <p className="hint" style={{ margin: '4px 0 0' }}>
-                  {costBasis === 'last'
-                    ? 'قیمت پیشنهادی بر اساس آخرین خرید است — روی محصول هزینه و پیشنهاد را ببینید'
-                    : 'قیمت پیشنهادی بر اساس میانگین موزون موجودی است — روی محصول هزینه و پیشنهاد را ببینید'}
-                </p>
-              </>
             )}
           </div>
 
@@ -2320,6 +2297,7 @@ const Sale: React.FC = () => {
                 qty,
                 l.kgPerPackage
               );
+              const { perKg, perPackage } = resolvePrices(l.unit, price, l.kgPerPackage);
               const lineAmount = roundToman(rawLine, 100);
               const lineDiscAmt =
                 discountMode === 'product'
@@ -2355,8 +2333,11 @@ const Sale: React.FC = () => {
                           {idx + 1}. {l.productName}
                         </strong>
                         <div className="ios-caption">
-                          {qty.toLocaleString('fa-IR')} {l.unit === 'kg' ? 'کیلو' : 'بسته'} · فی{' '}
-                          {formatToman(price)}
+                          {qty.toLocaleString('fa-IR')} {l.unit === 'kg' ? 'کیلو' : 'بسته'} · فروش{' '}
+                          {formatToman(Math.round(perKg))}/کیلو
+                        </div>
+                        <div className="ios-caption">
+                          قیمت هر بسته {formatToman(Math.round(perPackage))}
                         </div>
                         <div className="ios-caption">
                           {formatKg(qtyKg)} · {Math.round(qtyPackages).toLocaleString('fa-IR')} بسته
@@ -3011,10 +2992,6 @@ const Sale: React.FC = () => {
                     <div className="ios-caption">
                       موجودی {formatKg(prodModalProduct.stockKg ?? prodModalProduct.stock ?? 0)} ·{' '}
                       {prodModalProduct.kgPerPackage || 5} کیلو/بسته
-                    </div>
-                    <div className="ios-caption">
-                      هزینه ({costBasis === 'weighted' ? 'میانگین' : 'آخر'}):{' '}
-                      {formatToman(productCost(prodModalProduct, costBasis))}/کیلو
                     </div>
                     <div className="ios-caption">
                       پیشنهادی:{' '}
