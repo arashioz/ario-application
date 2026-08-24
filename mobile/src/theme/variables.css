@@ -2210,6 +2210,34 @@ body {
   gap: 8px;
   flex-wrap: wrap;
 }
+.sale-cost-basis {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 0;
+  flex-wrap: wrap;
+}
+.sale-cost-basis-label {
+  color: #1e3a5f;
+  font-size: 12px;
+  font-weight: 800;
+  margin-inline-end: auto;
+}
+.sale-cost-basis-btn {
+  appearance: none;
+  border: 1px solid rgba(30, 58, 95, 0.24);
+  background: #f8fafc;
+  color: #1e3a5f;
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 800;
+}
+.sale-cost-basis-btn.active {
+  background: #1e3a5f;
+  border-color: #1e3a5f;
+  color: #fff;
+}
 .sale-tier-btn {
   appearance: none;
   border: 1px solid rgba(30, 58, 95, 0.2);

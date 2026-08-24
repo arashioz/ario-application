@@ -9,6 +9,7 @@
     "start": "node dist/index.js",
     "seed": "tsx src/seed.ts",
     "repair:sale-profits": "tsx src/scripts/repairSaleProfits.ts",
+    "repair:catalog-sales": "tsx src/scripts/reconcileCatalogAndSales.ts",
     "repair:credit-edit": "tsx src/scripts/repairCreditInvoiceEdit.ts",
     "repair:credit-from-payments": "tsx src/scripts/repairInvoiceCreditFromPayments.ts"
   },

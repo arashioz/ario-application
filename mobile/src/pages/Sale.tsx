@@ -89,6 +89,8 @@ interface Product {
   avgCostPerKg: number;
   lastPurchasePricePerKg?: number;
   purchasePrice?: number;
+  /** قیمت دستی تکیِ کاتالوگ؛ در فروش تکی هم اعمال می‌شود */
+  catalogPricePerKg?: number;
   kgPerPackage: number;
   imageUrl?: string;
   categoryId: {
@@ -174,6 +176,14 @@ function productCost(p: Product, basis: CostBasis): number {
   const last = p.lastPurchasePricePerKg || p.purchasePrice || 0;
   if (basis === 'weighted') return avg || last;
   return last || avg;
+}
+
+/** قیمت فروش مشترک بین مدیریت کاتالوگ و صفحهٔ فروش */
+function productSalePrice(p: Product, basis: CostBasis, tier: PriceTier): number {
+  if (tier === 'retail' && (p.catalogPricePerKg || 0) > 0) {
+    return roundToman(p.catalogPricePerKg || 0, 100);
+  }
+  return priceFromPercent(productCost(p, basis), tierPercent(p, tier));
 }
 
 const COST_BASIS_KEY = 'ario_cost_basis';
@@ -337,6 +347,7 @@ const Sale: React.FC = () => {
   const [prodModalUnit, setProdModalUnit] = useState<'kg' | 'package'>('package');
   const [prodModalQty, setProdModalQty] = useState('1');
   const [prodModalPrice, setProdModalPrice] = useState('');
+  const [showProdPurchaseDetails, setShowProdPurchaseDetails] = useState(false);
   const needsCustomerOnAdd = priceTier === 'supermarket';
   const needsCustomerOnSubmit =
     priceTier === 'supermarket' || priceTier === 'wholesale';
@@ -600,7 +611,12 @@ const Sale: React.FC = () => {
   useEffect(() => {
     const unsub = wsClient.onEvent('data_changed', (payload: unknown) => {
       const p = payload as { entity?: string };
-      if (p?.entity === 'purchase' || p?.entity === 'product' || p?.entity === 'sale') {
+      if (
+        p?.entity === 'purchase' ||
+        p?.entity === 'product' ||
+        p?.entity === 'category' ||
+        p?.entity === 'sale'
+      ) {
         void loadProducts();
       }
       if (p?.entity === 'campaign') {
@@ -883,7 +899,7 @@ const Sale: React.FC = () => {
       const suggestedPerKg = p
         ? l.suggestedPerKg > 0
           ? l.suggestedPerKg
-          : priceFromPercent(costPerKg, pct)
+          : productSalePrice(p, costBasis, calcTier)
         : 0;
       const qty = parseFloat(l.qtyInput) || 0;
       const price = parseAmount(l.unitPrice) || 0;
@@ -1297,9 +1313,7 @@ const Sale: React.FC = () => {
         missing.push(sl.productName);
         continue;
       }
-      const percent = tierPercent(p, calcTier);
-      const cost = productCost(p, costBasis);
-      const suggested = priceFromPercent(cost, percent);
+      const suggested = productSalePrice(p, costBasis, calcTier);
       const unit = sl.unit || 'package';
       const price = saleUnitPrice(suggested, unit, p.kgPerPackage || 5);
       next.push({
@@ -1474,9 +1488,7 @@ const Sale: React.FC = () => {
   };
 
   const openProductModal = (p: Product, existing?: LineItem) => {
-    const percent = tierPercent(p, calcTier);
-    const cost = productCost(p, costBasis);
-    const suggested = priceFromPercent(cost, percent);
+    const suggested = productSalePrice(p, costBasis, calcTier);
     if (existing) {
       setProdModalEditKey(existing.key);
       setProdModalUnit(existing.unit);
@@ -1489,6 +1501,7 @@ const Sale: React.FC = () => {
       setProdModalPrice(formatMoneyInput(String(saleUnitPrice(suggested, 'package', p.kgPerPackage || 5))));
     }
     setProdModalProduct(p);
+    setShowProdPurchaseDetails(false);
     setProdModalOpen(true);
   };
 
@@ -1513,9 +1526,7 @@ const Sale: React.FC = () => {
     }
 
     // اگر هنوز قیمت نزده، از پیشنهاد شروع کن
-    const percent = tierPercent(p, calcTier);
-    const cost = productCost(p, costBasis);
-    const suggested = priceFromPercent(cost, percent);
+    const suggested = productSalePrice(p, costBasis, calcTier);
     setProdModalPrice(formatMoneyInput(String(saleUnitPrice(suggested, unit, kgPer))));
   };
 
@@ -1536,9 +1547,7 @@ const Sale: React.FC = () => {
       openCustomerPickModal(prodModalProduct);
       return;
     }
-    const percent = tierPercent(p, calcTier);
-    const cost = productCost(p, costBasis);
-    const suggested = priceFromPercent(cost, percent);
+    const suggested = productSalePrice(p, costBasis, calcTier);
     const raw = parseAmount(prodModalPrice) || saleUnitPrice(suggested, prodModalUnit, p.kgPerPackage || 5);
     const priceStr = formatMoneyInput(String(roundToman(raw, 100)));
 
@@ -1611,14 +1620,12 @@ const Sale: React.FC = () => {
       prev.map((l) => {
         const p = products.find((x) => x._id === l.productId);
         if (!p) return l;
-        const percent = tierPercent(p, calcTier);
-        const cost = productCost(p, costBasis);
-        const suggested = priceFromPercent(cost, percent);
+        const suggested = productSalePrice(p, costBasis, calcTier);
         const price = saleUnitPrice(suggested, l.unit, l.kgPerPackage || 5);
         return { ...l, suggestedPerKg: suggested, unitPrice: formatMoneyInput(String(price)) };
       })
     );
-  }, [priceTier, costBasis]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [priceTier, costBasis, products]);
 
   const openPdf = async (id: string) => {
     const res = await wsClient.request<{ html: string }>('sale.pdf', { id });
@@ -2016,6 +2023,23 @@ const Sale: React.FC = () => {
               </p>
             )}
             <PersianDateField label="تاریخ فاکتور" value={date} onChange={setDate} />
+            <div className="sale-cost-basis" role="group" aria-label="مبنای قیمت فروش">
+              <span className="sale-cost-basis-label">مبنای قیمت فروش</span>
+              <button
+                type="button"
+                className={`sale-cost-basis-btn ${costBasis === 'weighted' ? 'active' : ''}`}
+                onClick={() => void applyCostBasis('weighted')}
+              >
+                میانگین موزون
+              </button>
+              <button
+                type="button"
+                className={`sale-cost-basis-btn ${costBasis === 'last' ? 'active' : ''}`}
+                onClick={() => void applyCostBasis('last')}
+              >
+                آخرین خرید
+              </button>
+            </div>
             <div className="sale-tier-row">
               {(Object.keys(TIER_LABELS) as PriceTier[]).map((t) => {
                 const lockedRetail = t === 'retail' && isWholesaleCustomer;
@@ -2243,11 +2267,8 @@ const Sale: React.FC = () => {
             {filtered.map((p) => {
               const stock = p.stockKg ?? p.stock ?? 0;
               const inLines = lineQty(p._id);
-              const percent = tierPercent(p, calcTier);
-              const cost = productCost(p, costBasis);
-              const suggested = priceFromPercent(cost, percent);
-              const avg = p.avgCostPerKg ?? p.purchasePrice ?? 0;
-              const last = p.lastPurchasePricePerKg || p.purchasePrice || 0;
+              const suggested = productSalePrice(p, costBasis, calcTier);
+              const packagePrice = saleUnitPrice(suggested, 'package', p.kgPerPackage || 5);
               return (
                 <button
                   type="button"
@@ -2267,13 +2288,8 @@ const Sale: React.FC = () => {
                     </div>
                     <div className="pc-name">{p.name}</div>
                     <div className="pc-meta">{formatKg(stock)}</div>
-                    <div className="pc-meta" style={{ fontSize: 11, opacity: 0.85 }}>
-                      {costBasis === 'weighted' ? 'میانگین' : 'آخر'} {formatToman(cost)}
-                      {avg > 0 && last > 0 && Math.abs(avg - last) > 1
-                        ? ` · ${costBasis === 'weighted' ? `آخر ${formatToman(last)}` : `میانگین ${formatToman(avg)}`}`
-                        : ''}
-                    </div>
-                    <div className="pc-price">{formatToman(suggested)}/کیلو</div>
+                    <div className="pc-price">فروش {formatToman(suggested)}/کیلو</div>
+                    <div className="pc-meta">هر بسته {formatToman(packagePrice)}</div>
                   </div>
                 </button>
               );
@@ -2343,28 +2359,6 @@ const Sale: React.FC = () => {
                           {formatKg(qtyKg)} · {Math.round(qtyPackages).toLocaleString('fa-IR')} بسته
                           {lineDiscAmt > 0 ? ` · تخفیف ${formatToman(lineDiscAmt)}` : ''}
                         </div>
-                        {(() => {
-                          const hint = marginInfo.lineHints.find((h) => h.key === l.key);
-                          if (!hint) return null;
-                          return (
-                            <div className="ios-caption">
-                              خرید {formatToman(hint.costPerKg)} · {hint.pct.toLocaleString('fa-IR')}٪
-                              → {formatToman(hint.suggestedPerKg)}
-                              {hint.status === 'low' && (
-                                <span style={{ color: 'var(--ion-color-danger)' }}>
-                                  {' '}
-                                  · قیمت کم
-                                </span>
-                              )}
-                              {hint.status === 'high' && (
-                                <span style={{ color: 'var(--ion-color-success)' }}>
-                                  {' '}
-                                  · بالاتر از پیشنهاد
-                                </span>
-                              )}
-                            </div>
-                          );
-                        })()}
                       </div>
                     </div>
                     <div className="cart-item-actions" onClick={(e) => e.stopPropagation()}>
@@ -2400,84 +2394,6 @@ const Sale: React.FC = () => {
               );
             })}
           </div>
-
-          {lines.length > 0 && (
-            <div className="ios-glass-card sale-navy-card sale-margin-card">
-              <div className="ios-section-title" style={{ marginTop: 0 }}>
-                سود این فاکتور
-              </div>
-              <p className="hint" style={{ marginTop: 0 }}>
-                سود = مبلغ نهایی بعد از تخفیف − هزینه خرید. تخفیف از سود کم می‌کند؛ هزینه مغازه جداست.
-              </p>
-              <div className="stat-row">
-                <span className="stat-label">هزینه خرید (اولیه)</span>
-                <span className="stat-value">{formatToman(marginInfo.cost)}</span>
-              </div>
-              <div className="stat-row">
-                <span className="stat-label">پیشنهادی با درصد شما</span>
-                <span className="stat-value">{formatToman(marginInfo.suggestedGross)}</span>
-              </div>
-              <div className="stat-row">
-                <span className="stat-label">سود هدف (با درصد)</span>
-                <span className="stat-value">{formatToman(marginInfo.targetProfit)}</span>
-              </div>
-              {marginInfo.discount > 0 && (
-                <div className="stat-row">
-                  <span className="stat-label">تخفیف</span>
-                  <span className="stat-value danger">−{formatToman(marginInfo.discount)}</span>
-                </div>
-              )}
-              <div className="stat-row">
-                <span className="stat-label">فروش نهایی</span>
-                <span className="stat-value">{formatToman(marginInfo.net)}</span>
-              </div>
-              <div className="stat-row">
-                <span className="stat-label">سود واقعی این فاکتور</span>
-                <span
-                  className={`stat-value ${marginInfo.actualProfit >= 0 ? 'success' : 'danger'}`}
-                >
-                  {formatToman(marginInfo.actualProfit)}
-                </span>
-              </div>
-              {marginInfo.vsTarget !== 0 && (
-                <div className="stat-row">
-                  <span className="stat-label">نسبت به هدف درصد</span>
-                  <span
-                    className={`stat-value ${marginInfo.vsTarget >= 0 ? 'success' : 'danger'}`}
-                  >
-                    {marginInfo.vsTarget >= 0 ? '+' : ''}
-                    {formatToman(marginInfo.vsTarget)}
-                  </span>
-                </div>
-              )}
-              {marginInfo.lineHints.map((h) => (
-                <div key={h.key} className="ios-caption" style={{ marginTop: 6 }}>
-                  <strong>{h.name}</strong>
-                  {' · خرید '}
-                  {formatToman(h.costPerKg)}
-                  {' · '}
-                  {h.pct.toLocaleString('fa-IR')}٪
-                  {' → پیشنهادی '}
-                  {formatToman(h.suggestedPerKg)}
-                  {' · شما '}
-                  {formatToman(h.yourPerKg)}
-                  {h.status === 'low' && (
-                    <span style={{ color: 'var(--ion-color-danger)' }}>
-                      {' '}
-                      · کم {formatToman(Math.abs(h.diffPerKg))}/کیلو
-                    </span>
-                  )}
-                  {h.status === 'high' && (
-                    <span style={{ color: 'var(--ion-color-success)' }}>
-                      {' '}
-                      · بیشتر {formatToman(h.diffPerKg)}/کیلو
-                    </span>
-                  )}
-                  {h.status === 'ok' && <span> · نزدیک پیشنهاد</span>}
-                </div>
-              ))}
-            </div>
-          )}
 
           <details className="sale-details ios-glass-card sale-navy-card">
             <summary>تخفیف · {formatToman(totals.net)}</summary>
@@ -2956,6 +2872,7 @@ const Sale: React.FC = () => {
           onDidDismiss={() => {
             setProdModalOpen(false);
             setProdModalProduct(null);
+            setShowProdPurchaseDetails(false);
           }}
           className="product-pick-modal"
         >
@@ -2994,17 +2911,44 @@ const Sale: React.FC = () => {
                       {prodModalProduct.kgPerPackage || 5} کیلو/بسته
                     </div>
                     <div className="ios-caption">
-                      پیشنهادی:{' '}
-                      {formatToman(
-                        priceFromPercent(
-                          productCost(prodModalProduct, costBasis),
-                          tierPercent(prodModalProduct, calcTier)
-                        )
-                      )}
+                      قیمت فروش هدف:{' '}
+                      {formatToman(productSalePrice(prodModalProduct, costBasis, calcTier))}
                       /کیلو
                     </div>
                   </div>
+                  <IonButton
+                    fill="clear"
+                    size="small"
+                    title={showProdPurchaseDetails ? 'مخفی‌کردن جزئیات خرید' : 'نمایش جزئیات خرید'}
+                    aria-label={showProdPurchaseDetails ? 'مخفی‌کردن جزئیات خرید' : 'نمایش جزئیات خرید'}
+                    onClick={() => setShowProdPurchaseDetails((value) => !value)}
+                  >
+                    <IonIcon icon={eyeOutline} />
+                  </IonButton>
                 </div>
+
+                {showProdPurchaseDetails && (() => {
+                  const purchase = productCost(prodModalProduct, costBasis);
+                  const target = productSalePrice(prodModalProduct, costBasis, calcTier);
+                  const selected = resolvePrices(
+                    prodModalUnit,
+                    parseAmount(prodModalPrice) || 0,
+                    prodModalProduct.kgPerPackage || 5
+                  ).perKg;
+                  const difference = selected - target;
+                  const percent = target > 0 ? Math.round((difference / target) * 100) : 0;
+                  return (
+                    <div className="ios-caption convert-hint" style={{ marginTop: 8 }}>
+                      قیمت خرید: {formatToman(purchase)}/کیلو · هدف: {formatToman(target)}/کیلو
+                      {selected > 0 && (
+                        <>
+                          {' · انتخاب‌شده: '}{formatToman(Math.round(selected))}/کیلو
+                          {' · نسبت به هدف: '}{difference >= 0 ? '+' : ''}{percent.toLocaleString('fa-IR')}٪
+                        </>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 <div className="chip-row" style={{ marginTop: 8 }}>
                   <IonChip

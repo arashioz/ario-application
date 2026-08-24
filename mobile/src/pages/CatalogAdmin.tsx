@@ -34,6 +34,7 @@ import { DigitInput } from '../components/DigitInput';
 import { QtyStepper } from '../components/QtyStepper';
 
 type PriceTier = 'retail' | 'supermarket' | 'wholesale';
+type CostBasis = 'weighted' | 'last';
 type AdminTab = 'products' | 'categories' | 'catalog';
 
 interface Category {
@@ -73,8 +74,9 @@ interface Product {
   };
 }
 
-function productCost(p: Product): number {
+function productCost(p: Product, costBasis: CostBasis): number {
   const last = p.lastPurchasePricePerKg || 0;
+  if (costBasis === 'weighted') return p.avgCostPerKg ?? p.purchasePrice ?? last;
   if (last > 0) return last;
   return p.avgCostPerKg ?? p.purchasePrice ?? 0;
 }
@@ -86,11 +88,11 @@ function tierPercent(p: Product, tier: PriceTier): number {
   return p.profitRetail ?? p.profitPercent ?? c?.profitRetail ?? c?.profitPercent ?? 12;
 }
 
-function tierPricePerKg(p: Product, tier: PriceTier): number {
+function tierPricePerKg(p: Product, tier: PriceTier, costBasis: CostBasis): number {
   if (tier === 'retail' && p.catalogPricePerKg && p.catalogPricePerKg > 0) {
     return roundToman(p.catalogPricePerKg, 100);
   }
-  const cost = productCost(p);
+  const cost = productCost(p, costBasis);
   return priceFromPercent(cost, tierPercent(p, tier));
 }
 
@@ -103,6 +105,7 @@ const CatalogAdmin: React.FC = () => {
   const { isAdmin } = useAuth();
   const [tab, setTab] = useState<AdminTab>('products');
   const [products, setProducts] = useState<Product[]>([]);
+  const [costBasis, setCostBasis] = useState<CostBasis>('last');
   const [categories, setCategories] = useState<Category[]>([]);
   const [catalogEnabled, setCatalogEnabled] = useState(true);
   const [catalogTitle, setCatalogTitle] = useState('');
@@ -176,6 +179,7 @@ const CatalogAdmin: React.FC = () => {
         brandLogoUrl?: string;
         catalogSupermarketMinKg?: number;
         catalogWholesaleMinKg?: number;
+        costBasis?: CostBasis;
       }>('settings.get'),
       wsClient.request<Category[]>('category.list'),
     ]);
@@ -190,6 +194,7 @@ const CatalogAdmin: React.FC = () => {
     setBrandLogoUrl(settings.brandLogoUrl || '');
     setSupermarketMinKg(String(settings.catalogSupermarketMinKg ?? 500));
     setWholesaleMinKg(String(settings.catalogWholesaleMinKg ?? 2000));
+    setCostBasis(settings.costBasis === 'weighted' ? 'weighted' : 'last');
 
     const catList = Array.isArray(cats) ? cats : [];
     setCategories(catList);
@@ -256,13 +261,13 @@ const CatalogAdmin: React.FC = () => {
   const openEdit = (p: Product) => {
     setEditProduct(p);
     setEditName(p.name || '');
-    const cost = productCost(p);
+    const cost = productCost(p, costBasis);
     const rPct = tierPercent(p, 'retail');
     const sPct = tierPercent(p, 'supermarket');
     const wPct = tierPercent(p, 'wholesale');
-    const rPrice = tierPricePerKg(p, 'retail');
-    const sPrice = tierPricePerKg(p, 'supermarket');
-    const wPrice = tierPricePerKg(p, 'wholesale');
+    const rPrice = tierPricePerKg(p, 'retail', costBasis);
+    const sPrice = tierPricePerKg(p, 'supermarket', costBasis);
+    const wPrice = tierPricePerKg(p, 'wholesale', costBasis);
     setEditRetailPct(String(rPct));
     setEditSuperPct(String(sPct));
     setEditWholePct(String(wPct));
@@ -276,7 +281,7 @@ const CatalogAdmin: React.FC = () => {
 
   const syncPriceFromPct = (tier: PriceTier, pctStr: string) => {
     if (!editProduct) return;
-    const cost = productCost(editProduct);
+    const cost = productCost(editProduct, costBasis);
     const pct = parseFloat(pctStr) || 0;
     const price = priceFromPercent(cost, pct);
     const formatted = formatMoneyInput(String(price));
@@ -294,7 +299,7 @@ const CatalogAdmin: React.FC = () => {
 
   const syncPctFromPrice = (tier: PriceTier, priceStr: string) => {
     if (!editProduct) return;
-    const cost = productCost(editProduct);
+    const cost = productCost(editProduct, costBasis);
     const price = roundToman(parseAmount(priceStr) || 0, 100);
     const pct = pctFromPrice(cost, price);
     const formatted = formatMoneyInput(String(price));
@@ -323,7 +328,7 @@ const CatalogAdmin: React.FC = () => {
       const superPct = roundProfitPercent(parseFloat(editSuperPct) || 0);
       const wholePct = roundProfitPercent(parseFloat(editWholePct) || 0);
       const retailPrice = roundToman(parseAmount(editRetailPrice) || 0, 100);
-      const cost = productCost(editProduct);
+      const cost = productCost(editProduct, costBasis);
       const computedRetail = priceFromPercent(cost, retailPct);
       await wsClient.request('product.update', {
         id: editProduct._id,
@@ -615,21 +620,21 @@ const CatalogAdmin: React.FC = () => {
                         <div className="prod-tier-row retail">
                           <span className="prod-tier-label">تکی</span>
                           <span className="prod-tier-prices">
-                            <strong>{formatToman(tierPricePerKg(p, 'retail'))}</strong>
+                            <strong>{formatToman(tierPricePerKg(p, 'retail', costBasis))}</strong>
                             <small>/کیلو</small>
                           </span>
                         </div>
                         <div className="prod-tier-row supermarket">
                           <span className="prod-tier-label">سوپر</span>
                           <span className="prod-tier-prices">
-                            <strong>{formatToman(tierPricePerKg(p, 'supermarket'))}</strong>
+                            <strong>{formatToman(tierPricePerKg(p, 'supermarket', costBasis))}</strong>
                             <small>/کیلو</small>
                           </span>
                         </div>
                         <div className="prod-tier-row wholesale">
                           <span className="prod-tier-label">عمده</span>
                           <span className="prod-tier-prices">
-                            <strong>{formatToman(tierPricePerKg(p, 'wholesale'))}</strong>
+                            <strong>{formatToman(tierPricePerKg(p, 'wholesale', costBasis))}</strong>
                             <small>/کیلو</small>
                           </span>
                         </div>
@@ -869,7 +874,7 @@ const CatalogAdmin: React.FC = () => {
                       <strong>
                         {(i + 1).toLocaleString('fa-IR')}. {p.name}
                       </strong>
-                      <div className="ios-caption">{formatToman(tierPricePerKg(p, 'retail'))}/کیلو</div>
+                      <div className="ios-caption">{formatToman(tierPricePerKg(p, 'retail', costBasis))}/کیلو</div>
                     </div>
                     <div className="chip-row" style={{ margin: 0 }}>
                       <IonButton
@@ -1085,7 +1090,7 @@ const CatalogAdmin: React.FC = () => {
                       تغییر عکس
                     </IonButton>
                     <p className="hint">
-                      هزینه: {formatToman(productCost(editProduct))}/کیلو
+                      هزینه: {formatToman(productCost(editProduct, costBasis))}/کیلو
                     </p>
                   </div>
                 </div>
