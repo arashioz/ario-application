@@ -1926,9 +1926,15 @@ const Sale: React.FC = () => {
         <IonToolbar>
           <IonTitle>{isGolden ? 'فاکتور طلایی' : 'فاکتور فروش'}</IonTitle>
           <IonButtons slot="end">
-            <IonChip color={user?.role === 'marketer' ? 'warning' : 'primary'}>
-              {user?.role === 'marketer' ? 'نیاز به تأیید' : 'ثبت مستقیم'}
-            </IonChip>
+            <IonButton
+              color="warning"
+              fill={isGolden ? 'solid' : 'outline'}
+              disabled={!stepsUnlocked}
+              onClick={() => setIsGolden((value) => !value)}
+            >
+              <IonIcon slot="start" icon={diamondOutline} />
+              فاکتور طلایی
+            </IonButton>
           </IonButtons>
         </IonToolbar>
         <IonToolbar>
@@ -2025,12 +2031,6 @@ const Sale: React.FC = () => {
                   </button>
                 );
               })}
-              <IonToggle
-                checked={isGolden}
-                disabled={!stepsUnlocked}
-                onIonChange={(e) => setIsGolden(e.detail.checked)}
-                title="فاکتور ویژه / VIP"
-              />
             </div>
             {!stepsUnlocked && (
               <p className="hint sale-step-hint">
