@@ -87,6 +87,8 @@ interface Dash {
     };
   };
   inventory?: {
+    purchasedKg: number;
+    soldKg: number;
     totalKg: number;
     totalTons: number;
     totalPackages: number;
@@ -307,6 +309,9 @@ const Dashboard: React.FC = () => {
                     {(inv?.totalPackages || 0).toLocaleString('fa-IR')} بسته · {inv?.productCount || 0}{' '}
                     محصول
                     {(inv?.emptyCount || 0) > 0 ? ` · ${inv?.emptyCount} تمام` : ''}
+                  </span>
+                  <span className="wh-btn-sub">
+                    ورودی {formatKg(inv?.purchasedKg || 0)} · فروش {formatKg(inv?.soldKg || 0)} · مانده {formatKg(inv?.totalKg || 0)}
                   </span>
                 </div>
                 <span className="wh-btn-cta">مشاهده</span>
@@ -686,6 +691,9 @@ const Dashboard: React.FC = () => {
           <IonContent className="ion-padding">
             <div className="inv-modal-hero">
               <div className="inv-modal-kg">{formatKg(inv?.totalKg || 0)}</div>
+              <div className="ios-caption" style={{ marginTop: 6 }}>
+                ورودی/خرید {formatKg(inv?.purchasedKg || 0)} · فروخته‌شده {formatKg(inv?.soldKg || 0)}
+              </div>
               <div className="ios-caption">
                 {(inv?.totalTons || 0).toLocaleString('fa-IR')} تن ·{' '}
                 {(inv?.totalPackages || 0).toLocaleString('fa-IR')} بسته · {inv?.productCount || 0}{' '}

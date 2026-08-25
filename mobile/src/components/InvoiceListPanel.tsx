@@ -280,6 +280,36 @@ export const InvoiceListPanel: React.FC<Props> = ({
       kg: rows.reduce((s, r) => s + (r.totalKg || 0), 0),
     };
   }, [filtered]);
+  const salePaymentSummary = useMemo(() => {
+    const active = sales.filter((inv) => inv.status !== 'cancelled' && inv.status !== 'inactive');
+    return active.reduce(
+      (acc, inv) => {
+        const payment = inv.payment || {};
+        acc.total += inv.totalAmount || 0;
+        acc.unpaid += payment.credit || 0;
+        acc.cash += payment.cash || 0;
+        if (inv.status === 'shipped' || inv.status === 'delivered') acc.shippedCredit += payment.credit || 0;
+        if (inv.status === 'pending' || inv.status === 'approved') acc.unshipped += inv.totalAmount || 0;
+
+        const invoiceEvents = (inv.paymentEvents || []).filter((e) => !e.kind || e.kind === 'invoice');
+        if (invoiceEvents.length) {
+          acc.pos += invoiceEvents
+            .filter((e) => e.method === 'card')
+            .reduce((sum, e) => sum + (e.amount || 0), 0);
+          acc.cardToCard += invoiceEvents
+            .filter((e) => e.method === 'card_to_card')
+            .reduce((sum, e) => sum + (e.amount || 0), 0);
+        } else if (inv.paymentMethod === 'card_to_card') {
+          acc.cardToCard += payment.card || 0;
+        } else {
+          // فاکتورهای قدیمیِ ترکیبی تفکیک پوز/کارت‌به‌کارت نداشتند؛ در پوز می‌آیند.
+          acc.pos += payment.card || 0;
+        }
+        return acc;
+      },
+      { total: 0, unpaid: 0, cash: 0, pos: 0, cardToCard: 0, shippedCredit: 0, unshipped: 0 }
+    );
+  }, [sales]);
   useEffect(() => {
     const unsub = wsClient.onEvent('data_changed', (payload: unknown) => {
       const p = payload as { entity?: string };
@@ -534,6 +564,21 @@ export const InvoiceListPanel: React.FC<Props> = ({
           <strong>{formatKg(summary.kg)}</strong>
         </div>
       </div>
+
+      {kind === 'sale' && (
+        <div className="sale-invoice-summary">
+          <strong>خلاصه {period === 'today' ? 'امروز' : 'بازهٔ انتخاب‌شده'}</strong>
+          <div className="sale-invoice-summary-grid">
+            <span>کل فروش <b>{formatToman(salePaymentSummary.total)}</b></span>
+            <span>مانده نسیه <b>{formatToman(salePaymentSummary.unpaid)}</b></span>
+            <span>نقد <b>{formatToman(salePaymentSummary.cash)}</b></span>
+            <span>پوز <b>{formatToman(salePaymentSummary.pos)}</b></span>
+            <span>کارت‌به‌کارت <b>{formatToman(salePaymentSummary.cardToCard)}</b></span>
+            <span>نسیه ارسال‌شده <b>{formatToman(salePaymentSummary.shippedCredit)}</b></span>
+            <span>فاکتور ارسال‌نشده <b>{formatToman(salePaymentSummary.unshipped)}</b></span>
+          </div>
+        </div>
+      )}
 
       <div className="inv-card-list">
         {loading && filtered.length === 0 && (

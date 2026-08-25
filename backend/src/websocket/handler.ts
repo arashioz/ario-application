@@ -27,7 +27,7 @@ import {
   reorderCatalogProducts,
 } from '../services/productService';
 import { createPurchaseInvoice, listPurchaseInvoices, deletePurchaseInvoice, updatePurchaseInvoice } from '../services/purchaseService';
-import { createSaleInvoice, listSaleInvoices, recordDebtPayment, recordCustomerDebtPayment, updateDebtor, approveSale, shipSale, cancelSale, getSalePdfHtml, deleteSaleInvoice, updateSaleInvoice, deactivateSaleInvoice, deactivateUnshippedSales } from '../services/saleService';
+import { createSaleInvoice, listSaleInvoices, getSalesTierSummary, recordDebtPayment, recordCustomerDebtPayment, updateDebtor, approveSale, shipSale, cancelSale, getSalePdfHtml, deleteSaleInvoice, updateSaleInvoice, deactivateSaleInvoice, deactivateUnshippedSales } from '../services/saleService';
 import { SaleInvoice } from '../models';
 import { createExpense, updateExpense, recordCardDeposit, listExpenses, listCardDeposits, deleteExpense, deleteCardDeposit, deleteCompanyPayment, listCashTransactions, updateCashTransactionPaymentMethod } from '../services/expenseService';
 import { wipeDevData, listWipeSections, getMongoCompassHint } from '../services/devWipeService';
@@ -718,6 +718,7 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
           items: p.items as never,
           paymentMethod: p.paymentMethod as never,
           payment: p.payment as never,
+          cardToCardAmount: p.cardToCardAmount as number | undefined,
           discount: p.discount as number | undefined,
           discountMode: p.discountMode as 'invoice' | 'per_kg' | 'product' | undefined,
           discountPerKg: p.discountPerKg as number | undefined,
@@ -753,6 +754,11 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
           shippingQueue: p.shippingQueue === true,
         }),
       };
+    }
+
+    case 'sale.tierSummary': {
+      await requireAuth(ws, msg);
+      return { type: 'sale.tierSummary', payload: await getSalesTierSummary() };
     }
 
     case 'sale.get': {

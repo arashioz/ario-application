@@ -600,7 +600,18 @@ export async function getProfitAverages(refDate?: Date) {
   };
 }
 async function getInventorySnapshot() {
-  const products = await Product.find().sort({ stockKg: -1 }).select('name stockKg stock kgPerPackage avgCostPerKg');
+  const [products, purchaseTotals, saleTotals] = await Promise.all([
+    Product.find().sort({ stockKg: -1 }).select('name stockKg stock kgPerPackage avgCostPerKg'),
+    PurchaseInvoice.aggregate<{ kg?: number }>([
+      { $unwind: '$items' },
+      { $group: { _id: null, kg: { $sum: { $ifNull: ['$items.qtyKg', '$items.quantity'] } } } },
+    ]),
+    SaleInvoice.aggregate<{ kg?: number }>([
+      { $match: { stockApplied: true, status: { $nin: ['cancelled', 'inactive'] } } },
+      { $unwind: '$items' },
+      { $group: { _id: null, kg: { $sum: { $ifNull: ['$items.qtyKg', '$items.quantity'] } } } },
+    ]),
+  ]);
   const normalized = products.map((p) => {
     const stockKg = Number(p.stockKg ?? p.stock ?? 0) || 0;
     const kgPer = p.kgPerPackage || 5;
@@ -644,6 +655,10 @@ async function getInventorySnapshot() {
   const allProducts = [...merged].sort((a, b) => b.stockKg - a.stockKg);
 
   return {
+    /** مجموع خریدهای ثبت‌شده؛ اصلاح دستی موجودی در آن نیست */
+    purchasedKg: Math.round(((purchaseTotals[0]?.kg || 0) * 100)) / 100,
+    /** فقط فروش‌هایی که واقعاً از انبار کم شده‌اند */
+    soldKg: Math.round(((saleTotals[0]?.kg || 0) * 100)) / 100,
     totalKg: Math.round(totalKg * 100) / 100,
     totalTons: Math.round((totalKg / 1000) * 1000) / 1000,
     totalPackages: Math.round(totalPackages),
@@ -1691,4 +1706,3 @@ export async function getProductAnalytics(productId: string, opts?: { from?: Dat
     })),
   };
 }
-

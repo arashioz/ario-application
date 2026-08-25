@@ -65,10 +65,14 @@ function seedInvoicePaymentEvents(
   invoice: InstanceType<typeof SaleInvoice>,
   payment: { cash: number; card: number; credit: number },
   method: PaymentMethod,
-  at: Date
+  at: Date,
+  cardToCardAmount = 0
 ) {
-  const cardMethod: 'card' | 'card_to_card' =
-    method === 'card_to_card' ? 'card_to_card' : 'card';
+  const cardToCard =
+    method === 'card_to_card'
+      ? payment.card
+      : Math.min(payment.card, Math.max(0, Math.round(cardToCardAmount || 0)));
+  const pos = Math.max(0, payment.card - cardToCard);
   if (payment.cash > 0) {
     pushPaymentEvent(invoice, {
       amount: payment.cash,
@@ -78,10 +82,19 @@ function seedInvoicePaymentEvents(
       note: 'پرداخت هنگام ثبت فاکتور',
     });
   }
-  if (payment.card > 0) {
+  if (pos > 0) {
     pushPaymentEvent(invoice, {
-      amount: payment.card,
-      method: cardMethod,
+      amount: pos,
+      method: 'card',
+      date: at,
+      kind: 'invoice',
+      note: 'پرداخت هنگام ثبت فاکتور',
+    });
+  }
+  if (cardToCard > 0) {
+    pushPaymentEvent(invoice, {
+      amount: cardToCard,
+      method: 'card_to_card',
       date: at,
       kind: 'invoice',
       note: 'پرداخت هنگام ثبت فاکتور',
@@ -266,6 +279,8 @@ export async function createSaleInvoice(data: {
   items: SaleItemInput[];
   paymentMethod: PaymentMethod;
   payment?: { cash?: number; card?: number; credit?: number };
+  /** سهم کارت‌به‌کارت از مبلغ card در پرداخت ترکیبی */
+  cardToCardAmount?: number;
   discount?: number;
   discountMode?: 'invoice' | 'per_kg' | 'product';
   discountPerKg?: number;
@@ -306,7 +321,11 @@ export async function createSaleInvoice(data: {
   const requiresApproval =
     data.requiresApproval === true || data.createdByRole === 'marketer';
 
-  let customerName = data.customerName;
+  const anonymousRetail =
+    priceTier === 'retail' &&
+    !data.customerId &&
+    (!data.customerName?.trim() || data.customerName.trim() === 'مشتری تکی');
+  let customerName = anonymousRetail ? 'مشتری تکی' : data.customerName;
   let customerPhone = data.customerPhone ? normalizePhoneDigits(data.customerPhone) : data.customerPhone;
   if (customerPhone === '') customerPhone = undefined;
   let customerAddress = data.customerAddress;
@@ -337,7 +356,7 @@ export async function createSaleInvoice(data: {
       customerAddress = customerAddress || c.address;
       await applyGeo(c);
     }
-  } else if (customerName || customerPhone) {
+  } else if (!anonymousRetail && (customerName || customerPhone)) {
     let customer: InstanceType<typeof Customer> | null = null;
     if (customerPhone) {
       customer = await findCustomerByPhone(customerPhone);
@@ -465,7 +484,7 @@ export async function createSaleInvoice(data: {
   }
   if (!invoice) throw new Error('ثبت فاکتور فروش ناموفق بود');
 
-  seedInvoicePaymentEvents(invoice, payment, data.paymentMethod, date);
+  seedInvoicePaymentEvents(invoice, payment, data.paymentMethod, date, data.cardToCardAmount);
   await invoice.save();
 
   if (invoice.creditIsCheck && payment.credit > 0) {
@@ -1286,6 +1305,41 @@ export async function listSaleInvoices(opts?: {
     ];
   }
   return SaleInvoice.find(filter).sort({ date: -1, createdAt: -1 });
+}
+
+/** خلاصهٔ کل فروش و سودِ فاکتورهای قطعی، به تفکیک نوع قیمت */
+export async function getSalesTierSummary() {
+  const rows = await SaleInvoice.aggregate<{
+    _id?: PriceTier;
+    amount?: number;
+    profit?: number;
+    invoices?: number;
+  }>([
+    { $match: { status: { $in: ['approved', 'shipped', 'delivered'] } } },
+    {
+      $group: {
+        _id: { $ifNull: ['$priceTier', 'retail'] },
+        amount: { $sum: '$totalAmount' },
+        profit: { $sum: '$totalProfit' },
+        invoices: { $sum: 1 },
+      },
+    },
+  ]);
+
+  const result: Record<PriceTier, { amount: number; profit: number; invoices: number }> = {
+    retail: { amount: 0, profit: 0, invoices: 0 },
+    supermarket: { amount: 0, profit: 0, invoices: 0 },
+    wholesale: { amount: 0, profit: 0, invoices: 0 },
+  };
+  for (const row of rows) {
+    const tier: PriceTier = row._id === 'supermarket' || row._id === 'wholesale' ? row._id : 'retail';
+    result[tier] = {
+      amount: Math.round(row.amount || 0),
+      profit: Math.round(row.profit || 0),
+      invoices: Math.round(row.invoices || 0),
+    };
+  }
+  return result;
 }
 
 export async function recordDebtPayment(

@@ -80,6 +80,13 @@ import {
 
 type PriceTier = 'retail' | 'supermarket' | 'wholesale';
 type CostBasis = 'weighted' | 'last';
+type TierSalesSummary = Record<PriceTier, { amount: number; profit: number; invoices: number }>;
+
+const EMPTY_TIER_SALES: TierSalesSummary = {
+  retail: { amount: 0, profit: 0, invoices: 0 },
+  supermarket: { amount: 0, profit: 0, invoices: 0 },
+  wholesale: { amount: 0, profit: 0, invoices: 0 },
+};
 
 interface Product {
   _id: string;
@@ -201,6 +208,7 @@ const Sale: React.FC = () => {
     followUpTier?: string;
   }>();
   const [listRefreshKey, setListRefreshKey] = useState(0);
+  const [tierSales, setTierSales] = useState<TierSalesSummary>(EMPTY_TIER_SALES);
   const [showInvoiceList, setShowInvoiceList] = useState(false);
   const [cashBalance, setCashBalance] = useState(0);
   const [cardBalance, setCardBalance] = useState(0);
@@ -542,14 +550,29 @@ const Sale: React.FC = () => {
     }
   }, [user?.role]);
 
+  const loadTierSales = useCallback(async () => {
+    try {
+      const summary = await wsClient.request<Partial<TierSalesSummary>>('sale.tierSummary', {});
+      setTierSales({
+        retail: summary.retail || EMPTY_TIER_SALES.retail,
+        supermarket: summary.supermarket || EMPTY_TIER_SALES.supermarket,
+        wholesale: summary.wholesale || EMPTY_TIER_SALES.wholesale,
+      });
+    } catch {
+      /* گزارش تکمیلی است و خطایش نباید ثبت فروش را مختل کند */
+    }
+  }, []);
+
   useEffect(() => {
     void loadProducts();
     void loadActiveCampaigns();
-  }, [loadProducts, loadActiveCampaigns]);
+    void loadTierSales();
+  }, [loadProducts, loadActiveCampaigns, loadTierSales]);
 
   useIonViewWillEnter(() => {
     void loadProducts();
     void loadActiveCampaigns();
+    void loadTierSales();
     void wsClient
       .request<{ cashBalance?: number; cardBalance?: number; costBasis?: CostBasis; bankCards?: BankCard[]; goldenAutoEnabled?: boolean; goldenMinKg?: number; goldenSuggestGiftName?: string; goldenSuggestGiftQty?: number; goldenSuggestDiscountPercent?: number; shopName?: string }>('settings.get')
       .then((s) => {
@@ -619,12 +642,13 @@ const Sale: React.FC = () => {
       ) {
         void loadProducts();
       }
+      if (p?.entity === 'sale') void loadTierSales();
       if (p?.entity === 'campaign') {
         void loadActiveCampaigns();
       }
     });
     return unsub;
-  }, [loadProducts, loadActiveCampaigns]);
+  }, [loadProducts, loadActiveCampaigns, loadTierSales]);
   // بازاریاب: اشتراک موقعیت وقتی کار فعال است
   useEffect(() => {
     if (user?.role !== 'marketer' || !workOn) return;
@@ -1711,6 +1735,8 @@ const Sale: React.FC = () => {
     setLoading(true);
     try {
       const net = totals.net;
+      const invoiceCustomerName =
+        priceTier === 'retail' && !customerId ? 'مشتری تکی' : customerName || undefined;
       const effectiveMethod = saleTab === 'bulk' ? 'credit' : paymentMethod;
       let payment: { cash?: number; card?: number; credit?: number } | undefined;
       if (effectiveMethod === 'mixed') {
@@ -1733,13 +1759,19 @@ const Sale: React.FC = () => {
         'sale.create',
         {
           customerId: customerId || undefined,
-          customerName: customerName || undefined,
+          customerName: invoiceCustomerName,
           customerPhone: customerPhone ? normalizePhone(customerPhone) || undefined : undefined,
           customerAddress: customerAddress || undefined,
           customerLat: customerLat ?? undefined,
           customerLng: customerLng ?? undefined,
           paymentMethod: effectiveMethod,
           payment,
+          cardToCardAmount:
+            effectiveMethod === 'card_to_card'
+              ? net
+              : effectiveMethod === 'mixed'
+                ? parseAmount(payCardToCard) || 0
+                : undefined,
           date,
           dueDate:
             effectiveMethod === 'credit' ||
@@ -1798,7 +1830,7 @@ const Sale: React.FC = () => {
         const shareText = buildInvoiceShareText(
           {
             invoiceNumber: invoice.invoiceNumber,
-            customerName: customerName || undefined,
+            customerName: invoiceCustomerName,
             customerPhone: customerPhone || undefined,
             date,
             totalAmount: totals.net,
@@ -2093,6 +2125,22 @@ const Sale: React.FC = () => {
                 مشتری عمده — فاکتور تکی مجاز نیست
               </p>
             )}
+          </div>
+
+          <div className="ios-glass-card sale-navy-card sale-tier-summary">
+            <div className="ios-section-title" style={{ marginTop: 0 }}>خلاصه فروش تا امروز</div>
+            <div className="sale-tier-summary-grid">
+              {(Object.keys(TIER_LABELS) as PriceTier[]).map((tier) => (
+                <div key={tier} className="sale-tier-summary-item">
+                  <strong>{TIER_LABELS[tier]}</strong>
+                  <span>فروش {formatToman(tierSales[tier].amount)}</span>
+                  <span className={tierSales[tier].profit >= 0 ? 'success' : 'danger'}>
+                    سود {formatToman(tierSales[tier].profit)}
+                  </span>
+                  <small>{tierSales[tier].invoices.toLocaleString('fa-IR')} فاکتور</small>
+                </div>
+              ))}
+            </div>
           </div>
 
           <div className={stepsUnlocked ? 'sale-steps' : 'sale-steps sale-steps-locked'}>

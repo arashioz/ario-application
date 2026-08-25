@@ -2068,6 +2068,24 @@ body {
 .sale-toolbar {
   padding: 10px 12px !important;
 }
+.sale-tier-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+.sale-tier-summary-item {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px;
+  border: 1px solid rgba(30, 58, 95, 0.14);
+  border-radius: 10px;
+  color: #1e3a5f;
+  font-size: 11px;
+}
+.sale-tier-summary-item strong { font-size: 13px; }
+.sale-tier-summary-item small { color: var(--ios-label); }
 .sale-page-navy .ios-chip-active {
   --background: #1e3a5f;
   --color: #fff;
@@ -2780,6 +2798,31 @@ body {
 .inv-summary-bar strong {
   font-size: 13px;
   font-weight: 800;
+}
+.sale-invoice-summary {
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  border: 1px solid rgba(30, 58, 95, 0.14);
+  border-radius: 14px;
+  background: #f8fafc;
+  color: #1e3a5f;
+  font-size: 12px;
+}
+.sale-invoice-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+.sale-invoice-summary-grid span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--ios-label);
+}
+.sale-invoice-summary-grid b {
+  color: #1e3a5f;
+  font-size: 12px;
 }
 .inv-card-list {
   display: grid;
