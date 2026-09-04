@@ -54,6 +54,7 @@ import PlatformSettings from './pages/PlatformSettings';
 import VolumeOrders from './pages/VolumeOrders';
 import MyWallet from './pages/MyWallet';
 import ProductAnalytics from './pages/ProductAnalytics';
+import DataExport from './pages/DataExport';
 import { wsClient } from './api/ws';
 
 import '@ionic/react/css/core.css';
@@ -164,6 +165,7 @@ const AuthedApp: React.FC = () => {
         <Route exact path="/volume-orders" component={VolumeOrders} />
         <Route exact path="/my-wallet" component={MyWallet} />
         <Route exact path="/product-analytics/:id" component={ProductAnalytics} />
+        <Route exact path="/data-export" component={DataExport} />
         <Route exact path="/more" component={More} />
         <Route exact path="/invoices" component={Invoices} />
         <Route exact path="/customers-map" component={CustomersMap} />

@@ -89,6 +89,7 @@ import {
 import { localLlm, parseSms } from '../chatbot/engine';
 import { SmsMessage } from '../models';
 import { getOrCreateSettings as getSettings } from '../services/productService';
+import { createExport, ExportKind } from '../services/exportService';
 
 export interface WsMessage {
   type: string;
@@ -406,6 +407,13 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
       );
       notifyDataChange('dev', 'wipe', result);
       return { type: 'dev.wipe', payload: result };
+    }
+
+    case 'export.create': {
+      const user = await requireAuth(ws, msg);
+      requireAdmin(user);
+      const kind = String(p.kind || '') as ExportKind;
+      return { type: 'export.create', payload: await createExport(kind) };
     }
 
     case 'product.list': {

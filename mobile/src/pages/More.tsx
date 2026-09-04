@@ -32,6 +32,7 @@ import {
   cashOutline,
   pieChartOutline,
   personOutline,
+  downloadOutline,
 } from 'ionicons/icons';
 import { useAuth } from '../auth/AuthContext';
 import { wsClient } from '../api/ws';
@@ -183,6 +184,12 @@ const More: React.FC = () => {
       { href: '/checks', icon: documentTextOutline, label: 'چک', desc: 'یادآور سررسید' },
     ];
     if (isAdmin) {
+      financeReports.push({
+        href: '/data-export',
+        icon: downloadOutline,
+        label: 'خروجی داده‌ها',
+        desc: 'JSON و پشتیبان',
+      });
       financeReports.splice(1, 0, {
         href: '/expense',
         icon: walletOutline,
