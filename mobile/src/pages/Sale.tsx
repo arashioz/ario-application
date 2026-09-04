@@ -194,6 +194,46 @@ function productSalePrice(p: Product, basis: CostBasis, tier: PriceTier): number
 }
 
 const COST_BASIS_KEY = 'ario_cost_basis';
+const SALE_DRAFT_KEY = 'ario.sale.draft.v1';
+
+type SaleDraft = {
+  customerId?: string;
+  customerName?: string;
+  customerPhone?: string;
+  customerAddress?: string;
+  customerLat?: number | null;
+  customerLng?: number | null;
+  lines?: LineItem[];
+  paymentMethod?: string;
+  payCash?: string;
+  payCard?: string;
+  payCardToCard?: string;
+  payCredit?: string;
+  creditIsCheck?: boolean;
+  workOn?: boolean;
+  priceTier?: PriceTier | null;
+  deliveryMode?: 'company' | 'self';
+  isGolden?: boolean;
+  discountMode?: DiscountMode;
+  discount?: string;
+  discountPerKg?: string;
+  dueDate?: string;
+  date?: string;
+  notes?: string;
+  appliedOffer?: string;
+  saleTab?: 'single' | 'bulk';
+};
+
+function loadSaleDraft(): SaleDraft {
+  try {
+    const raw = localStorage.getItem(SALE_DRAFT_KEY);
+    if (!raw) return {};
+    const draft = JSON.parse(raw) as SaleDraft;
+    return draft && typeof draft === 'object' ? draft : {};
+  } catch {
+    return {};
+  }
+}
 
 function newLineKey() {
   return `l-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -207,6 +247,9 @@ const Sale: React.FC = () => {
     followUpDiscount?: number;
     followUpTier?: string;
   }>();
+  // Ionic keeps some pages alive, but a browser refresh remounts this screen.
+  // Keep the unsubmitted invoice as a local draft in both cases.
+  const initialDraft = useRef<SaleDraft>(loadSaleDraft()).current;
   const [listRefreshKey, setListRefreshKey] = useState(0);
   const [tierSales, setTierSales] = useState<TierSalesSummary>(EMPTY_TIER_SALES);
   const [showInvoiceList, setShowInvoiceList] = useState(false);
@@ -224,12 +267,12 @@ const Sale: React.FC = () => {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [search, setSearch] = useState('');
   const [custSearch, setCustSearch] = useState('');
-  const [customerId, setCustomerId] = useState('');
-  const [customerName, setCustomerName] = useState('');
-  const [customerPhone, setCustomerPhone] = useState('');
-  const [customerAddress, setCustomerAddress] = useState('');
-  const [customerLat, setCustomerLat] = useState<number | null>(null);
-  const [customerLng, setCustomerLng] = useState<number | null>(null);
+  const [customerId, setCustomerId] = useState(initialDraft.customerId || '');
+  const [customerName, setCustomerName] = useState(initialDraft.customerName || '');
+  const [customerPhone, setCustomerPhone] = useState(initialDraft.customerPhone || '');
+  const [customerAddress, setCustomerAddress] = useState(initialDraft.customerAddress || '');
+  const [customerLat, setCustomerLat] = useState<number | null>(initialDraft.customerLat ?? null);
+  const [customerLng, setCustomerLng] = useState<number | null>(initialDraft.customerLng ?? null);
   const [prevInvoices, setPrevInvoices] = useState<PrevInv[]>([]);
   const [suggestHint, setSuggestHint] = useState('');
   const [suggestedDiscount, setSuggestedDiscount] = useState(0);
@@ -279,15 +322,22 @@ const Sale: React.FC = () => {
   >([]);
   const [powerLabel, setPowerLabel] = useState('');
   const [lookingUp, setLookingUp] = useState(false);
-  const [lines, setLines] = useState<LineItem[]>([]);
-  const [paymentMethod, setPaymentMethod] = useState('card');
-  const [payCash, setPayCash] = useState('');
-  const [payCard, setPayCard] = useState('');
-  const [payCardToCard, setPayCardToCard] = useState('');
-  const [payCredit, setPayCredit] = useState('');
-  const [creditIsCheck, setCreditIsCheck] = useState(false);
-  const [workOn, setWorkOn] = useState(false);
+  const [lines, setLines] = useState<LineItem[]>(() => initialDraft.lines || []);
+  const [paymentMethod, setPaymentMethod] = useState(initialDraft.paymentMethod || 'card');
+  const [payCash, setPayCash] = useState(initialDraft.payCash || '');
+  const [payCard, setPayCard] = useState(initialDraft.payCard || '');
+  const [payCardToCard, setPayCardToCard] = useState(initialDraft.payCardToCard || '');
+  const [payCredit, setPayCredit] = useState(initialDraft.payCredit || '');
+  const [creditIsCheck, setCreditIsCheck] = useState(initialDraft.creditIsCheck || false);
+  const [workOn, setWorkOn] = useState(initialDraft.workOn || false);
   const [priceTier, setPriceTier] = useState<PriceTier | null>(() => {
+    if (
+      initialDraft.priceTier === 'retail' ||
+      initialDraft.priceTier === 'supermarket' ||
+      initialDraft.priceTier === 'wholesale'
+    ) {
+      return initialDraft.priceTier;
+    }
     try {
       const v = localStorage.getItem('ario.sale.priceTier');
       if (v === 'retail' || v === 'supermarket' || v === 'wholesale') return v;
@@ -296,19 +346,20 @@ const Sale: React.FC = () => {
     }
     return null;
   });
-  const [deliveryMode, setDeliveryMode] = useState<'company' | 'self'>('company');
-  const [isGolden, setIsGolden] = useState(false);
-  const [discountMode, setDiscountMode] = useState<DiscountMode>('invoice');
-  const [discount, setDiscount] = useState('');
-  const [discountPerKg, setDiscountPerKg] = useState('');
-  const [dueDate, setDueDate] = useState('');
-  const [date, setDate] = useState(todayIso());
-  const [notes, setNotes] = useState('');
-  const [appliedOffer, setAppliedOffer] = useState('');
+  const [deliveryMode, setDeliveryMode] = useState<'company' | 'self'>(initialDraft.deliveryMode || 'company');
+  const [isGolden, setIsGolden] = useState(initialDraft.isGolden || false);
+  const [discountMode, setDiscountMode] = useState<DiscountMode>(initialDraft.discountMode || 'invoice');
+  const [discount, setDiscount] = useState(initialDraft.discount || '');
+  const [discountPerKg, setDiscountPerKg] = useState(initialDraft.discountPerKg || '');
+  const [dueDate, setDueDate] = useState(initialDraft.dueDate || '');
+  const [date, setDate] = useState(initialDraft.date || todayIso());
+  const [notes, setNotes] = useState(initialDraft.notes || '');
+  const [appliedOffer, setAppliedOffer] = useState(initialDraft.appliedOffer || '');
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState({ open: false, msg: '', color: 'success' });
   const [histOpen, setHistOpen] = useState(false);
   const [saleTab, setSaleTab] = useState<'single' | 'bulk'>(() => {
+    if (initialDraft.saleTab === 'single' || initialDraft.saleTab === 'bulk') return initialDraft.saleTab;
     try {
       const v = localStorage.getItem('ario.sale.tab');
       if (v === 'single' || v === 'bulk') return v;
@@ -363,6 +414,67 @@ const Sale: React.FC = () => {
   /** تا وقتی تیو قیمت انتخاب نشده، قیمت‌گذاری با پیش‌فرض تکی حساب می‌شود ولی UI قفل است */
   const calcTier: PriceTier = priceTier || 'retail';
   const stepsUnlocked = priceTier != null;
+
+  useEffect(() => {
+    const draft: SaleDraft = {
+      customerId,
+      customerName,
+      customerPhone,
+      customerAddress,
+      customerLat,
+      customerLng,
+      lines,
+      paymentMethod,
+      payCash,
+      payCard,
+      payCardToCard,
+      payCredit,
+      creditIsCheck,
+      workOn,
+      priceTier,
+      deliveryMode,
+      isGolden,
+      discountMode,
+      discount,
+      discountPerKg,
+      dueDate,
+      date,
+      notes,
+      appliedOffer,
+      saleTab,
+    };
+    try {
+      localStorage.setItem(SALE_DRAFT_KEY, JSON.stringify(draft));
+    } catch {
+      /* Draft persistence is an enhancement; sales should still work without storage. */
+    }
+  }, [
+    customerId,
+    customerName,
+    customerPhone,
+    customerAddress,
+    customerLat,
+    customerLng,
+    lines,
+    paymentMethod,
+    payCash,
+    payCard,
+    payCardToCard,
+    payCredit,
+    creditIsCheck,
+    workOn,
+    priceTier,
+    deliveryMode,
+    isGolden,
+    discountMode,
+    discount,
+    discountPerKg,
+    dueDate,
+    date,
+    notes,
+    appliedOffer,
+    saleTab,
+  ]);
 
   const selectPriceTier = (t: PriceTier) => {
     if (t === 'retail' && isWholesaleCustomer) {
@@ -1645,8 +1757,9 @@ const Sale: React.FC = () => {
         const p = products.find((x) => x._id === l.productId);
         if (!p) return l;
         const suggested = productSalePrice(p, costBasis, calcTier);
-        const price = saleUnitPrice(suggested, l.unit, l.kgPerPackage || 5);
-        return { ...l, suggestedPerKg: suggested, unitPrice: formatMoneyInput(String(price)) };
+        // Product reloads and page navigation must never overwrite a price the user
+        // already chose for this unregistered invoice.
+        return { ...l, suggestedPerKg: suggested };
       })
     );
   }, [priceTier, costBasis, products]);
@@ -1945,6 +2058,7 @@ const Sale: React.FC = () => {
       try {
         localStorage.removeItem('ario.sale.priceTier');
         localStorage.removeItem('ario.sale.tab');
+        localStorage.removeItem(SALE_DRAFT_KEY);
       } catch {
         /* ignore */
       }
