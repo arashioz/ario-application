@@ -34,6 +34,7 @@ services:
       NODE_ENV: production
     volumes:
       - ario_uploads:/app/uploads
+      - ario_backups:/app/backups
     depends_on:
       mongodb:
         condition: service_healthy
@@ -102,6 +103,7 @@ services:
 volumes:
   ario_mongo_data:
   ario_uploads:
+  ario_backups:
   ario_certbot_www:
   ario_letsencrypt:
   ario_nginx_ssl:

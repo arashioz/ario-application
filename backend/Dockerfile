@@ -23,7 +23,7 @@ COPY package.json package-lock.json* ./
 RUN npm ci --omit=dev && npm cache clean --force
 
 COPY --from=build /app/dist ./dist
-RUN mkdir -p /app/uploads && chown -R ario:ario /app
+RUN mkdir -p /app/uploads /app/backups && chown -R ario:ario /app
 
 USER ario
 EXPOSE 3001

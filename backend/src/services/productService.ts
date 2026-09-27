@@ -162,7 +162,14 @@ export async function listProducts(search?: string) {
     seen.add(key);
     unique.push(p);
   }
-  return unique;
+  // This calculated field is deliberately not persisted: changing the base price
+  // immediately refreshes every linked product without touching purchase history.
+  return Promise.all(
+    unique.map(async (product) => ({
+      ...product.toObject(),
+      pricingCostPerKg: await resolveProductPricingCost(product),
+    }))
+  );
 }
 
 export async function getCategories() {
@@ -306,6 +313,37 @@ export function resolveProductCost(
   return last || avg;
 }
 
+/**
+ * Cost used to build today's price list. It is separate from real purchase cost,
+ * so old stock and already-issued invoices keep their accounting figures.
+ */
+export async function resolveProductPricingCost(
+  product: {
+    marketBasePricePerKg?: number;
+    pricingBaseProductId?: Types.ObjectId | string | null;
+    pricingSurchargePerKg?: number;
+    avgCostPerKg?: number;
+    purchasePrice?: number;
+    lastPurchasePricePerKg?: number;
+  },
+  costBasis: CostBasis = 'last'
+): Promise<number> {
+  const surcharge = Math.max(0, Number(product.pricingSurchargePerKg || 0));
+  if (product.pricingBaseProductId) {
+    const base = await Product.findById(String(product.pricingBaseProductId));
+    if (!base) throw new Error('محصول پایهٔ قیمت‌گذاری یافت نشد');
+    const basePrice =
+      base.marketBasePricePerKg && base.marketBasePricePerKg > 0
+        ? base.marketBasePricePerKg
+        : resolveProductCost(base, costBasis);
+    return Math.max(0, basePrice + surcharge);
+  }
+  if (product.marketBasePricePerKg && product.marketBasePricePerKg > 0) {
+    return product.marketBasePricePerKg;
+  }
+  return resolveProductCost(product, costBasis);
+}
+
 export async function calculateSalePrice(
   productId: string,
   customPercent?: number,
@@ -326,18 +364,24 @@ export async function calculateSalePrice(
     customPercent ??
     tierPercent(category, product, priceTier);
 
-  const cost = resolveProductCost(product, costBasis);
+  const cost = await resolveProductPricingCost(product, costBasis);
   // رند به نزدیک‌ترین ۱۰۰ تومان — عدد خرد نداشته باشیم
-  const salePricePerKg = Math.round((cost * (1 + percent / 100)) / 100) * 100;
+  const roundingStep = product.priceRoundingStep === 1000 ? 1000 : 100;
+  const salePricePerKg = Math.round((cost * (1 + percent / 100)) / roundingStep) * roundingStep;
   const kgPer = product.kgPerPackage || 5;
   return {
     salePrice: salePricePerKg,
     salePricePerKg,
     salePricePerPackage: roundToman(salePricePerKg * kgPer, 100),
     percent,
+    /** درصد واقعی پس از گرد کردن؛ برای نمایش مدیر */
+    effectivePercent: cost > 0 ? ((salePricePerKg / cost - 1) * 100) : 0,
+    roundingStep,
     priceTier,
     costBasis,
-    purchasePrice: cost,
+    /** مبنای قیمت‌گذاری امروز؛ بهای واقعی خرید جداگانه نگه داشته می‌شود. */
+    pricingCostPerKg: cost,
+    purchasePrice: resolveProductCost(product, costBasis),
     avgCostPerKg: product.avgCostPerKg ?? product.purchasePrice ?? 0,
     lastPurchasePricePerKg: product.lastPurchasePricePerKg || 0,
     kgPerPackage: kgPer,
@@ -477,6 +521,10 @@ export async function updateProduct(
     profitSupermarket?: number | null;
     profitWholesale?: number | null;
     categoryId?: string;
+    marketBasePricePerKg?: number | null;
+    pricingBaseProductId?: string | null;
+    pricingSurchargePerKg?: number;
+    priceRoundingStep?: 100 | 1000;
   }
 ) {
   const p = await Product.findById(id);
@@ -489,6 +537,27 @@ export async function updateProduct(
   if (data.imageUrl !== undefined) p.imageUrl = data.imageUrl;
   if (data.notes !== undefined) p.notes = data.notes;
   if (data.categoryId) p.categoryId = new Types.ObjectId(data.categoryId);
+  if (data.pricingBaseProductId === null) {
+    p.pricingBaseProductId = undefined;
+  } else if (data.pricingBaseProductId !== undefined) {
+    if (data.pricingBaseProductId === id) throw new Error('محصول نمی‌تواند پایهٔ قیمت خودش باشد');
+    const base = await Product.findById(data.pricingBaseProductId).select('_id pricingBaseProductId');
+    if (!base) throw new Error('محصول پایه یافت نشد');
+    if (base.pricingBaseProductId) {
+      throw new Error('محصول پایه باید مستقل باشد؛ زنجیرهٔ قیمت‌گذاری مجاز نیست');
+    }
+    p.pricingBaseProductId = base._id;
+  }
+  if (data.marketBasePricePerKg === null) p.marketBasePricePerKg = undefined;
+  else if (data.marketBasePricePerKg !== undefined) {
+    p.marketBasePricePerKg = Math.max(0, data.marketBasePricePerKg);
+  }
+  if (data.pricingSurchargePerKg !== undefined) {
+    p.pricingSurchargePerKg = Math.max(0, data.pricingSurchargePerKg);
+  }
+  if (data.priceRoundingStep !== undefined) {
+    p.priceRoundingStep = data.priceRoundingStep === 1000 ? 1000 : 100;
+  }
   if (data.profitRetail === null) {
     p.profitRetail = undefined;
     p.profitPercent = undefined;
@@ -640,5 +709,3 @@ export async function getPublicCatalog() {
     products: items,
   };
 }
-
-

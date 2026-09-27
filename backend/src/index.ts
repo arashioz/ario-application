@@ -5,8 +5,10 @@ import http from 'http';
 import path from 'path';
 import { connectDatabase } from './config/database';
 import routes from './routes';
+import adminRoutes from './routes/admin';
 import { setupWebSocket } from './websocket/handler';
 import { getPublicCatalog } from './services/productService';
+import { scheduleAutoBackups } from './services/backupService';
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/ario-shop';
@@ -33,10 +35,12 @@ async function main() {
     }
   });
 
+  app.use('/api/admin', adminRoutes);
   app.use('/api', routes);
 
   const server = http.createServer(app);
   setupWebSocket(server, WS_PATH);
+  scheduleAutoBackups();
 
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Server running on http://0.0.0.0:${PORT}`);

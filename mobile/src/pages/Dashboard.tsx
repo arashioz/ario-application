@@ -42,6 +42,18 @@ import { useHistory } from 'react-router-dom';
 import { PersianDateField } from '../components/PersianDateField';
 
 const PROFIT_KEY = 'ario_dash_show_profit';
+type PriceTier = 'retail' | 'supermarket' | 'wholesale';
+type TierSalesSummary = Record<PriceTier, { amount: number; profit: number; invoices: number }>;
+const EMPTY_TIER_SALES: TierSalesSummary = {
+  retail: { amount: 0, profit: 0, invoices: 0 },
+  supermarket: { amount: 0, profit: 0, invoices: 0 },
+  wholesale: { amount: 0, profit: 0, invoices: 0 },
+};
+const TIER_LABELS: Record<PriceTier, string> = {
+  retail: 'تکی',
+  supermarket: 'سوپر',
+  wholesale: 'عمده',
+};
 
 function loadShowProfit(): boolean {
   try {
@@ -195,6 +207,20 @@ const Dashboard: React.FC = () => {
   const [showProfit, setShowProfit] = useState(loadShowProfit);
   const [invOpen, setInvOpen] = useState(false);
   const [notes, setNotes] = useState<ShopNote[]>([]);
+  const [tierSales, setTierSales] = useState<TierSalesSummary>(EMPTY_TIER_SALES);
+
+  const loadTierSales = useCallback(async () => {
+    try {
+      const summary = await wsClient.request<Partial<TierSalesSummary>>('sale.tierSummary', {});
+      setTierSales({
+        retail: summary.retail || EMPTY_TIER_SALES.retail,
+        supermarket: summary.supermarket || EMPTY_TIER_SALES.supermarket,
+        wholesale: summary.wholesale || EMPTY_TIER_SALES.wholesale,
+      });
+    } catch {
+      /* داشبورد اصلی حتی اگر این خلاصه در دسترس نبود باید کار کند. */
+    }
+  }, []);
 
   const loadNotes = useCallback(async () => {
     try {
@@ -221,6 +247,7 @@ const Dashboard: React.FC = () => {
   useIonViewWillEnter(() => {
     void load(kpiPeriod);
     void loadNotes();
+    void loadTierSales();
   });
 
   useEffect(() => {
@@ -230,12 +257,13 @@ const Dashboard: React.FC = () => {
       if (p?.entity === 'sale' || p?.entity === 'purchase' || p?.entity === 'product') {
         void load(kpiPeriod);
       }
+      if (p?.entity === 'sale') void loadTierSales();
     });
     return unsub;
-  }, [loadNotes, load, kpiPeriod]);
+  }, [loadNotes, load, loadTierSales, kpiPeriod]);
 
   const onRefresh = async (ev: CustomEvent<RefresherEventDetail>) => {
-    await Promise.all([load(kpiPeriod), loadNotes()]);
+    await Promise.all([load(kpiPeriod), loadNotes(), loadTierSales()]);
     ev.detail.complete();
   };
 
@@ -395,6 +423,24 @@ const Dashboard: React.FC = () => {
                   ))}
                 </div>
               </button>
+
+              <div className="ios-glass-card sale-tier-summary">
+                <div className="ios-section-title" style={{ marginTop: 0 }}>خلاصه فروش تا امروز</div>
+                <div className="sale-tier-summary-grid">
+                  {(Object.keys(TIER_LABELS) as PriceTier[]).map((tier) => (
+                    <div key={tier} className="sale-tier-summary-item">
+                      <strong>{TIER_LABELS[tier]}</strong>
+                      <span>فروش {formatToman(tierSales[tier].amount)}</span>
+                      {showProfit && (
+                        <span className={tierSales[tier].profit >= 0 ? 'success' : 'danger'}>
+                          سود {formatToman(tierSales[tier].profit)}
+                        </span>
+                      )}
+                      <small>{tierSales[tier].invoices.toLocaleString('fa-IR')} فاکتور</small>
+                    </div>
+                  ))}
+                </div>
+              </div>
 
               <div className="ios-section-title">
                 خلاصه — {kpiPeriod === 'today' ? formatDate(viewDate + 'T12:00:00') : data.periodLabel || 'امروز'}

@@ -80,14 +80,6 @@ import {
 
 type PriceTier = 'retail' | 'supermarket' | 'wholesale';
 type CostBasis = 'weighted' | 'last';
-type TierSalesSummary = Record<PriceTier, { amount: number; profit: number; invoices: number }>;
-
-const EMPTY_TIER_SALES: TierSalesSummary = {
-  retail: { amount: 0, profit: 0, invoices: 0 },
-  supermarket: { amount: 0, profit: 0, invoices: 0 },
-  wholesale: { amount: 0, profit: 0, invoices: 0 },
-};
-
 interface Product {
   _id: string;
   name: string;
@@ -96,6 +88,10 @@ interface Product {
   avgCostPerKg: number;
   lastPurchasePricePerKg?: number;
   purchasePrice?: number;
+  pricingCostPerKg?: number;
+  marketBasePricePerKg?: number;
+  pricingBaseProductId?: string;
+  priceRoundingStep?: 100 | 1000;
   /** قیمت دستی تکیِ کاتالوگ؛ در فروش تکی هم اعمال می‌شود */
   catalogPricePerKg?: number;
   kgPerPackage: number;
@@ -179,6 +175,9 @@ function tierPercent(p: Product, tier: PriceTier): number {
 }
 
 function productCost(p: Product, basis: CostBasis): number {
+  if (p.pricingCostPerKg != null && (p.marketBasePricePerKg || p.pricingBaseProductId)) {
+    return p.pricingCostPerKg;
+  }
   const avg = p.avgCostPerKg ?? p.purchasePrice ?? 0;
   const last = p.lastPurchasePricePerKg || p.purchasePrice || 0;
   if (basis === 'weighted') return avg || last;
@@ -190,7 +189,10 @@ function productSalePrice(p: Product, basis: CostBasis, tier: PriceTier): number
   if (tier === 'retail' && (p.catalogPricePerKg || 0) > 0) {
     return roundToman(p.catalogPricePerKg || 0, 100);
   }
-  return priceFromPercent(productCost(p, basis), tierPercent(p, tier));
+  return roundToman(
+    priceFromPercent(productCost(p, basis), tierPercent(p, tier)),
+    p.priceRoundingStep === 1000 ? 1000 : 100
+  );
 }
 
 const COST_BASIS_KEY = 'ario_cost_basis';
@@ -251,7 +253,6 @@ const Sale: React.FC = () => {
   // Keep the unsubmitted invoice as a local draft in both cases.
   const initialDraft = useRef<SaleDraft>(loadSaleDraft()).current;
   const [listRefreshKey, setListRefreshKey] = useState(0);
-  const [tierSales, setTierSales] = useState<TierSalesSummary>(EMPTY_TIER_SALES);
   const [showInvoiceList, setShowInvoiceList] = useState(false);
   const [cashBalance, setCashBalance] = useState(0);
   const [cardBalance, setCardBalance] = useState(0);
@@ -662,29 +663,14 @@ const Sale: React.FC = () => {
     }
   }, [user?.role]);
 
-  const loadTierSales = useCallback(async () => {
-    try {
-      const summary = await wsClient.request<Partial<TierSalesSummary>>('sale.tierSummary', {});
-      setTierSales({
-        retail: summary.retail || EMPTY_TIER_SALES.retail,
-        supermarket: summary.supermarket || EMPTY_TIER_SALES.supermarket,
-        wholesale: summary.wholesale || EMPTY_TIER_SALES.wholesale,
-      });
-    } catch {
-      /* گزارش تکمیلی است و خطایش نباید ثبت فروش را مختل کند */
-    }
-  }, []);
-
   useEffect(() => {
     void loadProducts();
     void loadActiveCampaigns();
-    void loadTierSales();
-  }, [loadProducts, loadActiveCampaigns, loadTierSales]);
+  }, [loadProducts, loadActiveCampaigns]);
 
   useIonViewWillEnter(() => {
     void loadProducts();
     void loadActiveCampaigns();
-    void loadTierSales();
     void wsClient
       .request<{ cashBalance?: number; cardBalance?: number; costBasis?: CostBasis; bankCards?: BankCard[]; goldenAutoEnabled?: boolean; goldenMinKg?: number; goldenSuggestGiftName?: string; goldenSuggestGiftQty?: number; goldenSuggestDiscountPercent?: number; shopName?: string }>('settings.get')
       .then((s) => {
@@ -754,13 +740,12 @@ const Sale: React.FC = () => {
       ) {
         void loadProducts();
       }
-      if (p?.entity === 'sale') void loadTierSales();
       if (p?.entity === 'campaign') {
         void loadActiveCampaigns();
       }
     });
     return unsub;
-  }, [loadProducts, loadActiveCampaigns, loadTierSales]);
+  }, [loadProducts, loadActiveCampaigns]);
   // بازاریاب: اشتراک موقعیت وقتی کار فعال است
   useEffect(() => {
     if (user?.role !== 'marketer' || !workOn) return;
@@ -2239,22 +2224,6 @@ const Sale: React.FC = () => {
                 مشتری عمده — فاکتور تکی مجاز نیست
               </p>
             )}
-          </div>
-
-          <div className="ios-glass-card sale-navy-card sale-tier-summary">
-            <div className="ios-section-title" style={{ marginTop: 0 }}>خلاصه فروش تا امروز</div>
-            <div className="sale-tier-summary-grid">
-              {(Object.keys(TIER_LABELS) as PriceTier[]).map((tier) => (
-                <div key={tier} className="sale-tier-summary-item">
-                  <strong>{TIER_LABELS[tier]}</strong>
-                  <span>فروش {formatToman(tierSales[tier].amount)}</span>
-                  <span className={tierSales[tier].profit >= 0 ? 'success' : 'danger'}>
-                    سود {formatToman(tierSales[tier].profit)}
-                  </span>
-                  <small>{tierSales[tier].invoices.toLocaleString('fa-IR')} فاکتور</small>
-                </div>
-              ))}
-            </div>
           </div>
 
           <div className={stepsUnlocked ? 'sale-steps' : 'sale-steps sale-steps-locked'}>

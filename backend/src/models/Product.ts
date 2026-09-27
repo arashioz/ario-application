@@ -10,6 +10,14 @@ export interface IProduct extends Document {
   lastPurchasePricePerKg: number;
   /** سازگاری قدیمی — معمولاً همان avgCostPerKg */
   purchasePrice: number;
+  /** قیمت مبنای فروشِ اعلام‌شده (بدون تغییر دادن بهای خرید/موجودی) */
+  marketBasePricePerKg?: number;
+  /** محصول پایه برای قیمت‌گذاری وابسته؛ مثل نایلون ۵ برای کارتن ۵ */
+  pricingBaseProductId?: Types.ObjectId;
+  /** هزینه/کارمزد ثابت هر کیلو روی محصول پایه */
+  pricingSurchargePerKg: number;
+  /** پلهٔ رند قیمت فروش؛ ۱۰۰۰ یعنی ۱۴۵٬۵۰۰ ← ۱۴۶٬۰۰۰ */
+  priceRoundingStep: 100 | 1000;
   /** موجودی به کیلوگرم */
   stockKg: number;
   /** سازگاری قدیمی — همان stockKg */
@@ -50,6 +58,10 @@ const ProductSchema = new Schema<IProduct>(
     avgCostPerKg: { type: Number, required: true, default: 0 },
     lastPurchasePricePerKg: { type: Number, required: true, default: 0 },
     purchasePrice: { type: Number, required: true, default: 0 },
+    marketBasePricePerKg: { type: Number, min: 0 },
+    pricingBaseProductId: { type: Schema.Types.ObjectId, ref: 'Product' },
+    pricingSurchargePerKg: { type: Number, default: 0 },
+    priceRoundingStep: { type: Number, enum: [100, 1000], default: 100 },
     stockKg: { type: Number, required: true, default: 0 },
     stock: { type: Number, required: true, default: 0 },
     kgPerPackage: { type: Number, required: true, default: 5, min: 0.001 },

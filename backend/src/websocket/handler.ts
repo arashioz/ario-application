@@ -453,6 +453,12 @@ async function handleMessage(msg: WsMessage, ws: ExtWebSocket): Promise<WsMessag
           p.profitSupermarket === null ? null : (p.profitSupermarket as number | undefined),
         profitWholesale:
           p.profitWholesale === null ? null : (p.profitWholesale as number | undefined),
+        marketBasePricePerKg:
+          p.marketBasePricePerKg === null ? null : (p.marketBasePricePerKg as number | undefined),
+        pricingBaseProductId:
+          p.pricingBaseProductId === null ? null : (p.pricingBaseProductId as string | undefined),
+        pricingSurchargePerKg: p.pricingSurchargePerKg as number | undefined,
+        priceRoundingStep: p.priceRoundingStep === 1000 ? 1000 : 100,
       });
       notifyDataChange('product', 'update', result);
       return { type: 'product.update', payload: result };

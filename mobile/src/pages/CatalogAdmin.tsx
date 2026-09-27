@@ -60,6 +60,12 @@ interface Product {
   avgCostPerKg?: number;
   lastPurchasePricePerKg?: number;
   purchasePrice?: number;
+  /** مبنای محاسبه‌شدهٔ قیمت امروز از سرور */
+  pricingCostPerKg?: number;
+  marketBasePricePerKg?: number;
+  pricingBaseProductId?: string;
+  pricingSurchargePerKg?: number;
+  priceRoundingStep?: 100 | 1000;
   profitPercent?: number;
   profitRetail?: number;
   profitSupermarket?: number;
@@ -75,6 +81,12 @@ interface Product {
 }
 
 function productCost(p: Product, costBasis: CostBasis): number {
+  if (
+    p.pricingCostPerKg != null &&
+    (p.marketBasePricePerKg || p.pricingBaseProductId)
+  ) {
+    return p.pricingCostPerKg;
+  }
   const last = p.lastPurchasePricePerKg || 0;
   if (costBasis === 'weighted') return p.avgCostPerKg ?? p.purchasePrice ?? last;
   if (last > 0) return last;
@@ -90,10 +102,10 @@ function tierPercent(p: Product, tier: PriceTier): number {
 
 function tierPricePerKg(p: Product, tier: PriceTier, costBasis: CostBasis): number {
   if (tier === 'retail' && p.catalogPricePerKg && p.catalogPricePerKg > 0) {
-    return roundToman(p.catalogPricePerKg, 100);
+    return roundToman(p.catalogPricePerKg, p.priceRoundingStep === 1000 ? 1000 : 100);
   }
   const cost = productCost(p, costBasis);
-  return priceFromPercent(cost, tierPercent(p, tier));
+  return roundToman(priceFromPercent(cost, tierPercent(p, tier)), p.priceRoundingStep === 1000 ? 1000 : 100);
 }
 
 function pctFromPrice(cost: number, price: number): number {
@@ -146,6 +158,10 @@ const CatalogAdmin: React.FC = () => {
   const [editSuperPrice, setEditSuperPrice] = useState('');
   const [editWholePrice, setEditWholePrice] = useState('');
   const [editNote, setEditNote] = useState('');
+  const [editMarketBasePrice, setEditMarketBasePrice] = useState('');
+  const [editPricingBaseId, setEditPricingBaseId] = useState('');
+  const [editPricingSurcharge, setEditPricingSurcharge] = useState('');
+  const [editRoundingStep, setEditRoundingStep] = useState<100 | 1000>(100);
   const [editSaving, setEditSaving] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Product | null>(null);
@@ -275,6 +291,14 @@ const CatalogAdmin: React.FC = () => {
     setEditSuperPrice(formatMoneyInput(String(sPrice)));
     setEditWholePrice(formatMoneyInput(String(wPrice)));
     setEditNote(p.catalogNote || '');
+    setEditMarketBasePrice(
+      p.marketBasePricePerKg ? formatMoneyInput(String(p.marketBasePricePerKg)) : ''
+    );
+    setEditPricingBaseId(p.pricingBaseProductId || '');
+    setEditPricingSurcharge(
+      p.pricingSurchargePerKg ? formatMoneyInput(String(p.pricingSurchargePerKg)) : ''
+    );
+    setEditRoundingStep(p.priceRoundingStep === 1000 ? 1000 : 100);
     setEditOpen(true);
     void cost;
   };
@@ -283,7 +307,7 @@ const CatalogAdmin: React.FC = () => {
     if (!editProduct) return;
     const cost = productCost(editProduct, costBasis);
     const pct = parseFloat(pctStr) || 0;
-    const price = priceFromPercent(cost, pct);
+    const price = roundToman(priceFromPercent(cost, pct), editRoundingStep);
     const formatted = formatMoneyInput(String(price));
     if (tier === 'retail') {
       setEditRetailPct(pctStr);
@@ -300,7 +324,7 @@ const CatalogAdmin: React.FC = () => {
   const syncPctFromPrice = (tier: PriceTier, priceStr: string) => {
     if (!editProduct) return;
     const cost = productCost(editProduct, costBasis);
-    const price = roundToman(parseAmount(priceStr) || 0, 100);
+    const price = roundToman(parseAmount(priceStr) || 0, editRoundingStep);
     const pct = pctFromPrice(cost, price);
     const formatted = formatMoneyInput(String(price));
     if (tier === 'retail') {
@@ -313,6 +337,23 @@ const CatalogAdmin: React.FC = () => {
       setEditWholePrice(formatted);
       setEditWholePct(String(pct));
     }
+  };
+
+  const applyRoundingStep = (step: 100 | 1000) => {
+    if (!editProduct) return;
+    const cost = productCost(editProduct, costBasis);
+    const rounded = (value: string) =>
+      formatMoneyInput(String(roundToman(parseAmount(value) || 0, step)));
+    const retail = rounded(editRetailPrice);
+    const supermarket = rounded(editSuperPrice);
+    const wholesale = rounded(editWholePrice);
+    setEditRoundingStep(step);
+    setEditRetailPrice(retail);
+    setEditSuperPrice(supermarket);
+    setEditWholePrice(wholesale);
+    setEditRetailPct(String(pctFromPrice(cost, parseAmount(retail) || 0)));
+    setEditSuperPct(String(pctFromPrice(cost, parseAmount(supermarket) || 0)));
+    setEditWholePct(String(pctFromPrice(cost, parseAmount(wholesale) || 0)));
   };
 
   const saveEdit = async () => {
@@ -329,16 +370,27 @@ const CatalogAdmin: React.FC = () => {
       const wholePct = roundProfitPercent(parseFloat(editWholePct) || 0);
       const retailPrice = roundToman(parseAmount(editRetailPrice) || 0, 100);
       const cost = productCost(editProduct, costBasis);
-      const computedRetail = priceFromPercent(cost, retailPct);
+      const computedRetail = roundToman(priceFromPercent(cost, retailPct), editRoundingStep);
+      const marketBasePrice = roundToman(parseAmount(editMarketBasePrice) || 0, 100);
+      const surcharge = roundToman(parseAmount(editPricingSurcharge) || 0, 100);
+      const pricingChanged =
+        marketBasePrice !== roundToman(editProduct.marketBasePricePerKg || 0, 100) ||
+        editPricingBaseId !== (editProduct.pricingBaseProductId || '') ||
+        surcharge !== roundToman(editProduct.pricingSurchargePerKg || 0, 100);
       await wsClient.request('product.update', {
         id: editProduct._id,
         name,
         profitRetail: retailPct,
         profitSupermarket: superPct,
         profitWholesale: wholePct,
+        // A new base price must not be blocked by a former manual catalog price.
         catalogPricePerKg:
-          retailPrice > 0 && Math.abs(retailPrice - computedRetail) > 1 ? retailPrice : null,
+          pricingChanged ? null : retailPrice > 0 && Math.abs(retailPrice - computedRetail) > 1 ? retailPrice : null,
         catalogNote: editNote,
+        marketBasePricePerKg: marketBasePrice || null,
+        pricingBaseProductId: editPricingBaseId || null,
+        pricingSurchargePerKg: surcharge,
+        priceRoundingStep: editRoundingStep,
       });
       setEditOpen(false);
       setEditProduct(null);
@@ -616,6 +668,13 @@ const CatalogAdmin: React.FC = () => {
                         {p.categoryId?.name ? `${p.categoryId.name} · ` : ''}
                         {Math.round(p.stockKg || 0)} کیلو · بسته {p.kgPerPackage || 5}kg
                       </div>
+                      {(p.marketBasePricePerKg || p.pricingBaseProductId) && (
+                        <div className="ios-caption">
+                          {p.pricingBaseProductId
+                            ? `وابسته به ${products.find((x) => x._id === p.pricingBaseProductId)?.name || 'محصول پایه'}${p.pricingSurchargePerKg ? ` + ${formatToman(p.pricingSurchargePerKg)} کارمزد` : ''}`
+                            : `قیمت مبنای فروش: ${formatToman(p.marketBasePricePerKg || 0)}/کیلو`}
+                        </div>
+                      )}
                       <div className="prod-tier-list">
                         <div className="prod-tier-row retail">
                           <span className="prod-tier-label">تکی</span>
@@ -1103,6 +1162,81 @@ const CatalogAdmin: React.FC = () => {
                     onIonInput={(e) => setEditName(e.detail.value || '')}
                   />
                 </IonItem>
+
+                <div className="ios-glass-card">
+                  <strong>قیمت پایه و محصول وابسته</strong>
+                  <p className="hint">
+                    برای محصول پایه، قیمت اعلام‌شده را وارد کنید. برای محصولی مثل کارتن، محصول پایه را
+                    انتخاب و کارمزد ثابت را ثبت کنید؛ سود روی مبلغ جدید خودکار حساب می‌شود.
+                  </p>
+                  <IonItem>
+                    <IonLabel position="stacked">قیمت مبنای فروش / کیلو (محصول پایه)</IonLabel>
+                    <IonInput
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      value={editMarketBasePrice}
+                      placeholder="مثلاً ۱۴۹۰۰۰"
+                      onIonInput={(e) =>
+                        setEditMarketBasePrice(
+                          sanitizeNumberInput(e.detail.value || '')
+                        )
+                      }
+                    />
+                  </IonItem>
+                  <IonItem>
+                    <IonLabel position="stacked">محصول پایهٔ این کالا</IonLabel>
+                    <IonSelect
+                      value={editPricingBaseId}
+                      interface="action-sheet"
+                      placeholder="مستقل (بدون محصول پایه)"
+                      onIonChange={(e) => setEditPricingBaseId(String(e.detail.value || ''))}
+                    >
+                      <IonSelectOption value="">مستقل</IonSelectOption>
+                      {products
+                        .filter((product) => product._id !== editProduct._id)
+                        .map((product) => (
+                          <IonSelectOption key={product._id} value={product._id}>
+                            {product.name}
+                          </IonSelectOption>
+                        ))}
+                    </IonSelect>
+                  </IonItem>
+                  <IonItem disabled={!editPricingBaseId}>
+                    <IonLabel position="stacked">کارمزد / هزینهٔ ثابت روی پایه (هر کیلو)</IonLabel>
+                    <IonInput
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      value={editPricingSurcharge}
+                      placeholder="مثلاً ۱۸۰۰۰"
+                      onIonInput={(e) =>
+                        setEditPricingSurcharge(
+                          sanitizeNumberInput(e.detail.value || '')
+                        )
+                      }
+                    />
+                  </IonItem>
+                  <IonItem>
+                    <IonLabel position="stacked">گرد کردن قیمت‌های فروش</IonLabel>
+                    <IonSelect
+                      value={editRoundingStep}
+                      interface="action-sheet"
+                      onIonChange={(e) => applyRoundingStep(e.detail.value === 1000 ? 1000 : 100)}
+                    >
+                      <IonSelectOption value={100}>تا ۱۰۰ تومان</IonSelectOption>
+                      <IonSelectOption value={1000}>بدون خرده · تا ۱٬۰۰۰ تومان</IonSelectOption>
+                    </IonSelect>
+                  </IonItem>
+                  {editRoundingStep === 1000 && (
+                    <p className="hint">مثال: ۱۴۵٬۵۰۰ به ۱۴۶٬۰۰۰ گرد و درصد سود مؤثر دوباره محاسبه می‌شود.</p>
+                  )}
+                  {editPricingBaseId && (
+                    <p className="hint">
+                      مبنای فعلی این محصول: {formatToman(productCost(editProduct, costBasis))}/کیلو
+                    </p>
+                  )}
+                </div>
 
                 {(
                   [
